@@ -10,6 +10,7 @@ from outriggarr.arr.base import (
     ArrError,
     CommandStatus,
     EpisodeRef,
+    ExtraFilesConfig,
     ImportCandidate,
     ImportFile,
     Language,
@@ -75,6 +76,7 @@ class FakeArrClient:
     library_loads: int = 0
     tags: dict[str, int] = field(default_factory=dict)
     series_tags: dict[int, set[int]] = field(default_factory=dict)
+    extra_files: ExtraFilesConfig = ExtraFilesConfig(True, ("srt", "sub"))
     # recording
     calls: list[tuple[str, object]] = field(default_factory=list)
     imports: list[list[ImportFile]] = field(default_factory=list)
@@ -128,6 +130,10 @@ class FakeArrClient:
             raise ArrError("Sonarr has no movies")
         self.library_loads += 1
         return list(self.movies_list)
+
+    async def extra_files_config(self) -> ExtraFilesConfig:
+        self.calls.append(("extra_files_config", None))
+        return self.extra_files
 
     async def ensure_tag(self, label: str) -> int:
         self.calls.append(("ensure_tag", label))
@@ -247,8 +253,30 @@ class FakeVideoSource:
             raise SourceError(f"ERROR: [youtube] {url}: Video unavailable")
         return self.infos[url]
 
-    def download(self, url, dest_dir: Path, *, fmt, merge_container, progress, should_abort):
-        self.calls.append({"url": url, "dest": dest_dir, "fmt": fmt, "container": merge_container})
+    subtitle_langs_available: tuple[str, ...] = ("en",)  # what the fake "upload" carries
+
+    def download(
+        self,
+        url,
+        dest_dir: Path,
+        *,
+        fmt,
+        merge_container,
+        progress,
+        should_abort,
+        subtitle_langs=(),
+        auto_subtitles=False,
+    ):
+        self.calls.append(
+            {
+                "url": url,
+                "dest": dest_dir,
+                "fmt": fmt,
+                "container": merge_container,
+                "subtitle_langs": tuple(subtitle_langs),
+                "auto_subtitles": auto_subtitles,
+            }
+        )
         if should_abort():
             raise DownloadAborted("aborted before start")
         if self.error is not None:
@@ -259,9 +287,20 @@ class FakeVideoSource:
             raise DownloadAborted("aborted mid-way")
         path = dest_dir / f"vid123.{self.ext}"
         path.write_bytes(self.payload)
+        subs = []
+        for lang in subtitle_langs:
+            if lang in self.subtitle_langs_available:
+                sub = dest_dir / f"vid123.{lang}.srt"
+                sub.write_text("1\n00:00:00,000 --> 00:00:01,000\nhi\n")
+                subs.append(sub)
         progress(100.0)
         return DownloadResult(
-            path=path, height=self.height, ext=self.ext, title=self.title, video_id="vid123"
+            path=path,
+            height=self.height,
+            ext=self.ext,
+            title=self.title,
+            video_id="vid123",
+            subtitles=tuple(subs),
         )
 
 

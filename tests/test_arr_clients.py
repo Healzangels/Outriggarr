@@ -644,3 +644,19 @@ async def test_sonarr_ensure_tag_and_set_series_tag() -> None:
     radarr, _ = make(RadarrClient, handler)
     with pytest.raises(ArrError, match="no series"):
         await radarr.set_series_tag(5, 7, True)
+
+
+async def test_extra_files_config_parse() -> None:
+    from outriggarr.arr.base import ExtraFilesConfig
+
+    client, rec = make(
+        SonarrClient,
+        lambda r: httpx.Response(
+            200, json={"importExtraFiles": True, "extraFileExtensions": "srt, Sub,.nfo"}
+        ),
+    )
+    cfg = await client.extra_files_config()
+    assert str(rec.requests[0].url) == f"{BASE}/api/v3/config/mediamanagement"
+    assert cfg == ExtraFilesConfig(True, ("srt", "sub", "nfo"))
+    assert cfg.imports("SRT") and cfg.imports(".nfo") and not cfg.imports("ass")
+    assert not ExtraFilesConfig(False, ("srt",)).imports("srt")

@@ -146,3 +146,37 @@ def test_ytdlp_source_merges_extra_opts_last(monkeypatch) -> None:
     assert seen[0]["extract_flat"] == "in_playlist" and "logger" in seen[0]
     src.list_recent("https://www.youtube.com/@c", 7)
     assert seen[1]["playlistend"] == 7 and seen[1]["cookiefile"] == "/config/c.txt"
+
+
+def test_subtitle_opts_and_sidecars(tmp_path) -> None:
+    from outriggarr.source import subtitle_opts, subtitle_sidecars
+
+    o = subtitle_opts(("en", "es"), False)
+    assert o["writesubtitles"] is True and o["writeautomaticsub"] is False
+    assert o["subtitleslangs"] == ["en", "es"] and o["subtitlesformat"] == "srt/best"
+    assert o["postprocessors"] == [{"key": "FFmpegSubtitlesConvertor", "format": "srt"}]
+    assert subtitle_opts(("en",), True)["writeautomaticsub"] is True
+
+    (tmp_path / "abc.en.srt").write_text("x")
+    (tmp_path / "abc.es.srt").write_text("x")
+    (tmp_path / "abc.mkv").write_text("x")
+    (tmp_path / "other.en.srt").write_text("x")
+    (tmp_path / "abc.en.vtt").write_text("x")
+    assert [p.name for p in subtitle_sidecars(tmp_path, "abc")] == ["abc.en.srt", "abc.es.srt"]
+    assert subtitle_sidecars(tmp_path, "zzz") == ()
+
+
+def test_download_result_collects_sidecars(tmp_path) -> None:
+    from outriggarr.source import _result_from_info
+
+    (tmp_path / "v1.mkv").write_text("x")
+    (tmp_path / "v1.en.srt").write_text("x")
+    info = {
+        "id": "v1",
+        "title": "T",
+        "height": 720,
+        "requested_downloads": [{"filepath": str(tmp_path / "v1.mkv")}],
+    }
+    r = _result_from_info(info, tmp_path)
+    assert r.subtitles == (tmp_path / "v1.en.srt",)
+    assert _result_from_info(info).subtitles == ()

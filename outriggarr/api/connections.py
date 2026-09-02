@@ -7,6 +7,7 @@ from sqlalchemy import func, select
 from outriggarr.api.deps import ArrFactoryDep, DbSession
 from outriggarr.arr.base import ArrError
 from outriggarr.db.models import Connection, ConnectionKind, Job
+from outriggarr.settings import get_setting
 
 router = APIRouter(prefix="/api/connections", tags=["connections"])
 
@@ -47,6 +48,7 @@ class ConnectionTestResult(BaseModel):
     version: str | None = None
     staging_visible: bool | None = None
     error: str | None = None
+    warning: str | None = None  # non-fatal: e.g. subtitles would not be imported
 
 
 def _get_or_404(session: DbSession, connection_id: int) -> Connection:
@@ -119,6 +121,17 @@ async def test_connection(
         return ConnectionTestResult(
             ok=False, app_name=st.app_name, version=st.version, error=str(exc)
         )
+    warning = None
+    if visible and get_setting(session, "subtitles_langs"):
+        try:
+            extras = await client.extra_files_config()
+            if not extras.imports("srt"):
+                warning = (
+                    f"{st.app_name} will not import subtitle sidecars: enable "
+                    "Settings → Media Management → Import Extra Files with 'srt'"
+                )
+        except ArrError as exc:
+            warning = f"could not read {st.app_name}'s media management settings: {exc}"
     return ConnectionTestResult(
         ok=visible,
         app_name=st.app_name,
@@ -127,4 +140,5 @@ async def test_connection(
         error=None
         if visible
         else f"{st.app_name} cannot see staging path {conn.staging_path_remote!r}",
+        warning=warning,
     )

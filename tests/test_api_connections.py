@@ -83,6 +83,7 @@ def test_test_ok(client: TestClient, arr: FakeArrFactory) -> None:
         "version": "4.0.9",
         "staging_visible": True,
         "error": None,
+        "warning": None,
     }
     fake = arr.by_url["http://sonarr-host:1234"]
     assert fake.calls == [("status", None), ("path_visible", "/staging")]
@@ -132,3 +133,21 @@ def test_test_detects_kind_mismatch(client: TestClient, arr: FakeArrFactory) -> 
 
 def test_test_unknown_connection(client: TestClient) -> None:
     assert client.post("/api/connections/99/test").status_code == 404
+
+
+def test_test_warns_when_arr_will_not_import_srt(client: TestClient, arr: FakeArrFactory) -> None:
+    from outriggarr.arr.base import ExtraFilesConfig
+
+    conn_id = client.post("/api/connections", json=SONARR).json()["id"]
+    fake = arr.by_url["http://sonarr-host:1234"] = FakeArrClient(visible_paths={"/staging"})
+    assert client.post(f"/api/connections/{conn_id}/test").json()["warning"] is None
+    fake.extra_files = ExtraFilesConfig(True, ("nfo",))
+    body = client.post(f"/api/connections/{conn_id}/test").json()
+    assert body["ok"] is True and "Import Extra Files" in body["warning"]
+    fake.extra_files = ExtraFilesConfig(False, ("srt",))
+    assert "Import Extra Files" in client.post(f"/api/connections/{conn_id}/test").json()["warning"]
+    # subtitles off → no check at all
+    client.put("/api/settings", json={"subtitles_langs": ""})
+    body = client.post(f"/api/connections/{conn_id}/test").json()
+    assert body["warning"] is None
+    assert ("extra_files_config", None) not in fake.calls[-2:]

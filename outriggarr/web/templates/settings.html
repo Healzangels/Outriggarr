@@ -58,6 +58,10 @@
   <label>Extra yt-dlp options (JSON object, merged last) <span class="muted">e.g. <code>{"sponsorblock_remove": ["sponsor"], "ratelimit": 5000000}</code></span>
     <textarea name="ytdlp_extra_opts" rows="3">{{ settings.ytdlp_extra_opts }}</textarea></label>
   <div class="grid">
+    <label>Subtitle languages <span class="muted">(comma-separated, e.g. en,es; blank = none; saved as .srt sidecars the *arr imports)</span><input name="subtitles_langs" value="{{ settings.subtitles_langs }}" placeholder="en"></label>
+    <label>Auto-generated captions too<select name="subtitles_auto"><option value="0" {% if settings.subtitles_auto == "0" %}selected{% endif %}>no — only uploader captions</option><option value="1" {% if settings.subtitles_auto == "1" %}selected{% endif %}>yes — accept machine transcripts</option></select></label>
+  </div>
+  <div class="grid">
     <label>Audio language tag <span class="muted">(ISO 639-2; YouTube audio is untagged and shows as "Unknown" in Plex; blank = leave)</span><input name="audio_language" value="{{ settings.audio_language }}" placeholder="eng"></label>
     <label>Sonarr tag for subscribed series <span class="muted">(blank = off)</span><input name="sonarr_tag" value="{{ settings.sonarr_tag }}" placeholder="outriggarr"></label>
   </div>

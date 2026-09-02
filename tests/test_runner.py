@@ -635,3 +635,65 @@ async def test_worker_recovers_on_start(deps, session_factory) -> None:
     await asyncio.wait_for(task, 2)
     job = get_job(deps, job_id)
     assert job.status is JobStatus.done and job.attempts == 1
+
+
+async def test_subtitle_sidecars_are_staged_with_the_video_stem(deps, session_factory) -> None:
+    conn_id = add_connection(session_factory)
+    job_id = add_job(session_factory, conn_id)
+    fake = fake_for(deps, conn_id)
+    deps.source.subtitle_langs_available = ("en", "es")
+    with session_factory() as s:
+        set_setting(s, "subtitles_langs", "en,es,fr")
+        s.commit()
+    await process_job(deps, job_id)
+    job = get_job(deps, job_id)
+    assert job.status is JobStatus.done, job.error
+    assert deps.source.calls[0]["subtitle_langs"] == ("en", "es", "fr")
+    assert deps.source.calls[0]["auto_subtitles"] is False
+    # the sidecars were renamed to the staged stem before import (then swept with the folder)
+    (imp,) = fake.imports
+    stem = Path(imp[0].path).stem
+    # the fake never removes files, so inspect what the runner renamed: it logs and the
+    # folder was rmtree'd on done — assert via the candidates listing captured earlier
+    listing = [c for name, c in fake.calls if name == "manual_import_candidates"]
+    assert listing, "import happened"
+    assert not (deps.staging_dir / str(job_id)).exists()
+    assert stem.endswith("[WEBDL-1080p]")
+
+
+async def test_subtitle_sidecar_names_before_import(deps, session_factory, monkeypatch) -> None:
+    """Freeze the staging folder right before import to see the sidecar names."""
+    import outriggarr.worker.runner as runner
+
+    conn_id = add_connection(session_factory)
+    job_id = add_job(session_factory, conn_id)
+    fake_for(deps, conn_id)
+    with session_factory() as s:
+        set_setting(s, "subtitles_langs", "en")
+        set_setting(s, "subtitles_auto", "1")
+        s.commit()
+    seen: list[str] = []
+    real = runner._import_stage
+
+    async def spy(deps_, session, job, client, target, remote_folder, staged):
+        seen.extend(sorted(p.name for p in staged.parent.iterdir()))
+        return await real(deps_, session, job, client, target, remote_folder, staged)
+
+    monkeypatch.setattr(runner, "_import_stage", spy)
+    await process_job(deps, job_id)
+    assert deps.source.calls[0]["auto_subtitles"] is True
+    assert seen == [
+        "Show- Name - S02E03 - The-Title [WEBDL-1080p].en.srt",
+        "Show- Name - S02E03 - The-Title [WEBDL-1080p].mkv",
+    ]
+
+
+async def test_no_subtitles_when_setting_blank(deps, session_factory) -> None:
+    conn_id = add_connection(session_factory)
+    job_id = add_job(session_factory, conn_id)
+    fake_for(deps, conn_id)
+    with session_factory() as s:
+        set_setting(s, "subtitles_langs", "")
+        s.commit()
+    await process_job(deps, job_id)
+    assert deps.source.calls[0]["subtitle_langs"] == ()

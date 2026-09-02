@@ -40,6 +40,7 @@ class DownloadResult:
     ext: str
     title: str
     video_id: str
+    subtitles: tuple[Path, ...] = ()  # .srt sidecars written next to `path`
 
 
 ProgressCallback = Callable[[float], None]
@@ -73,9 +74,12 @@ class VideoSource(Protocol):
         merge_container: str,
         progress: ProgressCallback,
         should_abort: AbortCheck,
+        subtitle_langs: tuple[str, ...] = (),
+        auto_subtitles: bool = False,
     ) -> DownloadResult:
         """Blocking. Downloads `url` into `dest_dir` (created if needed) and returns the
-        final merged file. Raises SourceError / DownloadAborted."""
+        final merged file plus any requested subtitles as .srt sidecars.
+        Raises SourceError / DownloadAborted."""
         ...
 
 
@@ -174,6 +178,8 @@ class YtDlpSource:
         merge_container: str,
         progress: ProgressCallback,
         should_abort: AbortCheck,
+        subtitle_langs: tuple[str, ...] = (),
+        auto_subtitles: bool = False,
     ) -> DownloadResult:
         import yt_dlp
         from yt_dlp.utils import DownloadCancelled, DownloadError
@@ -199,6 +205,8 @@ class YtDlpSource:
             "noprogress": True,
             "progress_hooks": [hook],
         }
+        if subtitle_langs:
+            opts.update(subtitle_opts(subtitle_langs, auto_subtitles))
         try:
             with yt_dlp.YoutubeDL(self._opts(opts)) as ydl:
                 info = ydl.extract_info(url, download=True)
@@ -208,7 +216,23 @@ class YtDlpSource:
             raise SourceError(str(exc)) from exc
         if info is None:
             raise SourceError(f"yt-dlp returned no info for {url}")
-        return _result_from_info(info)
+        return _result_from_info(info, dest_dir)
+
+
+def subtitle_opts(langs: tuple[str, ...], auto: bool) -> dict[str, Any]:
+    """yt-dlp options that fetch the wanted caption tracks and convert them to .srt."""
+    return {
+        "writesubtitles": True,
+        "writeautomaticsub": bool(auto),
+        "subtitleslangs": list(langs),
+        "subtitlesformat": "srt/best",
+        "postprocessors": [{"key": "FFmpegSubtitlesConvertor", "format": "srt"}],
+    }
+
+
+def subtitle_sidecars(dest_dir: Path, video_id: str) -> tuple[Path, ...]:
+    """The .srt files yt-dlp wrote for this video: <id>.<lang>.srt."""
+    return tuple(sorted(p for p in dest_dir.glob(f"{video_id}.*.srt") if p.is_file()))
 
 
 def ffmpeg_language_command(src: Path, dst: Path, language: str) -> list[str]:
@@ -260,7 +284,7 @@ def _ref(e: dict[str, Any], index: int | None) -> VideoRef:
     )
 
 
-def _result_from_info(info: dict[str, Any]) -> DownloadResult:
+def _result_from_info(info: dict[str, Any], dest_dir: Path | None = None) -> DownloadResult:
     downloads = info.get("requested_downloads") or []
     filepath = downloads[0].get("filepath") if downloads else None
     if not filepath:
@@ -269,10 +293,12 @@ def _result_from_info(info: dict[str, Any]) -> DownloadResult:
     height = info.get("height")
     if height is None and downloads:
         height = downloads[0].get("height")
+    video_id = str(info.get("id") or "")
     return DownloadResult(
         path=path,
         height=int(height) if height is not None else None,
         ext=path.suffix.lstrip("."),
         title=str(info.get("title") or ""),
-        video_id=str(info.get("id") or ""),
+        video_id=video_id,
+        subtitles=subtitle_sidecars(dest_dir, video_id) if dest_dir and video_id else (),
     )

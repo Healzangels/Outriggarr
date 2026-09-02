@@ -279,6 +279,8 @@ async def _download_stage(
 
     fmt = job.format or get_setting(session, "default_format")
     container = get_setting(session, "merge_container")
+    sub_langs = tuple(x for x in get_setting(session, "subtitles_langs").split(",") if x)
+    auto_subs = get_setting(session, "subtitles_auto") == "1"
     last_write = 0.0
 
     def progress(pct: float) -> None:
@@ -303,6 +305,8 @@ async def _download_stage(
             merge_container=container,
             progress=progress,
             should_abort=should_abort,
+            subtitle_langs=sub_langs,
+            auto_subtitles=auto_subs,
         )
     except SourceError as exc:
         shutil.rmtree(dest, ignore_errors=True)
@@ -330,6 +334,13 @@ async def _download_stage(
         )
     staged = dest / name
     result.path.rename(staged)
+    # Subtitle sidecars keep the video's stem so the *arr imports them as extra files:
+    # <id>.<lang>.srt → <staged stem>.<lang>.srt
+    for sub in result.subtitles:
+        suffix = sub.name[len(result.video_id) :]  # ".en.srt"
+        sub.rename(dest / f"{staged.stem}{suffix}")
+    if result.subtitles:
+        log.info("job %d: %d subtitle sidecar(s) staged", job.id, len(result.subtitles))
     language = get_setting(session, "audio_language")
     if language:
         try:

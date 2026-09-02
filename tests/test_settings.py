@@ -97,3 +97,20 @@ def test_health_reports_staging_writable(client: TestClient, settings) -> None:
 
     _sh.rmtree(settings.staging_dir)
     assert client.get("/health").json()["staging_writable"] is False
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [("en", "en"), (" en, es ,en", "en,es"), ("", ""), ("en-US,pt-BR", "en-US,pt-BR")],
+)
+def test_subtitles_langs_valid(value: str, expected: str) -> None:
+    assert validate_setting("subtitles_langs", value) == expected
+
+
+@pytest.mark.parametrize("value", ["english", "e", "en;es", "en_US"])
+def test_subtitles_langs_invalid(value: str) -> None:
+    with pytest.raises(ValueError):
+        validate_setting("subtitles_langs", value)
+    with pytest.raises(ValueError):
+        validate_setting("subtitles_auto", "yes")
+    assert validate_setting("subtitles_auto", "1") == "1"

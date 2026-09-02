@@ -400,3 +400,8 @@ def test_branding_assets_and_favicon(client: TestClient) -> None:
     page = client.get("/activity").text
     assert '<link rel="icon" href="/static/favicon.ico"' in page
     assert '<img src="/static/outriggarr.svg"' in page and 'class="brand"' in page
+
+
+def test_settings_page_has_subtitle_fields(client: TestClient) -> None:
+    page = client.get("/settings").text
+    assert 'name="subtitles_langs"' in page and 'name="subtitles_auto"' in page

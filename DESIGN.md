@@ -72,7 +72,7 @@ Job status: `queued → downloading → importing → done | failed | cancelled`
 
 ## Job pipeline
 
-1. **Download**: yt-dlp (library, not subprocess) into `/staging/<job-id>/<parseable name>.<ext>`, video+audio merged by ffmpeg. Progress hook writes `progress_pct` to the job row. Then one ffmpeg stream-copy remux stamps the `audio_language` setting (default `eng`) on the audio streams — YouTube tracks are untagged and Plex showed them as *Unknown* (found after M4 on the first Hot Ones imports). A failure there is noted on the job but does not stop the import.
+1. **Download**: yt-dlp (library, not subprocess) into `/staging/<job-id>/<parseable name>.<ext>`, video+audio merged by ffmpeg. Progress hook writes `progress_pct` to the job row. Caption tracks in `subtitles_langs` (uploader captions; auto-generated only if `subtitles_auto`) are fetched and converted to `.srt` sidecars named after the staged video, which the *arr imports as extra files (the connection Test warns when Import Extra Files is off). Then one ffmpeg stream-copy remux stamps the `audio_language` setting (default `eng`) on the audio streams — YouTube tracks are untagged and Plex showed them as *Unknown* (found after M4 on the first Hot Ones imports). A failure there is noted on the job but does not stop the import.
 2. **Import** via `ArrClient` (one interface, two implementations):
    - `GET /api/v3/manualimport?folder=<staging_path_remote>/<job-id>&filterExistingFiles=true`
    - Take the returned entry; set `seriesId` + `episodeIds` (Sonarr) or `movieId` (Radarr), `quality`, `languages`.

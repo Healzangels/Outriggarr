@@ -58,6 +58,11 @@ DEFAULTS: dict[str, str] = {
     # ISO 639-2 code stamped on the audio stream(s) of every download; YouTube tracks
     # carry none, which players show as "Unknown". Blank = leave untagged.
     "audio_language": "eng",
+    # Subtitle languages to fetch as .srt sidecars when the upload has them (comma-separated
+    # yt-dlp/YouTube codes such as en, en-US, es); blank = none. Sonarr/Radarr import them
+    # alongside the video when "Import Extra Files" includes srt.
+    "subtitles_langs": "en",
+    "subtitles_auto": "0",  # "1" also accepts auto-generated captions (machine transcripts)
 }
 
 MERGE_CONTAINERS = ("mkv", "mp4", "webm")
@@ -97,6 +102,16 @@ def validate_setting(key: str, value: str) -> str:
         if not isinstance(parsed, dict):
             raise ValueError("ytdlp_extra_opts must be a JSON object")
         return json.dumps(parsed)
+    if key == "subtitles_langs":
+        langs = [x.strip() for x in value.split(",") if x.strip()]
+        bad = [x for x in langs if not re.fullmatch(r"[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})?", x)]
+        if bad:
+            raise ValueError(f"subtitles_langs: not language codes: {bad}")
+        return ",".join(dict.fromkeys(langs))
+    if key == "subtitles_auto":
+        if value not in ("0", "1"):
+            raise ValueError("subtitles_auto must be 0 or 1")
+        return value
     if key == "audio_language":
         if value and not re.fullmatch(r"[a-z]{3}", value):
             raise ValueError("audio_language must be a 3-letter ISO 639-2 code (e.g. eng) or blank")

@@ -11,6 +11,7 @@ import httpx
 from outriggarr.arr.base import (
     ArrError,
     CommandStatus,
+    ExtraFilesConfig,
     ImportCandidate,
     ImportFile,
     Language,
@@ -101,6 +102,14 @@ class ArrHttp:
         )
         return any(
             str(d.get("path", "")).rstrip("/") == target for d in data.get("directories", [])
+        )
+
+    async def extra_files_config(self) -> ExtraFilesConfig:
+        data = await self.get("config/mediamanagement")
+        exts = str(data.get("extraFileExtensions") or "")
+        return ExtraFilesConfig(
+            import_extra_files=bool(data.get("importExtraFiles")),
+            extensions=tuple(e.strip().lower().lstrip(".") for e in exts.split(",") if e.strip()),
         )
 
     async def ensure_tag(self, label: str) -> int:

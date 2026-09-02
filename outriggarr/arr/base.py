@@ -118,6 +118,15 @@ class TargetInfo:
 
 
 @dataclass(frozen=True)
+class ExtraFilesConfig:
+    import_extra_files: bool
+    extensions: tuple[str, ...]  # e.g. ("srt", "sub")
+
+    def imports(self, ext: str) -> bool:
+        return self.import_extra_files and ext.lower().lstrip(".") in self.extensions
+
+
+@dataclass(frozen=True)
 class Language:
     id: int
     name: str
@@ -198,6 +207,10 @@ class ArrClient(Protocol):
 
     async def ensure_tag(self, label: str) -> int:
         """Id of the tag with this label, creating it if needed."""
+        ...
+
+    async def extra_files_config(self) -> ExtraFilesConfig:
+        """Whether the *arr imports sidecars (subtitles) next to a video, and which."""
         ...
 
     async def set_series_tag(self, series_id: int, tag_id: int, present: bool) -> None:
