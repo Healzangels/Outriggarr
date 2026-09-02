@@ -2,7 +2,14 @@ from pathlib import Path
 
 import pytest
 
-from outriggarr.source import SourceError, VideoRef, videos_from_info
+from outriggarr.source import (
+    CoolOff,
+    SourceError,
+    VideoRef,
+    is_rate_limited,
+    skip_reason,
+    videos_from_info,
+)
 
 
 def test_playlist_flat_entries() -> None:
@@ -92,13 +99,14 @@ def test_ffmpeg_language_command_copies_streams_and_tags_audio(tmp_path) -> None
 def test_tag_audio_language_replaces_file_in_place(tmp_path, monkeypatch) -> None:
     import subprocess
 
-    from outriggarr.source import SourceError, YtDlpSource
+    from outriggarr.source import REMUX_TIMEOUT_SECONDS, SourceError, YtDlpSource
 
     src = tmp_path / "a.mkv"
     src.write_bytes(b"orig")
     calls = []
 
-    def fake_run(cmd, capture_output, text):
+    def fake_run(cmd, capture_output, text, timeout):
+        assert timeout == REMUX_TIMEOUT_SECONDS, "a hung ffmpeg must not hold the worker"
         calls.append(cmd)
         Path(cmd[-1]).write_bytes(b"tagged")
         return subprocess.CompletedProcess(cmd, 0, "", "")
@@ -111,7 +119,7 @@ def test_tag_audio_language_replaces_file_in_place(tmp_path, monkeypatch) -> Non
     assert not (tmp_path / "a.lang.mkv").exists()
     assert calls[0][cmd_idx := calls[0].index("-metadata:s:a") + 1] == "language=eng" and cmd_idx
 
-    def failing_run(cmd, capture_output, text):
+    def failing_run(cmd, capture_output, text, timeout):
         Path(cmd[-1]).write_bytes(b"partial")
         return subprocess.CompletedProcess(cmd, 1, "", "Invalid data found when processing input")
 
@@ -120,6 +128,16 @@ def test_tag_audio_language_replaces_file_in_place(tmp_path, monkeypatch) -> Non
         YtDlpSource().tag_audio_language(src, "eng")
     assert src.read_bytes() == b"tagged", "original untouched on failure"
     assert not (tmp_path / "a.lang.mkv").exists(), "temp output removed on failure"
+
+    def hanging_run(cmd, capture_output, text, timeout):
+        Path(cmd[-1]).write_bytes(b"partial")
+        raise subprocess.TimeoutExpired(cmd, timeout)
+
+    monkeypatch.setattr(subprocess, "run", hanging_run)
+    with pytest.raises(SourceError, match="ffmpeg gave up after 60 min"):
+        YtDlpSource().tag_audio_language(src, "eng")
+    assert src.read_bytes() == b"tagged", "original untouched when ffmpeg hangs"
+    assert not (tmp_path / "a.lang.mkv").exists(), "temp output removed when ffmpeg hangs"
 
 
 def test_ytdlp_source_merges_extra_opts_last(monkeypatch, tmp_path) -> None:
@@ -781,3 +799,89 @@ def test_expected_sign_in_error_is_not_logged_as_an_error(caplog, tmp_path) -> N
     assert src._opts({}, cookies=False)["logger"]._expected_login is True
     assert src._opts({}, cookies=True)["logger"]._expected_login is False
     assert YtDlpSource()._opts({}, cookies=False)["logger"]._expected_login is False
+
+
+def test_listing_leaves_out_premieres_live_streams_and_shorts(caplog) -> None:
+    import logging
+
+    info = {
+        "_type": "playlist",
+        "id": "PL9",
+        "entries": [
+            {"id": "up", "title": "Premieres Thursday", "live_status": "is_upcoming"},
+            {"id": "live", "title": "Live now", "live_status": "is_live"},
+            {"id": "sh", "title": "A Short", "url": "https://www.youtube.com/shorts/sh"},
+            {"id": "was", "title": "Streamed earlier", "live_status": "was_live"},
+            {"id": "mem", "title": "Members only", "availability": "subscriber_only"},
+            {"id": "ok", "title": "Plain"},
+        ],
+    }
+    with caplog.at_level(logging.INFO, logger="outriggarr.source"):
+        refs = videos_from_info(info)
+    assert [r.id for r in refs] == ["was", "mem", "ok"], (
+        "a finished stream and a members-only video are downloadable; the rest are not"
+    )
+    assert (
+        "listing PL9: left out 1 x upcoming premiere, 1 x live stream in progress, 1 x Short"
+        in caplog.text
+    )
+
+
+@pytest.mark.parametrize(
+    ("entry", "why"),
+    [
+        ({"live_status": "is_upcoming"}, "upcoming premiere"),
+        ({"live_status": "is_live"}, "live stream in progress"),
+        ({"url": "https://www.youtube.com/shorts/abc"}, "Short"),
+        ({"live_status": "was_live"}, None),
+        ({"availability": "subscriber_only"}, None),
+        ({"url": "https://www.youtube.com/watch?v=abc"}, None),
+        ({}, None),
+    ],
+)
+def test_skip_reason(entry: dict, why: str | None) -> None:
+    assert skip_reason(entry) == why
+
+
+def test_a_single_pasted_video_is_never_second_guessed() -> None:
+    info = {"id": "up", "title": "Premiere", "live_status": "is_upcoming"}
+    assert [r.id for r in videos_from_info(info)] == ["up"]
+
+
+@pytest.mark.parametrize(
+    ("message", "limited"),
+    [
+        (
+            "ERROR: [youtube] abc: This content isn't available, try again later. "
+            "The current session has been rate-limited by YouTube for up to an hour.",
+            True,
+        ),
+        ("ERROR: Unable to download webpage: HTTP Error 429: Too Many Requests", True),
+        ("ERROR: [youtube] abc: Video unavailable", False),
+        ("ERROR: [youtube] abc: Sign in to confirm you're not a bot", False),
+        ("ERROR: [youtube] abc: This live event will begin in 3 hours.", False),
+    ],
+)
+def test_is_rate_limited(message: str, limited: bool) -> None:
+    assert is_rate_limited(message) is limited
+
+
+def test_cooloff_escalates_only_after_a_pause_proved_too_short() -> None:
+    t = [1000.0]
+    c = CoolOff(clock=lambda: t[0])
+    assert not c.active() and c.remaining() == 0
+    assert c.hit("first") == 900 and c.active() and c.message == "first"
+    t[0] += 100
+    assert c.remaining() == 800
+    # answers during a pause in force are the same wall, not more strikes
+    assert c.hit("second") == 800 and c.strikes == 1 and c.message == "first"
+    t[0] = 1900
+    assert not c.active()
+    assert c.hit("third") == 1800 and c.strikes == 2, "the last pause was too short: double it"
+    t[0] = 3700
+    assert c.hit("fourth") == 3600
+    t[0] = 7300
+    assert c.hit("fifth") == 3600, "capped at an hour, YouTube's own figure"
+    c.clear()
+    assert c.strikes == 0 and c.message is None and not c.active()
+    assert c.hit("again") == 900, "a success resets the ladder"

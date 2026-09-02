@@ -696,3 +696,40 @@ async def test_auto_download_policy_gates_scheduled_scans_only(deps, session_fac
     assert r2.created_job_ids == [] and r2.matches[0]["skipped"] == "not automatic (none)"
     everything = await scan_subscription(deps, sub2, manual=True)
     assert len(everything.created_job_ids) == 1, "Download all ignores the policy"
+
+
+async def test_rate_limited_listing_pauses_the_scans(deps, session_factory) -> None:
+    sub_id, conn_id = make_sub(session_factory)
+    fake_client(deps, conn_id)
+    t = [0.0]
+    deps.cooloff.clock = lambda: t[0]
+    deps.source.recent_error = SourceError(
+        "ERROR: [youtube] tab: This content isn't available, try again later. "
+        "The current session has been rate-limited by YouTube for up to an hour."
+    )
+    report = await scan_subscription(deps, sub_id)
+    assert "rate-limited" in report.error and deps.cooloff.active()
+    # while the pause holds the scheduler leaves due subscriptions alone: no scan, no
+    # scan-error stamped on each of them; once it lifts they run as usual
+    with session_factory() as s:
+        sub = s.get(Subscription, sub_id)
+        sub.last_scan_at = None
+        sub.last_scan_result = None
+        s.commit()
+    deps.source.recent_error = None
+    stop = asyncio.Event()
+    task = asyncio.create_task(run_scheduler(deps, stop))
+    await asyncio.sleep(0.1)
+    with session_factory() as s:
+        assert s.get(Subscription, sub_id).last_scan_at is None, "paused"
+    t[0] += 900
+    for _ in range(200):
+        await asyncio.sleep(0.01)
+        with session_factory() as s:
+            if s.get(Subscription, sub_id).last_scan_at is not None:
+                break
+    stop.set()
+    await asyncio.wait_for(task, 2)
+    with session_factory() as s:
+        result = s.get(Subscription, sub_id).last_scan_result
+    assert result is not None and result.get("error") is None and result["created"] == 2

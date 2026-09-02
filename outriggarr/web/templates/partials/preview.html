@@ -9,7 +9,7 @@
     <span class="chip">{{ report.videos | length }} videos listed{% if report.sources > 1 %} from {{ report.sources }} sources{% endif %}</span>
     <span class="chip {{ 'ok' if report.matches else '' }}">{{ report.matches | length }} matched</span>
     <span class="chip {{ 'warn' if report.unmatched else '' }}">{{ report.unmatched | length }} unmatched</span>
-    {% if report.held %}<span class="chip warn" title="Paired, but the video's length contradicts the episode's runtime">{{ report.held | length }} held</span>{% endif %}
+    {% if report.held %}<span class="chip warn" title="Paired, but something contradicts it: the video's length against the episode's runtime, or the video is one part of a split upload">{{ report.held | length }} held</span>{% endif %}
     <span class="chip">{{ report.skipped_existing | length }} already have jobs</span>
     <span class="chip" title="What the scheduler queues by itself: {{ sub.auto_download }}">auto: {% if sub.auto_download == "future" %}future only, {{ auto_count }} of {{ queueable }} would queue{% elif sub.auto_download == "all" %}everything{% else %}nothing{% endif %}</span>
     {% if report.dry_run %}<span class="chip">preview only</span>{% endif %}
@@ -65,7 +65,7 @@
 {% endif %}
 
 {% if report.held %}
-<h4>Held <span class="muted">· paired, but the video's length contradicts the episode's runtime; nothing is queued unless you pin it</span></h4>
+<h4>Held <span class="muted">· paired, but something contradicts it: the video's length against the episode's runtime, or the video is one part of a split upload; nothing is queued unless you pin it</span></h4>
 <div class="table-wrap">
 <table>
   <thead><tr><th>Episode</th><th>Video</th><th>Why held</th><th></th></tr></thead>

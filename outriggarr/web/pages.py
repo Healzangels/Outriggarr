@@ -24,7 +24,7 @@ from outriggarr.api.connections import (
 from outriggarr.api.dates import progress_map as date_progress_map
 from outriggarr.api.dates import start_date_fetch
 from outriggarr.api.deps import ArrFactoryDep, DbSession, RunnerDepsDep
-from outriggarr.api.health import staging_writable
+from outriggarr.api.health import cooloff_status, staging_writable
 from outriggarr.api.jobs import (
     CANCELLABLE,
     DELETABLE,
@@ -114,8 +114,10 @@ def _tooling(request: Request) -> dict:
     staging = request.app.state.settings.staging_dir
     with request.app.state.session_factory() as session:
         cookies_path = get_setting(session, "cookies_path")
+    deps = getattr(request.app.state, "runner_deps", None)
     return {
         "youtube_session": cookies_state(cookies_path),
+        "youtube_cooloff": cooloff_status(getattr(deps, "cooloff", None)),
         "yt_dlp": ytdlp_version,
         "js_runtime": next((r for r in ("deno", "node", "bun") if shutil.which(r)), None),
         "ffmpeg": shutil.which("ffmpeg") is not None,

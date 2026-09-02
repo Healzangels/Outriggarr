@@ -90,3 +90,19 @@ def test_staging_probe_logs_each_flip_with_the_reason(tmp_path, caplog, monkeypa
     assert "is writable" in caplog.records[0].getMessage()
     # the directory vanishing is a different reason, but the answer did not change: silent
     assert sum("NOT writable" in r.getMessage() for r in caplog.records) == 1
+
+
+def test_health_and_footer_show_a_rate_limit_pause(client: TestClient) -> None:
+    before = client.get("/health").json()
+    assert before["youtube_cooloff"] is None
+    cooloff = client.app.state.runner_deps.cooloff
+    cooloff.hit("ERROR: rate-limited by YouTube for up to an hour.")
+    body = client.get("/health").json()
+    assert body["status"] == before["status"], "a pause is not a degradation: it lifts by itself"
+    assert 890 <= body["youtube_cooloff"]["remaining_seconds"] <= 900
+    assert body["youtube_cooloff"]["message"].startswith("ERROR: rate-limited")
+    page = client.get("/activity").text
+    assert "rate-limited: paused 15 min" in page
+    cooloff.clear()
+    assert client.get("/health").json()["youtube_cooloff"] is None
+    assert "rate-limited: paused" not in client.get("/activity").text

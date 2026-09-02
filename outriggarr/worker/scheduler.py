@@ -28,7 +28,7 @@ from outriggarr.matcher import (
 )
 from outriggarr.naming import episode_code
 from outriggarr.settings import get_setting
-from outriggarr.source import SourceError, VideoRef
+from outriggarr.source import SourceError, VideoRef, is_rate_limited
 from outriggarr.worker.runner import RunnerDeps, notify
 
 log = logging.getLogger(__name__)
@@ -205,6 +205,9 @@ async def scan_subscription(
             await _scan(deps, session, sub, report, now, episode_ids=episode_ids)
         except (ArrError, SourceError) as exc:
             report.error = str(exc)
+            if isinstance(exc, SourceError) and is_rate_limited(report.error):
+                # a listing hit the same wall a download would: pause everything, once
+                deps.cooloff.hit(report.error)
         if not dry_run:
             previous_error = (sub.last_scan_result or {}).get("error")
             sub.last_scan_at = now
@@ -497,14 +500,27 @@ def due_subscription_ids(session: Session, now: datetime, interval: timedelta) -
 
 async def run_scheduler(deps: RunnerDeps, stop: asyncio.Event) -> None:
     log.info("scheduler started")
+    paused_logged = False
     while not stop.is_set():
-        try:
-            with deps.session_factory() as session:
-                interval = timedelta(minutes=int(get_setting(session, "scan_interval_minutes")))
-                ids = due_subscription_ids(session, deps.now(), interval)
-        except Exception:
-            log.exception("scheduler: listing due subscriptions failed")
+        if deps.cooloff.active():
+            # rate-limited: a scan would fail the same way and stamp a scan error on every
+            # subscription; wait it out (the scans stay due, so they run once it lifts)
+            if not paused_logged:
+                log.warning(
+                    "scheduler: the source rate-limited us; scans paused for %d s",
+                    int(deps.cooloff.remaining()),
+                )
+                paused_logged = True
             ids = []
+        else:
+            paused_logged = False
+            try:
+                with deps.session_factory() as session:
+                    interval = timedelta(minutes=int(get_setting(session, "scan_interval_minutes")))
+                    ids = due_subscription_ids(session, deps.now(), interval)
+            except Exception:
+                log.exception("scheduler: listing due subscriptions failed")
+                ids = []
         for sub_id in ids:
             if stop.is_set():
                 break

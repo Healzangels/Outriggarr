@@ -11,6 +11,7 @@ from outriggarr.matcher import (
     Override,
     Video,
     compile_title_regex,
+    has_part_marker,
     length_mismatch,
     match,
     normalise_title,
@@ -352,3 +353,70 @@ def test_clashing_show_numbers_never_pair_even_on_an_exact_name() -> None:
     eps = [ep(1, 2026, 2, "#752 - TIM DILLON")]
     r = match(eps, [vid("x", "KT #99 - TIM DILLON")], [], MatchConfig(("title",)))
     assert r.matches == () and r.unmatched[0].candidates["title"] == ()
+
+
+@pytest.mark.parametrize(
+    ("title", "marked"),
+    [
+        ("Alpha Beta (Part 1/5)", True),
+        ("Alpha Beta (Part 2)", True),
+        ("Alpha Beta (1/5)", True),
+        ("Alpha Beta Part 1 of 2", True),
+        ("Alpha Beta Pt. 3/17", True),
+        ("Alpha Beta 1 of 4", True),
+        ("Alpha Beta Part 2", True),
+        ("Alpha Beta pt 2", True),
+        ("Alpha Beta part1", True),
+        ("Top 10 of 2024", False),  # four digits are a year, not a count
+        ("Lecture 12 of 40", True),
+        ("5 of 3", False),  # N past M is not a part of anything
+        ("0 of 3", False),
+        ("Party 2", False),
+        ("Departure 3", False),
+        ("Dept. 5", False),
+        ("Alpha Beta (2024)", False),
+        ("Alpha Beta (1)", False),  # a bare bracketed number is a re-upload suffix, not a part
+    ],
+)
+def test_has_part_marker(title: str, marked: bool) -> None:
+    assert has_part_marker(title) is marked
+
+
+def test_part_upload_is_held_unless_the_episode_names_a_part() -> None:
+    # "X (Part 1)" contains "X": importing it would file a fragment as the whole episode
+    # and flip hasFile, so it is held like a length mismatch; a pin releases it. An
+    # episode that names a part itself takes a part (exact title, same marker both sides).
+    eps = [
+        Episode(1, 1, 1, "Alpha Beta", date(2026, 1, 8)),
+        Episode(2, 1, 2, "Gamma Delta Part 2", date(2026, 1, 9)),
+        Episode(3, 1, 3, "#751 - JOE ROGAN", date(2026, 1, 10)),
+        Episode(4, 1, 4, "Something Else Entirely", date(2026, 1, 11)),
+    ]
+    videos = [
+        Video("a", "Alpha Beta (Part 1)", "https://x/a"),
+        Video("b", "Gamma Delta (Part 2)", "https://x/b"),
+        Video("c", "KT #751 - JOE ROGAN (Part 1)", "https://x/c"),  # number-agreed containment
+        Video("d", "Unrelated title (1/3)", "https://x/d", date(2026, 1, 11)),  # a date pairing
+    ]
+    cfg = MatchConfig(("title", "date"), date_tolerance_days=0)
+    r = match(eps, videos, [], cfg)
+    reason = "video is one part of a split upload; the episode is whole in Sonarr"
+    assert {(h.episode.id, h.video.id, h.strategy, h.tier) for h in r.held} == {
+        (1, "a", "title", "contains"),
+        (3, "c", "title", "exact"),  # the show-number promotion is still containment
+        (4, "d", "date", "date"),
+    }
+    assert all(h.reason == reason for h in r.held)
+    assert {(m.episode.id, m.video.id) for m in r.matches} == {(2, "b")}
+    assert r.unmatched == ()
+    # a pin is the release valve
+    r2 = match(eps, videos, [Override("a", 1, 1)], cfg)
+    assert (1, "a") in {(m.episode.id, m.video.id) for m in r2.matches}
+    assert 1 not in {h.episode.id for h in r2.held}
+    # the length check speaks first when it has evidence
+    long_ep = [Episode(1, 1, 1, "Alpha Beta", date(2026, 1, 8), runtime_minutes=60)]
+    r3 = match(long_ep, [Video("a", "Alpha Beta (Part 1)", "https://x/a", duration=120)], [], cfg)
+    assert r3.held[0].reason == "video runs 2m00s, Sonarr says the episode runs 60 min"
+    # both parts listed: two candidates, nobody claims, the episode is plainly unmatched
+    r4 = match(eps[:1], videos[:1] + [Video("a2", "Alpha Beta (Part 2)", "https://x/a2")], [], cfg)
+    assert [u.episode.id for u in r4.unmatched] == [1] and r4.held == ()

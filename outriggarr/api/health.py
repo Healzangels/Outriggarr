@@ -41,6 +41,13 @@ def staging_writable(staging: Path) -> bool:
     return ok
 
 
+def cooloff_status(cooloff) -> dict[str, object] | None:
+    """The shared rate-limit pause, for /health and the footer; None when not paused."""
+    if cooloff is None or not cooloff.active():
+        return None
+    return {"remaining_seconds": int(cooloff.remaining()), "message": cooloff.message}
+
+
 @router.get("/health")
 def health(request: Request, response: Response) -> dict[str, object]:
     """200 when downloads can work; 503 "degraded" with the reasons when they cannot."""
@@ -64,6 +71,10 @@ def health(request: Request, response: Response) -> dict[str, object]:
         # none / unreadable / signed in / signed out — "signed out" means age-gated videos
         # will fail until the cookies file is exported again
         "youtube_session": cookies_state(cookies_path),
+        # set while a rate-limit answer has the queue, the scans and the fetches paused
+        "youtube_cooloff": cooloff_status(
+            getattr(getattr(request.app.state, "runner_deps", None), "cooloff", None)
+        ),
         # False means downloads will fail: fix the mount's ownership (see entrypoint.sh)
         "staging_writable": staging_writable(staging),
         "worker_alive": liveness.get("worker"),

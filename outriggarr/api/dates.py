@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from outriggarr.db.models import Subscription, utcnow
 from outriggarr.settings import get_setting
-from outriggarr.source import SourceError
+from outriggarr.source import SourceError, is_rate_limited
 from outriggarr.worker.scheduler import _date_known, _remember_date, list_source_videos
 
 log = logging.getLogger(__name__)
@@ -24,6 +24,7 @@ router = APIRouter(prefix="/api/subscriptions", tags=["dates"])
 DATE_FETCH_MAX = 3000  # videos per run
 DATE_FETCH_PARALLEL = 4
 COMMIT_EVERY = 10
+SKIPPED = "skipped: the source rate-limited us"  # not an error: nothing is remembered
 
 
 @dataclass
@@ -36,6 +37,7 @@ class DateFetchProgress:
     unknown: int = 0  # fetched, but the source gave no date
     error_count: int = 0
     first_error: str | None = None
+    skipped: int = 0  # left for next time: a rate-limit answer paused the run
     started_at: datetime | None = None
     finished_at: datetime | None = None
     failure: str | None = None
@@ -65,6 +67,11 @@ class DateFetchProgress:
             text += f" ({self.unknown} carry none)"
         if self.error_count:
             text += f"; {self.error_count} could not be fetched (first: {self.first_error})"
+        if self.skipped:
+            text += (
+                f"; {self.skipped} left for later: the source rate-limited us, "
+                "fetches are paused until it lifts"
+            )
         return text + ". Scan now to match by date."
 
 
@@ -94,9 +101,14 @@ async def fetch_dates(
 
     async def fetch(ref):
         async with gate:
+            if deps.cooloff.active():
+                return ref, None, SKIPPED
             try:
                 info = await asyncio.to_thread(deps.source.fetch_info, ref.url)
             except SourceError as exc:
+                if is_rate_limited(str(exc)):
+                    deps.cooloff.hit(str(exc))  # the rest of this run skips, nothing burnt
+                    return ref, None, SKIPPED
                 return ref, None, str(exc)
             return ref, info.upload_date, None
 
@@ -104,6 +116,10 @@ async def fetch_dates(
     with session.no_autoflush:
         for fut in asyncio.as_completed([fetch(r) for r in need]):
             ref, upload_date, err = await fut
+            if err == SKIPPED:
+                progress.skipped += 1
+                progress.done += 1
+                continue
             if err:
                 progress.error_count += 1
                 progress.first_error = progress.first_error or f"{ref.id}: {err}"

@@ -42,12 +42,16 @@ from outriggarr.naming import (
 )
 from outriggarr.notify import Notifier, NullNotifier
 from outriggarr.settings import get_setting
-from outriggarr.source import DownloadAborted, SourceError, VideoSource
+from outriggarr.source import CoolOff, DownloadAborted, SourceError, VideoSource, is_rate_limited
 
 log = logging.getLogger(__name__)
 
 BACKOFF: tuple[timedelta, ...] = (timedelta(hours=1), timedelta(hours=6), timedelta(hours=24))
 MAX_ATTEMPTS = len(BACKOFF) + 1
+# A download that stops advancing is abandoned (and retried later) rather than holding
+# the worker until a restart: no progress for this long, or this long in total.
+STALL_IDLE_SECONDS = 30 * 60.0
+STALL_CAP_SECONDS = 6 * 3600.0
 COMMAND_TIMEOUT_SECONDS = 600.0
 PROGRESS_WRITE_INTERVAL = 2.0
 CANCEL_CHECK_INTERVAL = 2.0
@@ -70,6 +74,46 @@ class RunnerDeps:
     lock_dir: Path | None = None  # where the single-instance lock file lives (config dir)
     now: Callable[[], datetime] = utcnow
     sleep: Callable[[float], object] = field(default=asyncio.sleep)
+    cooloff: CoolOff = field(default_factory=CoolOff)  # shared with the scheduler and fetches
+    stall_idle_seconds: float = STALL_IDLE_SECONDS
+    stall_cap_seconds: float = STALL_CAP_SECONDS
+    clock: Callable[[], float] = time.monotonic
+
+
+class _StallGuard:
+    """Trips when a download stops advancing: no progress for `idle` seconds, or `cap`
+    seconds since it started. The source's progress hook asks `tripped()` on every call
+    and aborts; yt-dlp's own socket timeout (20 s) keeps that hook cycling through a
+    dead connection, so the abort is delivered. Progress needs a known total, as the
+    percentage does; a hung ffmpeg merge is the one thing this cannot reach."""
+
+    def __init__(self, idle: float, cap: float, clock: Callable[[], float]) -> None:
+        self.idle = idle
+        self.cap = cap
+        self.clock = clock
+        self.started = self.last_advance = clock()
+        self.last_pct = -1.0
+        self.reason: str | None = None
+
+    def advanced(self, pct: float) -> None:
+        if pct > self.last_pct:
+            self.last_pct = pct
+            self.last_advance = self.clock()
+
+    def tripped(self) -> bool:
+        if self.reason is not None:
+            return True
+        now = self.clock()
+        if now - self.last_advance >= self.idle:
+            self.reason = (
+                f"no download progress for {int(self.idle // 60)} min "
+                f"(stuck at {max(self.last_pct, 0):.0f}%); abandoned, will retry"
+            )
+        elif now - self.started >= self.cap:
+            self.reason = (
+                f"download still running after {int(self.cap // 3600)} h; abandoned, will retry"
+            )
+        return self.reason is not None
 
 
 class _NoRetry(Exception):
@@ -78,6 +122,16 @@ class _NoRetry(Exception):
 
 class _Retry(Exception):
     """A transient failure; the runner schedules a retry with backoff."""
+
+
+class _RateLimited(Exception):
+    """The source rate-limited the session: the job waits out the shared cool-off
+    without spending an attempt, and the worker starts nothing else meanwhile."""
+
+    def __init__(self, message: str, wait_seconds: float) -> None:
+        super().__init__(message)
+        self.message = message
+        self.wait_seconds = wait_seconds
 
 
 class _Cancelled(Exception):
@@ -239,15 +293,27 @@ async def run_worker(deps: RunnerDeps, stop: asyncio.Event) -> None:
     except Exception:
         log.exception("recovering stale jobs failed; continuing")
     running: dict[int, asyncio.Task[None]] = {}
+    paused_logged = False
     while not stop.is_set():
         running = {jid: t for jid, t in running.items() if not t.done()}
         try:
             with deps.session_factory() as session:
                 sweep_cancelled(session, deps.staging_dir)
-                concurrency = int(get_setting(session, "concurrency"))
-                ids = claim_next_jobs(
-                    session, concurrency - len(running), deps.now(), exclude=running.keys()
-                )
+                if deps.cooloff.active():
+                    # rate-limited: running jobs finish, nothing new starts until it lifts
+                    ids = []
+                    if not paused_logged:
+                        log.warning(
+                            "worker: the source rate-limited us; starting no jobs for %d s",
+                            int(deps.cooloff.remaining()),
+                        )
+                        paused_logged = True
+                else:
+                    paused_logged = False
+                    concurrency = int(get_setting(session, "concurrency"))
+                    ids = claim_next_jobs(
+                        session, concurrency - len(running), deps.now(), exclude=running.keys()
+                    )
         except Exception:
             log.exception("claiming jobs failed")
             ids = []
@@ -321,6 +387,24 @@ async def process_job(
             job.status = JobStatus.queued
             job.attempts -= 1
             job.error = "interrupted during import; will resume"
+            session.commit()
+            return
+        except _RateLimited as exc:
+            shutil.rmtree(dest, ignore_errors=True)
+            if _cancelled_meanwhile(session, job):
+                job.staged_path = None
+                job.error = "cancelled during download"
+                job.finished_at = deps.now()
+            else:
+                # the wall was the source's, not this job's: back to the queue, no attempt spent
+                job.status = JobStatus.queued
+                job.attempts -= 1
+                job.next_retry_at = deps.now() + timedelta(seconds=exc.wait_seconds)
+                job.error = (
+                    f"rate-limited by the source; all downloads paused for "
+                    f"{int(exc.wait_seconds // 60)} min: {exc.message}"
+                )
+                log.warning("job %d: %s", job.id, job.error)
             session.commit()
             return
         except DownloadAborted:
@@ -442,11 +526,13 @@ async def _download_stage(
     container = get_setting(session, "merge_container")
     sub_langs = tuple(x for x in get_setting(session, "subtitles_langs").split(",") if x)
     auto_subs = get_setting(session, "subtitles_auto") == "1"
+    guard = _StallGuard(deps.stall_idle_seconds, deps.stall_cap_seconds, deps.clock)
     last_write = 0.0
 
     def progress(pct: float) -> None:
         # Called from the yt-dlp thread; throttle DB writes.
         nonlocal last_write
+        guard.advanced(pct)
         t = time.monotonic()
         if t - last_write < PROGRESS_WRITE_INTERVAL:
             return
@@ -457,6 +543,9 @@ async def _download_stage(
                 row.progress_pct = int(pct)
                 s.commit()
 
+    def abort_or_stalled() -> bool:
+        return should_abort() or guard.tripped()
+
     try:
         result = await asyncio.to_thread(
             deps.source.download,
@@ -465,10 +554,11 @@ async def _download_stage(
             fmt=fmt,
             merge_container=container,
             progress=progress,
-            should_abort=should_abort,
+            should_abort=abort_or_stalled,
             subtitle_langs=sub_langs,
             auto_subtitles=auto_subs,
         )
+        deps.cooloff.clear()  # the source is serving us again
         quality = quality_for_height(result.height)
         staged = dest / _staging_name(target, info, quality, result.ext)
         result.path.rename(staged)
@@ -479,6 +569,8 @@ async def _download_stage(
             sub.rename(dest / f"{staged.stem}{suffix}")
     except SourceError as exc:
         shutil.rmtree(dest, ignore_errors=True)
+        if is_rate_limited(str(exc)):
+            raise _RateLimited(str(exc), deps.cooloff.hit(str(exc))) from exc
         raise _Retry(str(exc)) from exc
     except OSError as exc:
         # e.g. PermissionError creating /staging/<id>, ENAMETOOLONG on the rename: an
@@ -487,6 +579,8 @@ async def _download_stage(
         raise _Retry(f"staging error: {exc}") from exc
     except DownloadAborted:
         shutil.rmtree(dest, ignore_errors=True)
+        if guard.reason is not None and not should_abort():
+            raise _Retry(guard.reason) from None  # our own stall abort: a failure, not a stop
         raise
 
     if result.subtitles:

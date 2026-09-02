@@ -1182,3 +1182,101 @@ async def test_audio_language_precedence_subscription_then_source_then_default(
     await process_job(deps, job3)
     assert deps.source.tagged[-1][1] == "eng"
     assert [t[1] for t in deps.source.tagged] == ["jpn", "kor", "eng"]
+
+
+def scripted_clock(*values: float):
+    """A monotonic clock that answers the given values in turn, then repeats the last."""
+    it = iter(values)
+    last = [values[-1]]
+
+    def clock() -> float:
+        for v in it:
+            last[0] = v
+            return v
+        return last[0]
+
+    return clock
+
+
+async def test_stalled_download_is_a_retryable_failure(deps, session_factory) -> None:
+    conn_id = add_connection(session_factory)
+    job_id = add_job(session_factory, conn_id)
+    fake_for(deps, conn_id)
+    # guard created at 0; first abort check at 10 (fine); progress 50% at 20; the next
+    # check finds nothing has advanced for 380 s, past the 300 s idle limit
+    deps.clock = scripted_clock(0, 10, 20, 400)
+    deps.stall_idle_seconds = 300.0
+    await process_job(deps, job_id)
+    job = get_job(deps, job_id)
+    assert job.status is JobStatus.failed and job.attempts == 1, "a stall spends the attempt"
+    assert job.error == "no download progress for 5 min (stuck at 50%); abandoned, will retry"
+    assert job.next_retry_at == NOW + BACKOFF[0]
+    assert not (deps.staging_dir / str(job_id)).exists(), "the partial download is gone"
+
+
+async def test_download_running_past_the_cap_is_abandoned(deps, session_factory) -> None:
+    conn_id = add_connection(session_factory)
+    job_id = add_job(session_factory, conn_id)
+    fake_for(deps, conn_id)
+    deps.clock = scripted_clock(0, 10, 20, 7300)
+    deps.stall_idle_seconds = 100_000.0  # progress keeps coming, it just never ends
+    deps.stall_cap_seconds = 7200.0
+    await process_job(deps, job_id)
+    job = get_job(deps, job_id)
+    assert job.status is JobStatus.failed
+    assert job.error == "download still running after 2 h; abandoned, will retry"
+    assert job.next_retry_at == NOW + BACKOFF[0]
+
+
+async def test_progress_resets_the_stall_clock(deps, session_factory) -> None:
+    conn_id = add_connection(session_factory)
+    job_id = add_job(session_factory, conn_id)
+    fake_for(deps, conn_id)
+    # checks at 100 and 300 with the 50% progress at 200 and a 150 s idle limit: each
+    # check sees a 100 s gap only because progress resets the clock; a guard that ignored
+    # progress would see 200 s at its second look and trip
+    deps.clock = scripted_clock(0, 100, 200, 300, 400)
+    deps.stall_idle_seconds = 150.0
+    await process_job(deps, job_id)
+    assert get_job(deps, job_id).status is JobStatus.done
+
+
+async def test_rate_limited_download_pauses_the_queue_without_spending_an_attempt(
+    deps, session_factory
+) -> None:
+    conn_id = add_connection(session_factory)
+    job_id = add_job(session_factory, conn_id)
+    other = add_job(session_factory, conn_id, video_id="v2", episode_id=43)
+    fake_for(deps, conn_id)
+    t = [0.0]
+    deps.cooloff.clock = lambda: t[0]
+    deps.source.error = SourceError(
+        "ERROR: [youtube] v1: This content isn't available, try again later. "
+        "The current session has been rate-limited by YouTube for up to an hour."
+    )
+    await process_job(deps, job_id)
+    job = get_job(deps, job_id)
+    assert job.status is JobStatus.queued and job.attempts == 0, "the wall was the source's"
+    assert job.next_retry_at == NOW + timedelta(minutes=15)
+    assert job.error.startswith(
+        "rate-limited by the source; all downloads paused for 15 min: ERROR: [youtube] v1"
+    )
+    assert deps.cooloff.active() and deps.cooloff.remaining() == 900
+    assert not (deps.staging_dir / str(job_id)).exists()
+
+    # the worker starts nothing while the pause holds, then takes the next job up
+    deps.source.error = None
+    stop = asyncio.Event()
+    task = asyncio.create_task(run_worker(deps, stop))
+    await asyncio.sleep(0.1)
+    assert get_job(deps, other).status is JobStatus.queued and len(deps.source.calls) == 1
+    t[0] += 900
+    for _ in range(200):
+        await asyncio.sleep(0.01)
+        if get_job(deps, other).status is JobStatus.done:
+            break
+    stop.set()
+    await asyncio.wait_for(task, 2)
+    assert get_job(deps, other).status is JobStatus.done
+    assert not deps.cooloff.active() and deps.cooloff.strikes == 0, "a success clears the ladder"
+    assert get_job(deps, job_id).status is JobStatus.queued, "still waiting for its own retry time"

@@ -146,6 +146,45 @@ def normalise_title(text: str) -> str:
     return _WS.sub(" ", text).strip()
 
 
+# "Part N" markers in the shapes uploaders use: "(Part 1/5)", "(Part 2)", "(1/5)",
+# "Part 1 of 2", "Pt. 3/17", "1 of 4", "Part 2". Read on the RAW title: normalisation
+# keeps the words but drops the brackets that make "(1/5)" unmistakable.
+_PART_MARKER = re.compile(
+    r"""
+    \(\s*(?:(?:part|pt\.?)\s*(?P<n1>\d{1,2})(?:\s*[/⧸]\s*(?P<m1>\d{1,2}))?
+          |(?P<n2>\d{1,2})\s*[/⧸]\s*(?P<m2>\d{1,2}))\s*\)          # (Part 1/5) (Part 2) (1/5)
+  | \b(?:part|pt\.?)\s*(?P<n3>\d{1,2})\s*(?:[/⧸]|\s+of\s+)\s*(?P<m3>\d{1,2})\b  # Part 1 of 2
+  | \b(?P<n4>\d{1,2})\s+of\s+(?P<m4>\d{1,2})\b                             # 1 of 4
+  | \b(?:part|pt\.?)\s*(?P<n5>\d{1,2})\b                                    # Part 2
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+def has_part_marker(title: str) -> bool:
+    """Whether a title says it is one part of a longer whole. Counts are two digits at
+    most (so "Top 10 of 2024" is a year, not a part) and need 1 ≤ N ≤ M: "0 of 3" and
+    "5 of 3" are not parts of anything."""
+    for m in _PART_MARKER.finditer(title):
+        groups = m.groupdict()
+        n = next(int(v) for k, v in groups.items() if k.startswith("n") and v)
+        total = next((int(v) for k, v in groups.items() if k.startswith("m") and v), None)
+        if n < 1 or (total is not None and n > total):
+            continue
+        return True
+    return False
+
+
+def part_mismatch(episode_title: str, video_title: str) -> str | None:
+    """A reason when the video says it is one part of a split upload and the episode is
+    whole in Sonarr: importing it would file a fragment as the episode, flip hasFile,
+    and the other parts would never be fetched. An episode that names a part itself
+    may take a part; an exact title carries the same marker on both sides anyway."""
+    if has_part_marker(video_title) and not has_part_marker(episode_title):
+        return "video is one part of a split upload; the episode is whole in Sonarr"
+    return None
+
+
 def compile_title_regex(pattern: str) -> re.Pattern[str]:
     """Validate a user regex: it must have an `episode` group; `season` is optional."""
     rx = re.compile(pattern, re.IGNORECASE)
@@ -304,6 +343,8 @@ def match(
                     if strategy == "override" or tier == "exact"
                     else length_mismatch(winner.runtime_minutes, video.duration)
                 )
+                if reason is None and strategy != "override":
+                    reason = part_mismatch(winner.title, video.title)
                 if reason:
                     held.append(Held(winner, video, strategy, tier, reason))
                     continue  # the episode stays open for the later strategies

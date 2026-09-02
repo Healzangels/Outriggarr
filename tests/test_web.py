@@ -1175,3 +1175,108 @@ def test_missing_episode_with_a_stale_job_offers_a_clear_button(client: TestClie
     assert (
         f"Job #{live} not cleared" in r.text and client.get(f"/api/jobs/{live}").status_code == 200
     )
+
+
+RATE_LIMITED_TEXT = (
+    "ERROR: [youtube] x: This content isn't available, try again later. "
+    "The current session has been rate-limited by YouTube for up to an hour."
+)
+
+
+def test_date_fetch_under_a_rate_limit_leaves_the_rest_for_later(
+    client: TestClient, monkeypatch
+) -> None:
+    import time
+    from datetime import UTC, datetime, timedelta
+
+    from outriggarr.arr.base import EpisodeRef, SeriesRef
+    from outriggarr.db.models import VideoMeta
+    from outriggarr.source import SourceError, VideoRef
+    from outriggarr.worker import scheduler
+    from tests.fakes import FakeArrClient
+
+    monkeypatch.setattr(scheduler, "DATE_FETCH_LIMIT", 0)
+    now = datetime.now(UTC)
+    client.app.state.arr_factory.by_url["http://sonarr-host:1234"] = FakeArrClient(
+        series_list=[SeriesRef(5, "Show", 2015, 1, True)],
+        episodes_by_series={
+            5: [EpisodeRef(11, 30, 6, "Nothing alike", False, True, now - timedelta(days=400))]
+        },
+    )
+    source = client.app.state.source
+    source.recent = [
+        VideoRef(v, f"Video {v}", f"https://y/{v}", 100, i, None) for i, v in enumerate("abc")
+    ]
+    monkeypatch.setattr(
+        source, "fetch_info", lambda url: (_ for _ in ()).throw(SourceError(RATE_LIMITED_TEXT))
+    )
+    client.post("/api/connections", json=SONARR)
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={
+            "connection_id": 1,
+            "series_id": 5,
+            "sources": ["https://www.youtube.com/@x"],
+            "strategies": ["title", "date"],
+        },
+    ).json()["id"]
+    client.post(f"/subscriptions/{sub_id}/dates")
+    for _ in range(100):
+        st = client.get(f"/api/subscriptions/{sub_id}/dates").json()
+        if not st["running"]:
+            break
+        time.sleep(0.05)
+    assert st["failure"] is None and st["error_count"] == 0 and st["skipped"] == 3, st
+    assert "3 left for later: the source rate-limited us" in st["summary"]
+    with client.app.state.session_factory() as s:
+        assert s.query(VideoMeta).count() == 0, "nothing is remembered as unknown for a week"
+    assert client.app.state.runner_deps.cooloff.active()
+    assert "rate-limited: paused 15 min" in client.get(f"/subscriptions/{sub_id}").text
+    client.app.state.runner_deps.cooloff.clear()
+
+
+def test_recheck_under_a_rate_limit_leaves_the_rest_for_later(
+    client: TestClient, monkeypatch
+) -> None:
+    import time
+
+    from outriggarr.db.models import Job, TargetKind
+    from outriggarr.source import SourceError
+
+    _seed_series(client)
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={"connection_id": 1, "series_id": 5, "sources": ["https://www.youtube.com/@x"]},
+    ).json()["id"]
+    with client.app.state.session_factory() as s:
+        s.add(
+            Job(
+                connection_id=1,
+                subscription_id=sub_id,
+                target_kind=TargetKind.episode,
+                series_id=5,
+                episode_ids=[11],
+                target_key="episode:5:11",
+                video_id="rl",
+                video_url="https://y/rl",
+                video_title="x",
+                target_label="Show S30E06 - Six",
+            )
+        )
+        s.commit()
+    source = client.app.state.source
+    monkeypatch.setattr(
+        source, "fetch_info", lambda url: (_ for _ in ()).throw(SourceError(RATE_LIMITED_TEXT))
+    )
+    assert client.post("/api/matches/recheck").status_code in (200, 202)
+    for _ in range(100):
+        st = client.get("/api/matches/recheck").json()
+        if not st["running"]:
+            break
+        time.sleep(0.05)
+    assert st["failure"] is None and st["error_count"] == 0 and st["skipped"] == 1, st
+    assert "1 left for later: the source rate-limited us" in st["summary"]
+    with client.app.state.session_factory() as s:
+        assert s.query(Job).one().video_duration is None
+    assert client.app.state.runner_deps.cooloff.active()
+    client.app.state.runner_deps.cooloff.clear()

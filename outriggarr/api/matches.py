@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from outriggarr.arr.base import ArrError
 from outriggarr.db.models import Connection, Job, utcnow
 from outriggarr.matcher import length_mismatch
-from outriggarr.source import SourceError
+from outriggarr.source import SourceError, is_rate_limited
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/matches", tags=["matches"])
@@ -26,6 +26,7 @@ router = APIRouter(prefix="/api/matches", tags=["matches"])
 RECHECK_LIMIT = 300  # jobs per run
 RECHECK_PARALLEL = 4  # per-video fetches in flight at once
 COMMIT_EVERY = 10  # fetched durations per DB write
+SKIPPED = "skipped: the source rate-limited us"  # not an error: left for the next run
 
 
 @dataclass
@@ -39,6 +40,7 @@ class RecheckProgress:
     flagged: int = 0
     error_count: int = 0
     first_error: str | None = None
+    skipped: int = 0  # left for the next run: a rate-limit answer paused the fetches
     started_at: datetime | None = None
     finished_at: datetime | None = None
     failure: str | None = None
@@ -69,6 +71,11 @@ class RecheckProgress:
         )
         if self.error_count:
             text += f" {self.error_count} could not be fetched (first: {self.first_error})."
+        if self.skipped:
+            text += (
+                f" {self.skipped} left for later: the source rate-limited us, "
+                "fetches are paused until it lifts."
+            )
         return text
 
 
@@ -144,9 +151,14 @@ async def recheck_evidence(
 
         async def fetch(job: Job) -> tuple[Job, int | None, str | None]:
             async with gate:
+                if deps.cooloff.active():
+                    return job, None, SKIPPED
                 try:
                     info = await asyncio.to_thread(deps.source.fetch_info, job.video_url)
                 except SourceError as exc:
+                    if is_rate_limited(str(exc)):
+                        deps.cooloff.hit(str(exc))  # the rest of this run skips
+                        return job, None, SKIPPED
                     return job, None, f"{job.video_id}: {exc}"
                 return job, info.duration, None
 
@@ -156,6 +168,8 @@ async def recheck_evidence(
             if duration:
                 job.video_duration = int(duration)
                 progress.durations_filled += 1
+            elif err == SKIPPED:
+                progress.skipped += 1
             elif err:
                 _note_error(progress, err)
             progress.done += 1

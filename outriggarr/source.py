@@ -9,6 +9,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -119,6 +120,8 @@ class _YtDlpLogger:
         log.error("%s", msg)
 
 
+REMUX_TIMEOUT_SECONDS = 3600.0
+
 _FLAT_OPTS: dict[str, Any] = {
     "extract_flat": "in_playlist",
     "skip_download": True,
@@ -177,6 +180,58 @@ NEEDS_LOGIN = re.compile(
     r"this video is private|members[- ]only|join this channel",
     re.IGNORECASE,
 )
+
+# YouTube's wording when it has had enough of the session for a while, relayed verbatim
+# by yt-dlp: "This content isn't available, try again later. The current session has
+# been rate-limited by YouTube for up to an hour." HTTP 429 is the same answer from any host.
+RATE_LIMITED = re.compile(
+    r"rate[- ]limited|rate limit|try again later|http error 429|too many requests",
+    re.IGNORECASE,
+)
+
+
+def is_rate_limited(message: str) -> bool:
+    return RATE_LIMITED.search(message) is not None
+
+
+@dataclass
+class CoolOff:
+    """A process-wide pause of source work after a rate-limit answer: the queue, the
+    scheduler and the background fetches all wait it out, instead of each burning an
+    attempt against the same wall. 15 min first, doubling per consecutive hit, capped
+    at an hour (YouTube's own figure); any successful download resets it."""
+
+    base_seconds: float = 900.0
+    cap_seconds: float = 3600.0
+    clock: Callable[[], float] = time.monotonic
+    until: float = 0.0
+    strikes: int = 0
+    message: str | None = None
+
+    def hit(self, message: str) -> float:
+        """Record a rate-limit answer; returns how long the pause is, in seconds. Answers
+        that land while a pause is already in force (four fetches in flight all hit the
+        same wall) are one strike, not four: the pause escalates only when the last one
+        turned out too short."""
+        if self.active():
+            self.message = self.message or message
+            return self.remaining()
+        wait = min(self.base_seconds * 2**self.strikes, self.cap_seconds)
+        self.strikes += 1
+        self.until = self.clock() + wait
+        self.message = message
+        return wait
+
+    def clear(self) -> None:
+        self.until = 0.0
+        self.strikes = 0
+        self.message = None
+
+    def remaining(self) -> float:
+        return max(0.0, self.until - self.clock())
+
+    def active(self) -> bool:
+        return self.remaining() > 0
 
 
 def has_signin_cookie(netscape: str) -> bool:
@@ -441,10 +496,18 @@ class YtDlpSource:
         tmp = path.with_name(f"{path.stem}.lang{path.suffix}")
         try:
             proc = subprocess.run(
-                ffmpeg_language_command(path, tmp, language), capture_output=True, text=True
+                ffmpeg_language_command(path, tmp, language),
+                capture_output=True,
+                text=True,
+                timeout=REMUX_TIMEOUT_SECONDS,
             )
         except OSError as exc:  # ffmpeg missing
             raise SourceError(f"ffmpeg could not be run: {exc}") from exc
+        except subprocess.TimeoutExpired as exc:  # a stream copy never takes this long
+            tmp.unlink(missing_ok=True)
+            raise SourceError(
+                f"ffmpeg gave up after {int(REMUX_TIMEOUT_SECONDS // 60)} min of remuxing"
+            ) from exc
         if proc.returncode != 0:
             tmp.unlink(missing_ok=True)
             raise SourceError(f"ffmpeg exited {proc.returncode}: {proc.stderr.strip()}")
@@ -564,15 +627,43 @@ def ffmpeg_language_command(src: Path, dst: Path, language: str) -> list[str]:
     ]
 
 
+def skip_reason(entry: dict[str, Any]) -> str | None:
+    """Why a listed entry is not worth offering: it cannot be downloaded yet (a scheduled
+    premiere: the title is there, the video is not, and a job would fail and retry for a
+    day), or is not an episode (a stream in progress; a Short). Members-only entries stay
+    listed: the cookies file may well be a member's, and cookies are used on demand."""
+    status = entry.get("live_status")
+    if status == "is_upcoming":
+        return "upcoming premiere"
+    if status == "is_live":
+        return "live stream in progress"
+    if "/shorts/" in str(entry.get("url") or ""):
+        return "Short"
+    return None
+
+
 def videos_from_info(info: dict[str, Any]) -> list[VideoRef]:
     """Normalise a flat yt-dlp info dict (playlist or single video) to VideoRefs.
-    Nested playlists (a channel's tabs) are skipped; M4 handles channels."""
+    Nested playlists (a channel's tabs) are skipped; M4 handles channels. Entries that
+    are not (yet) a downloadable episode are left out (`skip_reason`) and counted in
+    the log; a single pasted video is never second-guessed."""
     if info.get("_type") == "playlist":
         out: list[VideoRef] = []
+        skipped: dict[str, int] = {}
         for i, e in enumerate(info.get("entries") or [], start=1):
             if not e or e.get("_type") == "playlist" or not e.get("id"):
                 continue
+            why = skip_reason(e)
+            if why:
+                skipped[why] = skipped.get(why, 0) + 1
+                continue
             out.append(_ref(e, e.get("playlist_index") or i))
+        if skipped:
+            log.info(
+                "listing %s: left out %s",
+                info.get("id"),
+                ", ".join(f"{n} x {why}" for why, n in skipped.items()),
+            )
         return out
     if not info.get("id"):
         raise SourceError("yt-dlp returned an entry without an id")
