@@ -34,6 +34,7 @@ def test_create_and_read(client: TestClient) -> None:
     assert job["episode_ids"] == [42, 41]
     assert job["attempts"] == 0 and job["progress_pct"] == 0
     assert job["video_id"] == "abc"
+    assert job["subscription_id"] is None and job["format"] is None  # manual grab
     assert client.get(f"/api/jobs/{job['id']}").json() == job
     assert client.get("/api/jobs").json() == [job]
     assert client.get("/api/jobs?status=queued").json() == [job]

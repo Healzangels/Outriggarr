@@ -62,6 +62,8 @@ class JobOut(BaseModel):
     video_url: str
     video_title: str
     target_label: str | None
+    subscription_id: int | None
+    format: str | None
     status: JobStatus
     progress_pct: int
     staged_path: str | None
