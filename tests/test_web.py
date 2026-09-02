@@ -824,3 +824,53 @@ def test_static_assets_are_cacheable_and_the_logo_is_inline(client: TestClient) 
     r = client.get("/static/app.css?v=abc")
     assert r.headers["cache-control"] == "public, max-age=31536000, immutable"
     assert "cache-control" not in client.get("/activity").headers
+
+
+def test_only_one_recheck_runs_at_a_time(client: TestClient, monkeypatch) -> None:
+    import time
+
+    from outriggarr.db.models import Job, TargetKind
+    from outriggarr.source import VideoRef
+
+    _seed_series(client)
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={"connection_id": 1, "series_id": 5, "sources": ["https://www.youtube.com/@x"]},
+    ).json()["id"]
+    with client.app.state.session_factory() as s:
+        s.add(
+            Job(
+                connection_id=1,
+                subscription_id=sub_id,
+                target_kind=TargetKind.episode,
+                series_id=5,
+                episode_ids=[11],
+                target_key="episode:5:11",
+                video_id="slow",
+                video_url="https://y/slow",
+                video_title="x",
+                target_label="Show S30E06 - Six",
+            )
+        )
+        s.commit()
+    source = client.app.state.source
+    real = source.fetch_info
+
+    def slow_fetch(url):
+        time.sleep(0.4)
+        return real(url)
+
+    monkeypatch.setattr(source, "fetch_info", slow_fetch)
+    source.infos["https://y/slow"] = VideoRef("slow", "x", "https://y/slow", 1500, 1, None)
+    first = client.post("/api/matches/recheck").json()
+    second = client.post("/api/matches/recheck").json()
+    assert first["running"] and second["running"]
+    assert second["started_at"] == first["started_at"], "the running one is returned, not a new one"
+    for _ in range(100):
+        status = client.get("/api/matches/recheck").json()
+        if not status["running"]:
+            break
+        time.sleep(0.05)
+    assert status["checked"] == 1 and status["durations_filled"] == 1, status
+    third = client.post("/api/matches/recheck").json()
+    assert third["started_at"] != first["started_at"], "a finished one can be started again"
