@@ -23,7 +23,7 @@ Everything is a job: a subscription scan and a manual grab produce the same row 
 ```yaml
 services:
   outriggarr:
-    image: <dockerhub-user>/outriggarr:latest   # built and pushed by GitHub Actions on every push to main
+    image: healzangels/outriggarr:latest   # built and pushed by GitHub Actions on every push to main
     container_name: outriggarr
     environment:
       PUID: "1000"                   # match your Sonarr/Radarr user so they can move staged files
