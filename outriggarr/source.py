@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import re
+import shutil
 import subprocess
-from collections.abc import Callable
+import tempfile
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -140,12 +143,51 @@ class YtDlpSource:
             raise SourceError(f"cookies file {cookies!r} is not readable by the app user")
         return {**base, **extra, "logger": _YtDlpLogger()}  # operator wins, except reserved
 
+    @contextlib.contextmanager
+    def _private_cookie_jar(self, opts: dict[str, Any]) -> Iterator[dict[str, Any]]:
+        """yt-dlp rewrites its cookie jar when it closes. It gets a private copy, so it
+        can never write an old session back over the operator's file: a download that
+        spanned a re-export did exactly that, live, and the new cookies were lost.
+        Rotated cookies are copied back only while the operator's file is untouched."""
+        original = opts.get("cookiefile")
+        if not original:
+            yield opts
+            return
+        before = os.stat(original)
+        fd, private = tempfile.mkstemp(prefix="outriggarr-cookies-", suffix=".txt")
+        os.close(fd)
+        shutil.copyfile(original, private)
+        try:
+            yield {**opts, "cookiefile": private}
+        finally:
+            try:
+                after = os.stat(original)
+                unchanged = (after.st_mtime_ns, after.st_size) == (
+                    before.st_mtime_ns,
+                    before.st_size,
+                )
+                if not unchanged:
+                    log.info("cookies file %s changed while yt-dlp ran; keeping it", original)
+                elif os.access(original, os.W_OK) and os.path.getsize(private) > 0:
+                    staged = f"{original}.{os.getpid()}.tmp"
+                    shutil.copyfile(private, staged)
+                    os.chmod(staged, before.st_mode & 0o777)
+                    os.replace(staged, original)  # atomic: a concurrent run sees old or new
+            except OSError as exc:
+                log.warning("could not write rotated cookies back to %s: %s", original, exc)
+            finally:
+                with contextlib.suppress(OSError):
+                    os.unlink(private)
+
     def _extract(self, url: str, opts: dict[str, Any]) -> dict[str, Any]:
         import yt_dlp
         from yt_dlp.utils import DownloadError
 
         try:
-            with yt_dlp.YoutubeDL(self._opts(opts)) as ydl:
+            with (
+                self._private_cookie_jar(self._opts(opts)) as ydl_opts,
+                yt_dlp.YoutubeDL(ydl_opts) as ydl,
+            ):
                 info = ydl.extract_info(url, download=False)
         except DownloadError as exc:
             raise SourceError(str(exc)) from exc
@@ -232,7 +274,10 @@ class YtDlpSource:
             opts.update(subtitle_opts(subtitle_langs, auto_subtitles))
         info = None
         try:
-            with yt_dlp.YoutubeDL(self._opts(opts)) as ydl:
+            with (
+                self._private_cookie_jar(self._opts(opts)) as ydl_opts,
+                yt_dlp.YoutubeDL(ydl_opts) as ydl,
+            ):
                 info = ydl.extract_info(url, download=True)
         except DownloadCancelled as exc:
             # yt-dlp reuses DownloadCancelled for its own stop conditions (download

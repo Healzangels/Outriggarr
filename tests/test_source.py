@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from outriggarr.source import SourceError, VideoRef, videos_from_info
@@ -126,7 +128,8 @@ def test_ytdlp_source_merges_extra_opts_last(monkeypatch, tmp_path) -> None:
 
     class StubYDL:
         def __init__(self, opts):
-            seen.append(opts)
+            # yt-dlp gets a private copy of the operator's jar; read it while it exists
+            seen.append({**opts, "_jar": Path(opts["cookiefile"]).read_text()})
 
         def __enter__(self):
             return self
@@ -143,11 +146,11 @@ def test_ytdlp_source_merges_extra_opts_last(monkeypatch, tmp_path) -> None:
     src = YtDlpSource(extra_opts=lambda: {"cookiefile": str(cookies), "quiet": False})
     (v,) = src.resolve("https://youtu.be/x")
     assert v.id == "x"
-    assert seen[0]["cookiefile"] == str(cookies)
+    assert seen[0]["cookiefile"] != str(cookies) and seen[0]["_jar"] == "# cookies"
     assert seen[0]["quiet"] is False, "operator options win over ours"
     assert seen[0]["extract_flat"] == "in_playlist" and "logger" in seen[0]
     src.list_recent("https://www.youtube.com/@c", 7)
-    assert seen[1]["playlistend"] == 7 and seen[1]["cookiefile"] == str(cookies)
+    assert seen[1]["playlistend"] == 7 and seen[1]["_jar"] == "# cookies"
 
 
 def test_subtitle_opts_and_sidecars(tmp_path) -> None:
@@ -345,3 +348,48 @@ def test_unreadable_cookies_file_is_a_clear_error(monkeypatch, tmp_path) -> None
     src = YtDlpSource(extra_opts=lambda: {"cookiefile": str(tmp_path / "missing.txt")})
     with pytest.raises(SourceError, match="cookies file"):
         src.resolve("https://youtu.be/x")
+
+
+def test_ytdlp_gets_a_private_cookie_jar_and_never_clobbers_a_replaced_file(
+    monkeypatch, tmp_path
+) -> None:
+    import yt_dlp
+
+    from outriggarr.source import YtDlpSource
+
+    jar = tmp_path / "cookies.txt"
+    jar.write_text("# Netscape HTTP Cookie File\nold session\n")
+    seen: dict = {}
+
+    class StubYDL:
+        def __init__(self, opts):
+            self.opts = opts
+            seen["cookiefile"] = opts["cookiefile"]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            # yt-dlp saves its jar on close: the session it loaded, plus rotations
+            path = Path(self.opts["cookiefile"])
+            path.write_text(path.read_text() + "rotated\n")
+            return False
+
+        def extract_info(self, url, download=False):
+            if seen.get("replace_during_run"):
+                jar.write_text("# Netscape HTTP Cookie File\nNEW SESSION\n")
+            return {"id": "x", "title": "T", "webpage_url": url, "duration": 1}
+
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", StubYDL)
+    src = YtDlpSource(extra_opts=lambda: {"cookiefile": str(jar)})
+    src.fetch_info("https://youtu.be/x")
+    assert seen["cookiefile"] != str(jar), "yt-dlp writes to a private copy"
+    assert not Path(seen["cookiefile"]).exists(), "the private copy is removed afterwards"
+    assert jar.read_text().endswith("old session\nrotated\n"), "rotations kept when untouched"
+
+    seen["replace_during_run"] = True
+    src.fetch_info("https://youtu.be/x")
+    assert jar.read_text() == "# Netscape HTTP Cookie File\nNEW SESSION\n", (
+        "a file replaced while yt-dlp ran wins over the old session yt-dlp would save"
+    )
+    assert not Path(seen["cookiefile"]).exists()
