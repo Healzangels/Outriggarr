@@ -26,7 +26,7 @@
       <td class="num">
         {% if job.status.value == "downloading" %}<progress value="{{ job.progress_pct }}" max="100"></progress><br>{{ job.progress_pct }}%
         {% elif job.status.value == "importing" %}<progress></progress><br>importing
-        {% elif job.status.value == "done" %}100%
+        {% elif job.status.value == "done" %}<span class="muted">100%</span>
         {% else %}<span class="muted">{{ job.progress_pct }}%</span>{% endif %}
       </td>
       <td class="muted when" title="created {{ job.created_at.strftime('%Y-%m-%d %H:%M') }}Z{% if job.finished_at %} · finished {{ job.finished_at.strftime('%Y-%m-%d %H:%M') }}Z{% endif %}">

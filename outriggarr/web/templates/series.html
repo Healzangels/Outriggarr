@@ -8,7 +8,7 @@
 <p class="notice warn">No enabled Sonarr connection. Add one under <a href="/settings">Settings</a> first.</p>
 {% else %}
 <article class="card">
-  <header>Find a series <span class="muted">· Sonarr: {{ connection.name }}</span></header>
+  <header>Find a series <span class="muted">· searches {{ connection.name }}</span></header>
   <input type="search" name="q" placeholder="Search Sonarr series…" autocomplete="off"
          hx-get="/series/rows" hx-trigger="input changed delay:300ms, search" hx-target="#series-rows">
   <div id="series-rows" hx-get="/series/rows" hx-trigger="load" hx-swap="innerHTML"></div>
@@ -30,7 +30,7 @@
       <td>{% set u = s.sources[0] if s.sources else "" %}<a href="{{ u }}" target="_blank" rel="noopener" class="truncate" title="{{ s.sources | join('\n') }}">{{ u | replace("https://www.youtube.com/", "") | replace("https://youtube.com/", "") }}</a>{% if s.sources | length > 1 %} <span class="muted">+{{ s.sources | length - 1 }} more</span>{% endif %}</td>
       <td><span class="chips"><span class="chip">pins</span>{% for st in s.strategies %}<span class="chip">{{ st }}</span>{% endfor %}</span></td>
       <td>{% if s.last_scan_at %}<span title="{{ s.last_scan_at.strftime('%Y-%m-%d %H:%M') }}Z">{{ s.last_scan_at | ago }}</span>
-        {% if s.last_scan_result %}<span class="two-line">{% if s.last_scan_result.error %}<span class="bad">{{ s.last_scan_result.error | truncate(70) }}</span>{% else %}<span class="chips" title="What the last scan did"><span class="chip">{{ s.last_scan_result.matched }} matched</span><span class="chip {{ 'ok' if s.last_scan_result.created else '' }}" title="Jobs that scan created; they may well have finished since. Open the subscription for its recent jobs, or Activity for the queue.">{{ s.last_scan_result.created }} new job{{ '' if s.last_scan_result.created == 1 else 's' }}</span><span class="chip {{ 'warn' if s.last_scan_result.unmatched else '' }}">{{ s.last_scan_result.unmatched }} unmatched</span></span>{% endif %}</span>{% endif %}
+        {% if s.last_scan_result %}<span class="two-line">{% if s.last_scan_result.error %}<span class="bad">{{ s.last_scan_result.error | truncate(70) }}</span>{% else %}<span class="chips" title="What the last scan did"><span class="chip {{ '' if s.last_scan_result.matched else 'zero' }}">{{ s.last_scan_result.matched }} matched</span><span class="chip {{ 'ok' if s.last_scan_result.created else 'zero' }}" title="Jobs that scan created; they may well have finished since. Open the subscription for its recent jobs, or Activity for the queue.">{{ s.last_scan_result.created }} new job{{ '' if s.last_scan_result.created == 1 else 's' }}</span><span class="chip {{ 'warn' if s.last_scan_result.unmatched else 'zero' }}">{{ s.last_scan_result.unmatched }} unmatched</span></span>{% endif %}</span>{% endif %}
         {% else %}<span class="muted">never</span>{% endif %}</td>
       <td class="actions"><a href="/subscriptions/{{ s.id }}" role="button" class="secondary outline">Open</a></td>
     </tr>

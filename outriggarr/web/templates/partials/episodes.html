@@ -2,7 +2,7 @@
 {% if error %}<p class="notice bad">{{ error }}</p>
 {% elif not seasons %}<p class="muted">Sonarr lists no episodes for this series.</p>
 {% else %}
-<p class="chips">{% for s in seasons %}<span class="chip {{ 'warn' if s.missing else 'ok' }}">S{{ s.season }} {{ s.files }}/{{ s.total }}</span>{% endfor %}</p>
+<p class="chips">{% for s in seasons %}<span class="chip {{ 'warn' if s.missing else '' }}" title="Season {{ s.season }}: {{ s.files }} of {{ s.total }} episodes have a file{% if s.missing %}, {{ s.missing }} missing{% endif %}">S{{ s.season }} {{ s.files }}/{{ s.total }}</span>{% endfor %}</p>
 {% for s in seasons %}
 <details class="plain" {% if loop.first %}open{% endif %}>
   <summary>Season {{ s.season }} <span class="muted">· {{ s.files }}/{{ s.total }} files{% if s.missing %} · <span class="warn">{{ s.missing }} missing</span>{% endif %}</span></summary>
