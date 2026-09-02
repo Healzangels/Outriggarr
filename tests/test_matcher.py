@@ -259,6 +259,8 @@ def test_a_strategy_reruns_after_an_exact_claim_frees_a_candidate() -> None:
         (24, 3600, True),  # an hour-long stream for a 24-minute episode
         (5, 600, False),  # short-form: 10 min for 5 is within the 5-minute slack
         (5, 660, True),  # 11 min for 5: beyond both the slack and the ratio
+        (2, 300, False),  # 2.5x, but only three minutes apart: the slack alone saves it
+        (1, 400, True),  # 6.7x and 5m40s apart: beyond the slack too
     ],
 )
 def test_length_mismatch_rule(runtime, duration, held) -> None:
