@@ -83,6 +83,8 @@ When the upload carries captions in a language listed in the *Subtitle languages
 
 ## Audio language
 
+Age-gated videos need a signed-in cookies file (Settings → Cookies file) and, for anything above 480p, a YouTube proof-of-origin token: the image ships yt-dlp's bgutil provider, and the footer shows *PO tokens: on* when it is available.
+
 YouTube audio tracks carry no language tag, so players such as Plex show the audio as *Unknown*. After the merge, Outriggarr remuxes the file once (stream copy, no re-encode) stamping the `audio_language` setting (default `eng`) on every audio stream. Blank the setting for mixed-language sources.
 
 ## Quality and naming

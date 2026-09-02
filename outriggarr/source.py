@@ -131,9 +131,8 @@ def pot_provider_ready(server_home: Path | None) -> bool:
     age-gated one, for a signed-in session)."""
     if server_home is None:
         return False
-    return (server_home / "build" / "generate_once.js").is_file() and shutil.which(
-        "node"
-    ) is not None
+    runtime = shutil.which("node") or shutil.which("deno")  # the plugin accepts either
+    return (server_home / "build" / "generate_once.js").is_file() and runtime is not None
 
 
 class YtDlpSource:
