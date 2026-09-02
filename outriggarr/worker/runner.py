@@ -303,6 +303,14 @@ async def _download_stage(
         )
     staged = dest / name
     result.path.rename(staged)
+    language = get_setting(session, "audio_language")
+    if language:
+        try:
+            await asyncio.to_thread(deps.source.tag_audio_language, staged, language)
+        except SourceError as exc:
+            # The file is still importable; keep the note on the job rather than fail it.
+            log.warning("job %d: audio language tag failed: %s", job.id, exc)
+            job.error = f"audio language tag failed (file imported untagged): {exc}"
     job.staged_path = str(staged)
     job.video_title = job.video_title or result.title
     job.progress_pct = 100

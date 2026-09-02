@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}Settings · Outriggarr{% endblock %}
+{% block content %}
+<h2>Settings</h2>
+{% if request.query_params.get("saved") %}<p class="notice">Saved.</p>{% endif %}
+
+<h3>Connections</h3>
+{% if conn_error %}<p class="warn">{{ conn_error }}</p>{% endif %}
+{% for c in connections %}
+<details {% if conn_error %}open{% endif %}>
+  <summary>{{ c.name }} <span class="muted">({{ c.kind.value }}) · {{ c.url }}{% if not c.enabled %} · disabled{% endif %}</span></summary>
+  <form method="post" action="/settings/connections/{{ c.id }}">
+    <div class="grid">
+      <label>Kind<select name="kind">{% for k in kinds %}<option value="{{ k }}" {% if k == c.kind.value %}selected{% endif %}>{{ k }}</option>{% endfor %}</select></label>
+      <label>Name<input name="name" value="{{ c.name }}" required></label>
+    </div>
+    <label>URL<input name="url" value="{{ c.url }}" required placeholder="http://sonarr:8989"></label>
+    <label>API key <span class="muted">(blank keeps the stored key)</span><input name="api_key" type="password" autocomplete="off" placeholder="••••••••"></label>
+    <label>Staging path as this *arr sees it<input name="staging_path_remote" value="{{ c.staging_path_remote }}" required></label>
+    <label><input type="checkbox" name="enabled" value="1" {% if c.enabled %}checked{% endif %}> Enabled</label>
+    <button type="submit">Save</button>
+    <button type="button" class="secondary" hx-post="/settings/connections/{{ c.id }}/test" hx-target="#test-{{ c.id }}" hx-swap="innerHTML">Test</button>
+    <span id="test-{{ c.id }}"></span>
+  </form>
+  <form method="post" action="/settings/connections/{{ c.id }}/delete" onsubmit="return confirm('Delete connection {{ c.name }}?')">
+    <button type="submit" class="secondary outline">Delete</button>
+  </form>
+</details>
+{% endfor %}
+<details {% if not connections %}open{% endif %}>
+  <summary>Add a connection</summary>
+  <form method="post" action="/settings/connections">
+    <div class="grid">
+      <label>Kind<select name="kind">{% for k in kinds %}<option value="{{ k }}">{{ k }}</option>{% endfor %}</select></label>
+      <label>Name<input name="name" required placeholder="Sonarr"></label>
+    </div>
+    <label>URL<input name="url" required placeholder="http://sonarr:8989"></label>
+    <label>API key<input name="api_key" type="password" autocomplete="off" required></label>
+    <label>Staging path as this *arr sees it<input name="staging_path_remote" required placeholder="/data/outriggarr"></label>
+    <input type="hidden" name="enabled" value="1">
+    <button type="submit">Add</button>
+  </form>
+</details>
+
+<h3>Downloads</h3>
+{% if settings_error %}<p class="warn">{{ settings_error }}</p>{% endif %}
+<form method="post" action="/settings/downloads">
+  <div class="grid">
+    <label>Scan interval (minutes)<input type="number" name="scan_interval_minutes" min="1" max="1440" value="{{ settings.scan_interval_minutes }}"></label>
+    <label>Concurrent downloads<input type="number" name="concurrency" min="1" max="8" value="{{ settings.concurrency }}"></label>
+    <label>Videos listed per scan<input type="number" name="scan_video_limit" min="1" max="500" value="{{ settings.scan_video_limit }}"></label>
+  </div>
+  <label>Default yt-dlp format<input name="default_format" value="{{ settings.default_format }}" required></label>
+  <div class="grid">
+    <label>Merge container<select name="merge_container">{% for c in containers %}<option value="{{ c }}" {% if c == settings.merge_container %}selected{% endif %}>{{ c }}</option>{% endfor %}</select></label>
+    <label>Cookies file <span class="muted">(path inside the container, e.g. /config/cookies.txt)</span><input name="cookies_path" value="{{ settings.cookies_path }}"></label>
+  </div>
+  <label>Extra yt-dlp options (JSON object, merged last) <span class="muted">e.g. <code>{"sponsorblock_remove": ["sponsor"], "ratelimit": 5000000}</code></span>
+    <textarea name="ytdlp_extra_opts" rows="3">{{ settings.ytdlp_extra_opts }}</textarea></label>
+  <div class="grid">
+    <label>Audio language tag <span class="muted">(ISO 639-2; YouTube audio is untagged and shows as "Unknown" in Plex; blank = leave)</span><input name="audio_language" value="{{ settings.audio_language }}" placeholder="eng"></label>
+    <label>Sonarr tag for subscribed series <span class="muted">(blank = off)</span><input name="sonarr_tag" value="{{ settings.sonarr_tag }}" placeholder="outriggarr"></label>
+  </div>
+  <button type="submit">Save downloads</button>
+</form>
+{% endblock %}

@@ -72,7 +72,7 @@ Job status: `queued → downloading → importing → done | failed | cancelled`
 
 ## Job pipeline
 
-1. **Download**: yt-dlp (library, not subprocess) into `/staging/<job-id>/<parseable name>.<ext>`, video+audio merged by ffmpeg. Progress hook writes `progress_pct` to the job row.
+1. **Download**: yt-dlp (library, not subprocess) into `/staging/<job-id>/<parseable name>.<ext>`, video+audio merged by ffmpeg. Progress hook writes `progress_pct` to the job row. Then one ffmpeg stream-copy remux stamps the `audio_language` setting (default `eng`) on the audio streams — YouTube tracks are untagged and Plex showed them as *Unknown* (found after M4 on the first Hot Ones imports). A failure there is noted on the job but does not stop the import.
 2. **Import** via `ArrClient` (one interface, two implementations):
    - `GET /api/v3/manualimport?folder=<staging_path_remote>/<job-id>&filterExistingFiles=true`
    - Take the returned entry; set `seriesId` + `episodeIds` (Sonarr) or `movieId` (Radarr), `quality`, `languages`.
@@ -120,7 +120,7 @@ Default yt-dlp format: `bestvideo*[height<=1080][vcodec^=avc1]+bestaudio[acodec^
 | Screen | What it does |
 |---|---|
 | **Settings → Connections** | Add/edit Sonarr and Radarr: URL, API key, remote staging path. *Test* button (hits `/api/v3/system/status`, checks the reported `appName` matches the connection kind, and checks the staging path is visible via `/api/v3/filesystem`). `/filesystem` returns an empty listing for a missing directory, identical to an empty one, so the check lists the parent and looks for the staging directory in it. |
-| **Settings → Downloads** | Scan interval, concurrency, default yt-dlp format, container, cookies file, extra yt-dlp options (JSON passthrough — one escape hatch instead of a setting per feature). |
+| **Settings → Downloads** | Scan interval, concurrency, videos per scan, default yt-dlp format, container, cookies file, extra yt-dlp options (JSON passthrough — one escape hatch instead of a setting per feature; merged LAST so it always wins), optional Sonarr tag label. |
 | **Series** | Search box over Sonarr's series (live, cached), with a *subscribed* indicator. Subscribe → form: source URL, format override, strategies, tolerance/offset, regex. Detail view: match preview (a dry-run scan loaded by HTMX), unmatched list with a "set override" picker over the listed videos, *Scan now*, settings, recent jobs. Forms are plain HTML posts (python-multipart). |
 | **Grab** | Paste a video or playlist URL → flat-resolve → table of videos. For each: pick a target (Sonarr series → season/episode picker, or Radarr movie search). Playlist helper: "start at S01E01 and number sequentially" bulk-fill, editable per row. *Queue* creates jobs. Implemented as one Alpine.js component talking to the JSON API (`/api/resolve`, the library lookups, `POST /api/jobs`); a row is queueable only when its S/E resolves to a real Sonarr episode id (or a movie is picked); rows whose target already has a file are flagged. Known gap: YouTube season playlists usually list newest first, so "fill sequentially" needs the per-row correction it was designed for; a "reverse order" toggle is a cheap follow-up for M5. Sonarr's full series listing is ~22 MB / ~5 s on a 5 600-series library, hence the 60 s cache and a slow first search. |
 | **Activity** | One table, views all/active/failed/done, refreshed by HTMX every 3 s; error text verbatim in a collapsible; *Retry* / *Cancel* post to the web routes, which call the same functions as the JSON API and return the refreshed table. |
@@ -189,7 +189,7 @@ Benefit/risk of the GUI vs v0.1's headless daemon: it adds one HTTP port on the 
 
 ## Deployment
 
-- `python:3.12-slim` + ffmpeg. `PUID`/`PGID` so staged files are importable by the *arr user.
+- `python:3.12-slim` + ffmpeg + deno (yt-dlp's JavaScript runtime for YouTube). `PUID`/`PGID`/`UMASK` handled by `entrypoint.sh` (chowns `/config`, drops privileges with `setpriv`) so staged files are importable by the *arr user. `OUTRIGGARR_YTDLP_UPDATE=1` upgrades yt-dlp on start.
 - Volumes: `/config` (DB, cookies), `/staging` (also mounted in Sonarr and Radarr from the same host path). Paths are overridable with `OUTRIGGARR_CONFIG_DIR` / `OUTRIGGARR_STAGING_DIR`; the DB URL with `OUTRIGGARR_DATABASE_URL`.
 - One published port for the GUI (`OUTRIGGARR_PORT`, default 8080 inside the container). Same bridge as Sonarr/Radarr; reaches them by container name.
 - Migrations run in-process at startup; the `alembic` CLI reads the same env vars.
@@ -206,8 +206,8 @@ Python 3.12, FastAPI, SQLAlchemy 2.x + Alembic, `yt-dlp` (library), `httpx`, Jin
 2. ~~Actual host path for staging, and how it is mounted into Sonarr and Radarr.~~ Half answered: both Sonarr and Radarr already share a `/data` mount and see the staging root as `/data/outriggarr` (`staging_path_remote`). The host path behind `/data`, which Outriggarr must mount as `/staging`, is still to be supplied at deployment.
 3. Are the target series already on TVDB with full episode lists? If not, that is the first blocker, not code.
 4. ~~HTMX vs React — accept the recommendation, or is there a preference?~~ HTMX (decided before M3). Pico CSS, htmx and Alpine.js are vendored under `web/static/` (see NOTICE there); no CDN, no build step.
-5. Sonarr tag on subscribed series — wanted in v1 or later?
-6. SponsorBlock segment removal as a default (`extra_opts`), given iSponsorBlockTV already runs on the playback side?
+5. ~~Sonarr tag on subscribed series — wanted in v1 or later?~~ Implemented in M5 as the `sonarr_tag` setting, off by default; applied on subscribe, removed on unsubscribe, never fatal.
+6. SponsorBlock segment removal as a default (`extra_opts`), given iSponsorBlockTV already runs on the playback side? Left off; available through extra options (`{"sponsorblock_remove": ["sponsor"]}`).
 
 ## Build order
 
@@ -220,6 +220,6 @@ Each milestone is independently useful and ends with a confirmation step. The in
 | M2 | Job pipeline, headless | Runner: download → manual import → cleanup, with retry/backoff. Proven by posting one job for a real wanted Sonarr episode via the JSON API and seeing the file land in the library, renamed by Sonarr, with the staging folder empty. Same for one Radarr movie. **Proven 2026-09-01 on the real stack**: Sonarr (Hot Ones S30E09) and Radarr (Big Buck Bunny, 2008) both moved + renamed into their library folders by ManualImport, `hasFile` true, staging folder empty. |
 | M3 | Grab + Activity screens | Paste URL/playlist → resolve → target picker (series/season/episode, movie search) → bulk-fill → queue. Activity with progress, retry, cancel. **Proven 2026-09-01 on the deployed container**: two Hot Ones episodes queued from the Grab page (playlist resolve → series search → season 30 fill → per-row correction → Queue) imported and were renamed by Sonarr; Cancel from Activity stopped a 2 h Kill Tony download at 24 % with the staging folder removed; Retry from Activity re-ran it. |
 | M4 | Subscriptions | `matcher.py` (pure, tested); scheduler; overrides; Series screen with match preview and unmatched list; `Scan now`. **Proven 2026-09-01 on the deployed container**: Hot Ones subscribed from the Series screen with the Season 30 playlist as source; the preview matched the one remaining wanted episode (S30E05) by title; the scheduler's first tick queued it before *Scan now* was even pressed (which then correctly reported "already has a job"); the job imported and Sonarr renamed it into Season 30. |
-| M5 | Operational polish | PUID/PGID; cookies file; yt-dlp extra opts; opt-in yt-dlp self-update; optional Sonarr tag; README. |
+| M5 | Operational polish | PUID/PGID; cookies file; yt-dlp extra opts; opt-in yt-dlp self-update; optional Sonarr tag; README; plus the Settings screen, deno in the image, and the newest-first playlist toggle. Done when the container runs as the *arr user via PUID/PGID (not `--user`), `/health` reports a JS runtime, and a job imports under that identity. |
 
 Answer the open questions above before M1 (real staging mount) and before M3 (HTMX vs React). Nothing in "Later" gets built without a design change first.

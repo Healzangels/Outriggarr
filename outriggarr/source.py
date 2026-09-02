@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -58,6 +59,11 @@ class VideoSource(Protocol):
         """Blocking. One video with its upload date (a per-video fetch)."""
         ...
 
+    def tag_audio_language(self, path: Path, language: str) -> None:
+        """Blocking. Stamp `language` (ISO 639-2) on every audio stream of `path`, in
+        place, without re-encoding. Raises SourceError with ffmpeg's own message."""
+        ...
+
     def download(
         self,
         url: str,
@@ -108,13 +114,25 @@ def channel_videos_url(url: str) -> str:
     return f"{m.group(1)}/videos" if m else url.strip()
 
 
+OptsProvider = Callable[[], dict[str, Any]]
+
+
 class YtDlpSource:
+    """`extra_opts` is called per operation and merged LAST over our options, so the
+    operator's passthrough (cookies, SponsorBlock, rate limits…) always wins."""
+
+    def __init__(self, extra_opts: OptsProvider | None = None) -> None:
+        self._extra = extra_opts or (lambda: {})
+
+    def _opts(self, base: dict[str, Any]) -> dict[str, Any]:
+        return {**base, **self._extra(), "logger": _YtDlpLogger()}
+
     def _extract(self, url: str, opts: dict[str, Any]) -> dict[str, Any]:
         import yt_dlp
         from yt_dlp.utils import DownloadError
 
         try:
-            with yt_dlp.YoutubeDL({**opts, "logger": _YtDlpLogger()}) as ydl:
+            with yt_dlp.YoutubeDL(self._opts(opts)) as ydl:
                 info = ydl.extract_info(url, download=False)
         except DownloadError as exc:
             raise SourceError(str(exc)) from exc
@@ -133,6 +151,19 @@ class YtDlpSource:
         info = self._extract(url, {"skip_download": True, "quiet": True, "noplaylist": True})
         (video,) = videos_from_info(info)
         return video
+
+    def tag_audio_language(self, path: Path, language: str) -> None:
+        tmp = path.with_name(f"{path.stem}.lang{path.suffix}")
+        try:
+            proc = subprocess.run(
+                ffmpeg_language_command(path, tmp, language), capture_output=True, text=True
+            )
+        except OSError as exc:  # ffmpeg missing
+            raise SourceError(f"ffmpeg could not be run: {exc}") from exc
+        if proc.returncode != 0:
+            tmp.unlink(missing_ok=True)
+            raise SourceError(f"ffmpeg exited {proc.returncode}: {proc.stderr.strip()}")
+        tmp.replace(path)
 
     def download(
         self,
@@ -167,10 +198,9 @@ class YtDlpSource:
             "no_warnings": False,
             "noprogress": True,
             "progress_hooks": [hook],
-            "logger": _YtDlpLogger(),
         }
         try:
-            with yt_dlp.YoutubeDL(opts) as ydl:
+            with yt_dlp.YoutubeDL(self._opts(opts)) as ydl:
                 info = ydl.extract_info(url, download=True)
         except DownloadCancelled as exc:
             raise DownloadAborted(str(exc)) from exc
@@ -179,6 +209,26 @@ class YtDlpSource:
         if info is None:
             raise SourceError(f"yt-dlp returned no info for {url}")
         return _result_from_info(info)
+
+
+def ffmpeg_language_command(src: Path, dst: Path, language: str) -> list[str]:
+    """Remux `src` to `dst` copying every stream, tagging all audio streams."""
+    return [
+        "ffmpeg",
+        "-nostdin",
+        "-y",
+        "-loglevel",
+        "error",
+        "-i",
+        str(src),
+        "-map",
+        "0",
+        "-c",
+        "copy",
+        "-metadata:s:a",
+        f"language={language}",
+        str(dst),
+    ]
 
 
 def videos_from_info(info: dict[str, Any]) -> list[VideoRef]:

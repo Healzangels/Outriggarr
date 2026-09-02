@@ -593,3 +593,47 @@ async def test_radarr_movies_parse() -> None:
         await client.series()
     with pytest.raises(ArrError, match="no episodes"):
         await client.episodes(1)
+
+
+# ---- M5: tags ---------------------------------------------------------------------
+
+
+async def test_sonarr_ensure_tag_and_set_series_tag() -> None:
+    posted: list[tuple[str, dict]] = []
+    series = {"id": 5, "title": "Show", "tags": [1], "path": "/data/media/tv/Show", "seasons": []}
+
+    def handler(r: httpx.Request) -> httpx.Response:
+        if r.url.path == "/base/api/v3/tag" and r.method == "GET":
+            return httpx.Response(
+                200, json=[{"id": 1, "label": "anime"}, {"id": 7, "label": "Outriggarr"}]
+            )
+        if r.url.path == "/base/api/v3/tag" and r.method == "POST":
+            posted.append(("tag", json.loads(r.content)))
+            return httpx.Response(201, json={"id": 9, "label": "new"})
+        if r.url.path == "/base/api/v3/series/5" and r.method == "GET":
+            return httpx.Response(200, json=series)
+        if r.url.path == "/base/api/v3/series/5" and r.method == "PUT":
+            posted.append(("series", json.loads(r.content)))
+            return httpx.Response(202, json={})
+        raise AssertionError((r.method, r.url))
+
+    client, _ = make(SonarrClient, handler)
+    assert await client.ensure_tag("outriggarr") == 7  # case-insensitive hit, no POST
+    assert await client.ensure_tag("new") == 9
+    assert posted[-1] == ("tag", {"label": "new"})
+
+    await client.set_series_tag(5, 7, True)
+    body = posted[-1][1]
+    assert body["tags"] == [1, 7] and body["path"] == "/data/media/tv/Show", "full resource kept"
+    n = len(posted)
+    await client.set_series_tag(5, 1, True)  # already present → no PUT
+    assert len(posted) == n
+    await client.set_series_tag(5, 1, False)
+    assert posted[-1][1]["tags"] == []
+    n = len(posted)
+    await client.set_series_tag(5, 42, False)  # absent → no PUT
+    assert len(posted) == n
+
+    radarr, _ = make(RadarrClient, handler)
+    with pytest.raises(ArrError, match="no series"):
+        await radarr.set_series_tag(5, 7, True)

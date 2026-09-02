@@ -40,6 +40,7 @@
       <li><a href="/activity" class="{% if request.url.path.startswith('/activity') %}active{% endif %}">Activity</a></li>
       <li><a href="/series" class="{% if request.url.path.startswith('/series') or request.url.path.startswith('/subscriptions') %}active{% endif %}">Series</a></li>
       <li><a href="/grab" class="{% if request.url.path.startswith('/grab') %}active{% endif %}">Grab</a></li>
+      <li><a href="/settings" class="{% if request.url.path.startswith('/settings') %}active{% endif %}">Settings</a></li>
     </ul>
   </nav>
   <main class="container">

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Any
 
@@ -15,8 +16,10 @@ from outriggarr.arr import ArrFactory
 from outriggarr.arr.base import ArrError
 from outriggarr.db.models import Connection, ConnectionKind, Override, Subscription
 from outriggarr.matcher import OPTIONAL_STRATEGIES, compile_title_regex
+from outriggarr.settings import get_setting
 from outriggarr.worker.scheduler import ScanReport, SubscriptionNotFound, scan_subscription
 
+log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/subscriptions", tags=["subscriptions"])
 
 
@@ -127,6 +130,7 @@ async def create_subscription(
     session.add(sub)
     try:
         session.commit()
+        await _apply_tag(session, arr_factory, conn, body.series_id, present=True)
     except IntegrityError:
         session.rollback()
         existing = session.scalar(
@@ -163,12 +167,32 @@ async def update_subscription(
     return sub
 
 
-def delete_subscription(session: Session, subscription_id: int) -> None:
+async def _apply_tag(
+    session: Session, arr_factory: ArrFactory, conn: Connection, series_id: int, *, present: bool
+) -> None:
+    """Optional: mirror the subscription as a tag on the Sonarr series. Failures are
+    logged, never fatal — the tag is a courtesy, the subscription is the truth."""
+    label = get_setting(session, "sonarr_tag")
+    if not label:
+        return
+    client = arr_factory(conn)
+    try:
+        tag_id = await client.ensure_tag(label)
+        await client.set_series_tag(series_id, tag_id, present)
+    except ArrError as exc:
+        log.warning("sonarr tag %r on series %d not applied: %s", label, series_id, exc)
+
+
+async def delete_subscription(
+    session: Session, arr_factory: ArrFactory, subscription_id: int
+) -> None:
     sub = _get_or_404(session, subscription_id)
+    conn, series_id = sub.connection, sub.series_id
     for job in sub.jobs:
         job.subscription_id = None
     session.delete(sub)
     session.commit()
+    await _apply_tag(session, arr_factory, conn, series_id, present=False)
 
 
 def set_override(
@@ -233,8 +257,8 @@ async def update(
 
 
 @router.delete("/{subscription_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete(subscription_id: int, session: DbSession) -> None:
-    delete_subscription(session, subscription_id)
+async def delete(subscription_id: int, session: DbSession, arr_factory: ArrFactoryDep) -> None:
+    await delete_subscription(session, arr_factory, subscription_id)
 
 
 @router.get("/{subscription_id}/overrides", response_model=list[OverrideOut])

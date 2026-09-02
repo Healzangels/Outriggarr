@@ -215,3 +215,98 @@ def test_subscription_page_preview_scan_and_override(client: TestClient) -> None
     assert client.post(f"/subscriptions/{sub_id}/delete", follow_redirects=False).status_code == 303
     assert client.get(f"/api/subscriptions/{sub_id}").status_code == 404
     assert client.get(f"/subscriptions/{sub_id}", follow_redirects=False).status_code == 302
+
+
+# ---- M5: Settings screen ------------------------------------------------------------
+
+
+def test_settings_page_and_downloads_form(client: TestClient) -> None:
+    r = client.get("/settings")
+    assert (
+        r.status_code == 200 and "Add a connection" in r.text and "Default yt-dlp format" in r.text
+    )
+    assert 'name="audio_language"' in r.text and 'value="eng"' in r.text
+    r = client.post(
+        "/settings/downloads",
+        data={
+            "scan_interval_minutes": "10",
+            "concurrency": "2",
+            "scan_video_limit": "20",
+            "default_format": "best",
+            "merge_container": "mp4",
+            "cookies_path": "",
+            "ytdlp_extra_opts": '{"ratelimit": 1}',
+            "audio_language": "eng",
+            "sonarr_tag": "",
+        },
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    s = client.get("/api/settings").json()
+    assert (s["scan_interval_minutes"], s["merge_container"], s["ytdlp_extra_opts"]) == (
+        "10",
+        "mp4",
+        '{"ratelimit": 1}',
+    )
+    r = client.post("/settings/downloads", data={"concurrency": "99"})
+    assert r.status_code == 400 and "concurrency must be between" in r.text
+    assert client.get("/api/settings").json()["concurrency"] == "2"
+
+
+def test_settings_connections_forms_and_test(client: TestClient) -> None:
+    r = client.post(
+        "/settings/connections",
+        data={
+            "kind": "sonarr",
+            "name": "Sonarr",
+            "url": "http://sonarr-host:1234",
+            "api_key": "k1",
+            "staging_path_remote": "/staging",
+            "enabled": "1",
+        },
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    (conn,) = client.get("/api/connections").json()
+    page = client.get("/settings").text
+    assert "Sonarr" in page and 'hx-post="/settings/connections/1/test"' in page
+    assert "k1" not in page, "API key is never rendered"
+
+    r = client.post("/settings/connections/1/test")
+    assert r.status_code == 200 and "staging visible" in r.text
+    client.app.state.arr_factory.by_url["http://sonarr-host:1234"].visible_paths = set()
+    assert "cannot see staging path" in client.post("/settings/connections/1/test").text
+
+    # blank key keeps the stored one; other fields update
+    r = client.post(
+        "/settings/connections/1",
+        data={
+            "kind": "sonarr",
+            "name": "Renamed",
+            "url": "http://sonarr-host:1234",
+            "api_key": "",
+            "staging_path_remote": "/staging",
+        },
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    (conn,) = client.get("/api/connections").json()
+    assert conn["name"] == "Renamed" and conn["api_key"] == "k1" and conn["enabled"] is False
+    r = client.post(
+        "/settings/connections",
+        data={
+            "kind": "lidarr",
+            "name": "x",
+            "url": "http://x",
+            "api_key": "k",
+            "staging_path_remote": "/s",
+        },
+    )
+    assert r.status_code == 400
+    assert client.post("/settings/connections/1/delete", follow_redirects=False).status_code == 303
+    assert client.get("/api/connections").json() == []
+
+
+def test_grab_has_newest_first_toggle(client: TestClient) -> None:
+    client.post("/api/connections", json=SONARR)
+    assert 'x-model="bulk.reverse"' in client.get("/grab").text

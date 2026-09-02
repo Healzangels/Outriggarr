@@ -93,6 +93,21 @@ class SonarrClient(ArrHttp):
     async def movies(self) -> list[MovieRef]:
         raise ArrError("Sonarr has no movies")
 
+    async def set_series_tag(self, series_id: int, tag_id: int, present: bool) -> None:
+        # Sonarr's PUT wants the whole series resource back; only `tags` changes.
+        series = await self.get(f"series/{series_id}")
+        tags = {int(t) for t in series.get("tags", [])}
+        if present:
+            if tag_id in tags:
+                return
+            tags.add(tag_id)
+        else:
+            if tag_id not in tags:
+                return
+            tags.discard(tag_id)
+        series["tags"] = sorted(tags)
+        await self.put(f"series/{series_id}", series)
+
 
 def _episode(r: dict[str, Any]) -> WantedEpisode:
     series = r.get("series") or {}

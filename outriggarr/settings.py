@@ -7,9 +7,12 @@ Everything the GUI can edit lives in the `setting` table and is read through
 
 from __future__ import annotations
 
+import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy.orm import Session
 
@@ -51,7 +54,67 @@ DEFAULTS: dict[str, str] = {
     "merge_container": "mkv",
     "ytdlp_extra_opts": "{}",
     "cookies_path": "",
+    "sonarr_tag": "",  # label to put on subscribed series in Sonarr; blank = off
+    # ISO 639-2 code stamped on the audio stream(s) of every download; YouTube tracks
+    # carry none, which players show as "Unknown". Blank = leave untagged.
+    "audio_language": "eng",
 }
+
+MERGE_CONTAINERS = ("mkv", "mp4", "webm")
+
+
+def validate_setting(key: str, value: str) -> str:
+    """Normalise and validate one setting value; raises ValueError with a plain message."""
+    if key not in DEFAULTS:
+        raise KeyError(key)
+    value = value.strip()
+    if key in ("scan_interval_minutes", "concurrency", "scan_video_limit"):
+        try:
+            n = int(value)
+        except ValueError:
+            raise ValueError(f"{key} must be an integer") from None
+        lo, hi = {
+            "scan_interval_minutes": (1, 1440),
+            "concurrency": (1, 8),
+            "scan_video_limit": (1, 500),
+        }[key]
+        if not lo <= n <= hi:
+            raise ValueError(f"{key} must be between {lo} and {hi}")
+        return str(n)
+    if key == "default_format":
+        if not value:
+            raise ValueError("default_format must not be empty")
+        return value
+    if key == "merge_container":
+        if value not in MERGE_CONTAINERS:
+            raise ValueError(f"merge_container must be one of {', '.join(MERGE_CONTAINERS)}")
+        return value
+    if key == "ytdlp_extra_opts":
+        try:
+            parsed = json.loads(value or "{}")
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"ytdlp_extra_opts is not valid JSON: {exc.msg}") from None
+        if not isinstance(parsed, dict):
+            raise ValueError("ytdlp_extra_opts must be a JSON object")
+        return json.dumps(parsed)
+    if key == "audio_language":
+        if value and not re.fullmatch(r"[a-z]{3}", value):
+            raise ValueError("audio_language must be a 3-letter ISO 639-2 code (e.g. eng) or blank")
+        return value
+    if key == "sonarr_tag":
+        if value and (len(value) > 50 or " " in value or value != value.lower()):
+            raise ValueError("sonarr_tag must be a short lowercase label without spaces")
+        return value
+    return value  # cookies_path: free text
+
+
+def ytdlp_options(session: Session) -> dict[str, Any]:
+    """The operator's yt-dlp passthrough: extra opts JSON plus the cookies file."""
+    opts: dict[str, Any] = dict(json.loads(get_setting(session, "ytdlp_extra_opts") or "{}"))
+    cookies = get_setting(session, "cookies_path")
+    if cookies:
+        opts["cookiefile"] = cookies
+    return opts
 
 
 def get_setting(session: Session, key: str) -> str:
@@ -62,8 +125,7 @@ def get_setting(session: Session, key: str) -> str:
 
 
 def set_setting(session: Session, key: str, value: str) -> None:
-    if key not in DEFAULTS:
-        raise KeyError(key)
+    value = validate_setting(key, value)
     row = session.get(Setting, key)
     if row is None:
         session.add(Setting(key=key, value=value))

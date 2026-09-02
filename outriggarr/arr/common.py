@@ -33,6 +33,9 @@ class ArrHttp:
 
     # -- transport -------------------------------------------------------------------
 
+    async def put(self, path: str, body: Any) -> Any:
+        return await self._request("PUT", path, json=body)
+
     async def _request(self, method: str, path: str, **kw: Any) -> Any:
         url = f"{self._base}/api/v3/{path.lstrip('/')}"
         try:
@@ -99,6 +102,13 @@ class ArrHttp:
         return any(
             str(d.get("path", "")).rstrip("/") == target for d in data.get("directories", [])
         )
+
+    async def ensure_tag(self, label: str) -> int:
+        for t in await self.get("tag"):
+            if str(t.get("label", "")).lower() == label.lower():
+                return int(t["id"])
+        created = await self.post("tag", {"label": label})
+        return int(created["id"])
 
     async def command(self, command_id: int) -> CommandStatus:
         data = await self.get(f"command/{command_id}")

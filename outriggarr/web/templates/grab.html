@@ -42,7 +42,8 @@
             <label>Start at episode
               <input type="number" min="0" x-model.number="bulk.start">
             </label>
-            <label>&nbsp;<button type="button" @click="fillSequential()">Fill sequentially</button></label>
+            <label>&nbsp;<button type="button" @click="fillSequential()">Fill sequentially</button>
+              <br><input type="checkbox" x-model="bulk.reverse"> <span class="muted">newest first (fill from the bottom)</span></label>
           </div>
         </template>
       </div>
@@ -96,7 +97,7 @@ function grabApp() {
     url: '', resolving: false, error: '', videos: [], rows: [],
     connectionId: connections[0] ?? null, kind: connections.length ? kinds[connections[0]] : null,
     seriesQuery: '', seriesResults: [], series: null, episodes: [], seasons: [],
-    bulk: { season: 1, start: 1 }, queueing: false, result: '',
+    bulk: { season: 1, start: 1, reverse: false }, queueing: false, result: '',
     init() {},
     async api(method, path, body) {
       const r = await fetch(path, { method, headers: { 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
@@ -135,7 +136,8 @@ function grabApp() {
     },
     fillSequential() {
       let n = this.bulk.start;
-      this.rows.forEach(r => { if (r.include) { r.season = this.bulk.season; r.number = n++; } });
+      const rows = this.bulk.reverse ? [...this.rows].reverse() : this.rows;
+      rows.forEach(r => { if (r.include) { r.season = this.bulk.season; r.number = n++; } });
     },
     episodeFor(row) {
       if (row.season == null || row.number == null) return null;

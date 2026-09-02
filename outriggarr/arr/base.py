@@ -194,6 +194,14 @@ class ArrClient(Protocol):
         """All movies (Radarr). Sonarr raises ArrError."""
         ...
 
+    async def ensure_tag(self, label: str) -> int:
+        """Id of the tag with this label, creating it if needed."""
+        ...
+
+    async def set_series_tag(self, series_id: int, tag_id: int, present: bool) -> None:
+        """Add or remove one tag on a series (Sonarr). Radarr raises ArrError."""
+        ...
+
     async def manual_import_candidates(self, folder: str) -> list[ImportCandidate]:
         """GET /manualimport?folder=<folder as the *arr sees it>. Never pass seriesId /
         movieId here: that flips the *arr into listing the SERIES/MOVIE folder instead."""

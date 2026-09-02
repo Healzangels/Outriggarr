@@ -69,3 +69,80 @@ def test_channel_videos_url() -> None:
         channel_videos_url(" https://www.youtube.com/@x?si=abc ")
         == "https://www.youtube.com/@x/videos"
     )
+
+
+def test_ffmpeg_language_command_copies_streams_and_tags_audio(tmp_path) -> None:
+    from pathlib import Path
+
+    from outriggarr.source import ffmpeg_language_command
+
+    cmd = ffmpeg_language_command(Path("/s/in.mkv"), Path("/s/in.lang.mkv"), "eng")
+    assert cmd[0] == "ffmpeg" and cmd[-1] == "/s/in.lang.mkv"
+    assert "-c" in cmd and cmd[cmd.index("-c") + 1] == "copy"
+    assert cmd[cmd.index("-map") + 1] == "0"
+    assert cmd[cmd.index("-metadata:s:a") + 1] == "language=eng"
+    assert "-y" in cmd and "-nostdin" in cmd
+
+
+def test_tag_audio_language_replaces_file_in_place(tmp_path, monkeypatch) -> None:
+    import subprocess
+
+    from outriggarr.source import SourceError, YtDlpSource
+
+    src = tmp_path / "a.mkv"
+    src.write_bytes(b"orig")
+    calls = []
+
+    def fake_run(cmd, capture_output, text):
+        calls.append(cmd)
+        Path(cmd[-1]).write_bytes(b"tagged")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    from pathlib import Path
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    YtDlpSource().tag_audio_language(src, "eng")
+    assert src.read_bytes() == b"tagged"
+    assert not (tmp_path / "a.lang.mkv").exists()
+    assert calls[0][cmd_idx := calls[0].index("-metadata:s:a") + 1] == "language=eng" and cmd_idx
+
+    def failing_run(cmd, capture_output, text):
+        Path(cmd[-1]).write_bytes(b"partial")
+        return subprocess.CompletedProcess(cmd, 1, "", "Invalid data found when processing input")
+
+    monkeypatch.setattr(subprocess, "run", failing_run)
+    with pytest.raises(SourceError, match="Invalid data found"):
+        YtDlpSource().tag_audio_language(src, "eng")
+    assert src.read_bytes() == b"tagged", "original untouched on failure"
+    assert not (tmp_path / "a.lang.mkv").exists(), "temp output removed on failure"
+
+
+def test_ytdlp_source_merges_extra_opts_last(monkeypatch) -> None:
+    import yt_dlp
+
+    from outriggarr.source import YtDlpSource
+
+    seen: list[dict] = []
+
+    class StubYDL:
+        def __init__(self, opts):
+            seen.append(opts)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def extract_info(self, url, download=False):
+            return {"id": "x", "title": "t", "webpage_url": url}
+
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", StubYDL)
+    src = YtDlpSource(extra_opts=lambda: {"cookiefile": "/config/c.txt", "quiet": False})
+    (v,) = src.resolve("https://youtu.be/x")
+    assert v.id == "x"
+    assert seen[0]["cookiefile"] == "/config/c.txt"
+    assert seen[0]["quiet"] is False, "operator options win over ours"
+    assert seen[0]["extract_flat"] == "in_playlist" and "logger" in seen[0]
+    src.list_recent("https://www.youtube.com/@c", 7)
+    assert seen[1]["playlistend"] == 7 and seen[1]["cookiefile"] == "/config/c.txt"

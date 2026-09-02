@@ -155,3 +155,30 @@ def test_preview_scan_and_overrides(client, arr, source) -> None:
     assert client.delete(f"/api/subscriptions/{sub_id}/overrides/b").status_code == 404
     assert client.get("/api/subscriptions/999/preview").status_code == 404
     assert client.post("/api/subscriptions/999/scan").status_code == 404
+
+
+def test_sonarr_tag_applied_on_subscribe_and_removed_on_delete(client, arr, source) -> None:
+    conn_id = seed(client, arr, source)
+    fake = arr.by_url["http://sonarr-host:1234"]
+    # off by default: no tag calls
+    sub_id = client.post("/api/subscriptions", json=body(conn_id)).json()["id"]
+    assert not [c for c in fake.calls if c[0] in ("ensure_tag", "set_series_tag")]
+    client.delete(f"/api/subscriptions/{sub_id}")
+
+    client.put("/api/settings", json={"sonarr_tag": "outriggarr"})
+    sub_id = client.post("/api/subscriptions", json=body(conn_id)).json()["id"]
+    assert fake.series_tags[5] == {100}
+    assert ("set_series_tag", (5, 100, True)) in fake.calls
+    assert client.delete(f"/api/subscriptions/{sub_id}").status_code == 204
+    assert fake.series_tags[5] == set()
+
+    # a tag failure never blocks the subscription
+    async def boom(label):
+        raise ArrError("POST tag -> HTTP 500: nope")
+
+    fake.ensure_tag = boom
+    r = client.post("/api/subscriptions", json=body(conn_id))
+    assert r.status_code == 201
+
+
+from outriggarr.arr.base import ArrError  # noqa: E402

@@ -73,6 +73,8 @@ class FakeArrClient:
     episodes_by_series: dict[int, list[EpisodeRef]] = field(default_factory=dict)
     movies_list: list[MovieRef] = field(default_factory=list)
     library_loads: int = 0
+    tags: dict[str, int] = field(default_factory=dict)
+    series_tags: dict[int, set[int]] = field(default_factory=dict)
     # recording
     calls: list[tuple[str, object]] = field(default_factory=list)
     imports: list[list[ImportFile]] = field(default_factory=list)
@@ -126,6 +128,17 @@ class FakeArrClient:
             raise ArrError("Sonarr has no movies")
         self.library_loads += 1
         return list(self.movies_list)
+
+    async def ensure_tag(self, label: str) -> int:
+        self.calls.append(("ensure_tag", label))
+        return self.tags.setdefault(label, 100 + len(self.tags))
+
+    async def set_series_tag(self, series_id: int, tag_id: int, present: bool) -> None:
+        self.calls.append(("set_series_tag", (series_id, tag_id, present)))
+        if self.kind is not ConnectionKind.sonarr:
+            raise ArrError("Radarr has no series")
+        tags = self.series_tags.setdefault(series_id, set())
+        (tags.add if present else tags.discard)(tag_id)
 
     async def target_info(self, target: Target) -> TargetInfo:
         self.calls.append(("target_info", target))
@@ -208,6 +221,13 @@ class FakeVideoSource:
     listed: list[tuple[str, int]] = field(default_factory=list)
     infos: dict[str, VideoRef] = field(default_factory=dict)  # url → full ref
     fetched: list[str] = field(default_factory=list)
+    tagged: list[tuple[Path, str]] = field(default_factory=list)
+    tag_error: Exception | None = None
+
+    def tag_audio_language(self, path: Path, language: str) -> None:
+        self.tagged.append((path, language))
+        if self.tag_error is not None:
+            raise self.tag_error
 
     def resolve(self, url: str) -> list[VideoRef]:
         self.resolved.append(url)

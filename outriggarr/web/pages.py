@@ -10,9 +10,17 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
 
+from outriggarr.api.connections import (
+    ConnectionIn,
+    create_connection,
+    delete_connection,
+    test_connection,
+    update_connection,
+)
 from outriggarr.api.deps import ArrFactoryDep, DbSession, RunnerDepsDep
 from outriggarr.api.jobs import CANCELLABLE, RETRYABLE, cancel_job, retry_job
 from outriggarr.api.library import library_cache
+from outriggarr.api.settings import update_settings
 from outriggarr.api.subscriptions import (
     OverrideIn,
     SubscriptionIn,
@@ -26,6 +34,7 @@ from outriggarr.api.subscriptions import (
 from outriggarr.arr.base import ArrError
 from outriggarr.db.models import Connection, ConnectionKind, Job, JobStatus, Subscription
 from outriggarr.matcher import OPTIONAL_STRATEGIES
+from outriggarr.settings import DEFAULTS, MERGE_CONTAINERS, all_settings
 
 router = APIRouter(include_in_schema=False)
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
@@ -375,9 +384,128 @@ async def subscription_edit(
 
 
 @router.post("/subscriptions/{subscription_id}/delete")
-def subscription_delete(subscription_id: int, session: DbSession) -> RedirectResponse:
-    delete_subscription(session, subscription_id)
+async def subscription_delete(
+    subscription_id: int, session: DbSession, arr_factory: ArrFactoryDep
+) -> RedirectResponse:
+    await delete_subscription(session, arr_factory, subscription_id)
     return RedirectResponse("/series", status_code=303)
+
+
+# ---- Settings ----------------------------------------------------------------------
+
+
+def _settings_context(session: DbSession, **extra) -> dict:
+    return {
+        "connections": list(session.scalars(select(Connection).order_by(Connection.id))),
+        "settings": all_settings(session),
+        "defaults": DEFAULTS,
+        "containers": MERGE_CONTAINERS,
+        "kinds": [k.value for k in ConnectionKind],
+        "conn_error": None,
+        "settings_error": None,
+        "notice": None,
+        **extra,
+    }
+
+
+@router.get("/settings")
+def settings_page(request: Request, session: DbSession) -> HTMLResponse:
+    return templates.TemplateResponse(request, "settings.html", _settings_context(session))
+
+
+async def _read_form(request: Request) -> dict[str, str]:
+    form = await request.form()
+    return {k: str(v) for k, v in form.items()}
+
+
+@router.post("/settings/downloads")
+async def settings_downloads_post(request: Request, session: DbSession) -> HTMLResponse:
+    data = await _read_form(request)
+    changes = {k: data.get(k, "") for k in DEFAULTS if k in data}
+    try:
+        update_settings(session, changes)
+    except Exception as exc:
+        detail = getattr(exc, "detail", None) or str(exc)
+        return templates.TemplateResponse(
+            request,
+            "settings.html",
+            _settings_context(session, settings_error=detail),
+            status_code=400,
+        )
+    return RedirectResponse("/settings?saved=downloads", status_code=303)
+
+
+def _connection_body(data: dict[str, str]) -> ConnectionIn:
+    return ConnectionIn(
+        kind=data.get("kind", ""),
+        name=data.get("name", ""),
+        url=data.get("url", ""),
+        api_key=data.get("api_key", ""),
+        staging_path_remote=data.get("staging_path_remote", ""),
+        enabled=data.get("enabled") is not None,
+    )
+
+
+@router.post("/settings/connections")
+async def settings_connection_create(request: Request, session: DbSession) -> HTMLResponse:
+    data = await _read_form(request)
+    try:
+        create_connection(_connection_body(data), session)
+    except Exception as exc:
+        detail = getattr(exc, "detail", None) or str(exc)
+        return templates.TemplateResponse(
+            request,
+            "settings.html",
+            _settings_context(session, conn_error=detail),
+            status_code=400,
+        )
+    return RedirectResponse("/settings?saved=connection", status_code=303)
+
+
+@router.post("/settings/connections/{connection_id}")
+async def settings_connection_update(
+    request: Request, connection_id: int, session: DbSession
+) -> HTMLResponse:
+    data = await _read_form(request)
+    try:
+        conn = session.get(Connection, connection_id)
+        if conn is not None and not data.get("api_key"):
+            data["api_key"] = conn.api_key  # blank field keeps the stored key
+        update_connection(connection_id, _connection_body(data), session)
+    except Exception as exc:
+        detail = getattr(exc, "detail", None) or str(exc)
+        return templates.TemplateResponse(
+            request,
+            "settings.html",
+            _settings_context(session, conn_error=detail),
+            status_code=400,
+        )
+    return RedirectResponse("/settings?saved=connection", status_code=303)
+
+
+@router.post("/settings/connections/{connection_id}/delete")
+def settings_connection_delete(request: Request, connection_id: int, session: DbSession):
+    try:
+        delete_connection(connection_id, session)
+    except Exception as exc:
+        detail = getattr(exc, "detail", None) or str(exc)
+        return templates.TemplateResponse(
+            request,
+            "settings.html",
+            _settings_context(session, conn_error=detail),
+            status_code=400,
+        )
+    return RedirectResponse("/settings", status_code=303)
+
+
+@router.post("/settings/connections/{connection_id}/test")
+async def settings_connection_test(
+    request: Request, connection_id: int, session: DbSession, arr_factory: ArrFactoryDep
+) -> HTMLResponse:
+    result = await test_connection(connection_id, session, arr_factory)
+    return templates.TemplateResponse(
+        request, "partials/connection_test.html", {"result": result, "connection_id": connection_id}
+    )
 
 
 @router.get("/grab")

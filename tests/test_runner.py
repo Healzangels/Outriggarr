@@ -540,3 +540,48 @@ async def test_worker_sweeps_cancelled_jobs(deps, session_factory) -> None:
     await asyncio.wait_for(task, 2)
     assert not (deps.staging_dir / str(job_id)).exists()
     assert get_job(deps, job_id).staged_path is None
+
+
+async def test_audio_language_tag_applied_from_setting(deps, session_factory) -> None:
+    conn_id = add_connection(session_factory)
+    job_id = add_job(session_factory, conn_id)
+    fake_for(deps, conn_id)
+    await process_job(deps, job_id)
+    job = get_job(deps, job_id)
+    assert job.status is JobStatus.done and job.error is None
+    assert deps.source.tagged == [(Path(job.staged_path), "eng")]
+
+
+async def test_audio_language_blank_skips_tagging(deps, session_factory) -> None:
+    conn_id = add_connection(session_factory)
+    job_id = add_job(session_factory, conn_id)
+    fake_for(deps, conn_id)
+    with session_factory() as s:
+        set_setting(s, "audio_language", "")
+        s.commit()
+    await process_job(deps, job_id)
+    assert get_job(deps, job_id).status is JobStatus.done
+    assert deps.source.tagged == []
+
+
+async def test_audio_language_failure_is_noted_not_fatal(deps, session_factory) -> None:
+    conn_id = add_connection(session_factory)
+    job_id = add_job(session_factory, conn_id)
+    fake = fake_for(deps, conn_id)
+    deps.source.tag_error = SourceError("ffmpeg exited 1: Invalid data found when processing input")
+    await process_job(deps, job_id)
+    job = get_job(deps, job_id)
+    assert job.status is JobStatus.done
+    assert job.error == (
+        "audio language tag failed (file imported untagged): "
+        "ffmpeg exited 1: Invalid data found when processing input"
+    )
+    assert len(fake.imports) == 1
+
+
+async def test_job_format_overrides_default(deps, session_factory) -> None:
+    conn_id = add_connection(session_factory)
+    job_id = add_job(session_factory, conn_id, format="best[height<=480]")
+    fake_for(deps, conn_id)
+    await process_job(deps, job_id)
+    assert deps.source.calls[0]["fmt"] == "best[height<=480]"
