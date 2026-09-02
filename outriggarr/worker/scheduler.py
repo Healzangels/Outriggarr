@@ -229,7 +229,7 @@ async def _scan(
                 {**_episode_dict(ep), "job_id": job.id, "job_status": job.status.value}
             )
 
-    limit = int(get_setting(session, "scan_video_limit"))
+    limit = sub.video_limit or int(get_setting(session, "scan_video_limit"))
     refs = await asyncio.to_thread(deps.source.list_recent, sub.source_url, limit)
     taken = live_video_ids_for_series(session, conn.id, sub.series_id)
     videos = [_video(v) for v in refs if v.id not in taken]

@@ -12,6 +12,7 @@ from fastapi import APIRouter, Form, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
+from sqlalchemy.orm import Session
 
 from outriggarr import __version__
 from outriggarr.api.connections import (
@@ -40,7 +41,7 @@ from outriggarr.api.subscriptions import (
 from outriggarr.arr.base import ArrError
 from outriggarr.db.models import Connection, ConnectionKind, Job, JobStatus, Subscription
 from outriggarr.matcher import OPTIONAL_STRATEGIES
-from outriggarr.settings import DEFAULTS, MERGE_CONTAINERS, all_settings
+from outriggarr.settings import DEFAULTS, MERGE_CONTAINERS, all_settings, get_setting
 
 router = APIRouter(include_in_schema=False)
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
@@ -276,9 +277,10 @@ async def series_rows(
     )
 
 
-def _subscription_form_context(sub: Subscription | None) -> dict:
+def _subscription_form_context(sub: Subscription | None, session: Session) -> dict:
     return {
         "sub": sub,
+        "scan_video_limit": get_setting(session, "scan_video_limit"),
         "strategies": sorted(OPTIONAL_STRATEGIES, key=("regex", "title", "date").index),
         "chosen": set(sub.strategies) if sub else {"title"},
     }
@@ -308,7 +310,7 @@ async def subscribe_form(
             "series_id": series_id,
             "title": title,
             "error": None,
-            **_subscription_form_context(None),
+            **_subscription_form_context(None, session),
         },
     )
 
@@ -323,8 +325,13 @@ def _form_to_body(
     date_offset_days: int,
     title_regex: str,
     enabled: bool,
+    video_limit: str = "",
 ) -> SubscriptionIn:
+    video_limit = video_limit.strip()
+    if video_limit and not video_limit.isdigit():
+        raise ValueError("Videos to list must be a whole number, or blank for the global setting")
     return SubscriptionIn(
+        video_limit=int(video_limit) if video_limit else None,
         connection_id=connection_id,
         series_id=series_id,
         source_url=source_url,
@@ -349,6 +356,7 @@ async def subscribe_submit(
     date_tolerance_days: Annotated[int, Form()] = 2,
     date_offset_days: Annotated[int, Form()] = 0,
     title_regex: Annotated[str, Form()] = "",
+    video_limit: Annotated[str, Form()] = "",
 ) -> HTMLResponse:
     conn = _sonarr(session)
     if conn is None:
@@ -364,6 +372,7 @@ async def subscribe_submit(
             date_offset_days,
             title_regex,
             True,
+            video_limit,
         )
         sub = await create_subscription(session, arr_factory, body)
     except Exception as exc:  # validation / 409 / 502: show it on the form
@@ -376,7 +385,7 @@ async def subscribe_submit(
                 "series_id": series_id,
                 "title": "",
                 "error": detail,
-                **_subscription_form_context(None),
+                **_subscription_form_context(None, session),
             },
             status_code=400,
         )
@@ -399,7 +408,7 @@ def subscription_page(request: Request, subscription_id: int, session: DbSession
     return templates.TemplateResponse(
         request,
         "subscription.html",
-        {"jobs": jobs, "error": None, **_subscription_form_context(sub)},
+        {"jobs": jobs, "error": None, **_subscription_form_context(sub, session)},
     )
 
 
@@ -560,6 +569,7 @@ async def subscription_edit(
     date_offset_days: Annotated[int, Form()] = 0,
     title_regex: Annotated[str, Form()] = "",
     enabled: Annotated[str | None, Form()] = None,
+    video_limit: Annotated[str, Form()] = "",
 ) -> HTMLResponse:
     sub = session.get(Subscription, subscription_id)
     if sub is None:
@@ -575,6 +585,7 @@ async def subscription_edit(
             date_offset_days,
             title_regex,
             enabled is not None,
+            video_limit,
         )
         await update_subscription(session, arr_factory, subscription_id, body)
     except Exception as exc:
@@ -582,7 +593,7 @@ async def subscription_edit(
         return templates.TemplateResponse(
             request,
             "subscription.html",
-            {"jobs": [], "error": detail, **_subscription_form_context(sub)},
+            {"jobs": [], "error": detail, **_subscription_form_context(sub, session)},
             status_code=400,
         )
     return RedirectResponse(f"/subscriptions/{subscription_id}", status_code=303)

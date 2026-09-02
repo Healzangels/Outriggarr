@@ -589,3 +589,11 @@ async def test_local_air_date_is_preferred_for_date_matching(deps, session_facto
     deps.source.recent = [VideoRef("v", "Anything", "https://y/v", 1, 1, "20260820")]
     report = await scan_subscription(deps, sub_id, dry_run=True)
     assert [(m["code"], m["strategy"]) for m in report.matches] == [("S30E06", "date")]
+
+
+async def test_subscription_video_limit_overrides_the_global_setting(deps, session_factory) -> None:
+    sub_id, conn_id = make_sub(session_factory, video_limit=1200)
+    fake_client(deps, conn_id)
+    report = await scan_subscription(deps, sub_id)
+    assert report.error is None
+    assert deps.source.listed == [("https://www.youtube.com/@show", 1200)]

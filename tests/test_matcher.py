@@ -212,3 +212,34 @@ def test_unavailable_videos_never_title_match() -> None:
     eps = [ep(1, 1, 1, "dQw4w9WgXcQ Two Words")]
     r = match(eps, [vid("dQw4w9WgXcQ", "dQw4w9WgXcQ")], [], MatchConfig(("title",)))
     assert r.matches == () and r.unmatched[0].candidates["title"] == ()
+
+
+def test_unavailable_entries_are_never_candidates_for_any_strategy() -> None:
+    # A private/deleted entry lists as title == id. Digits in its id must not satisfy a
+    # regex, a cached date must not satisfy the date strategy, and it is never worth a
+    # per-video date fetch.
+    eps = [ep(29, 7, 29, "Some Title", date(2026, 1, 8))]
+    dead = vid("VMUQIF29yPc", "VMUQIF29yPc", date(2026, 1, 8))
+    cfg = MatchConfig(("regex", "date"), title_regex=r"(?P<episode>\d+)")
+    r = match(eps, [dead], [], cfg)
+    assert r.matches == ()
+    (u,) = r.unmatched
+    assert u.candidates["regex"] == () and u.candidates["date"] == ()
+    undated = [vid("VMUQIF29yPc", "VMUQIF29yPc")]
+    assert videos_needing_dates(r, undated, MatchConfig(("date",))) == []
+
+
+def test_a_strategy_reruns_after_an_exact_claim_frees_a_candidate() -> None:
+    # Two editions of one title: the LA edition is S07E37's exact match; once it is
+    # taken, S07E36's containment candidates collapse to the NY edition. One round
+    # would leave S07E36 "2 candidates" for ever.
+    eps = [
+        ep(36, 7, 36, "The Alt-Pasta Revolution"),
+        ep(37, 7, 37, "The Alt-Pasta Revolution LA Edition"),
+    ]
+    videos = [
+        vid("ny", "THE ALT-PASTA REVOLUTION... NEW YORK EDITION | FTD"),
+        vid("la", "The Alt-Pasta Revolution LA Edition"),
+    ]
+    r = match(eps, videos, [], MatchConfig(("title",)))
+    assert {(m.episode.id, m.video.id) for m in r.matches} == {(36, "ny"), (37, "la")}

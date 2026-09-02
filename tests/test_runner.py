@@ -1075,7 +1075,9 @@ async def test_shutdown_during_import_poll_keeps_the_file_and_requeues(
     conn_id = add_connection(session_factory)
     job_id = add_job(session_factory, conn_id)
     fake = fake_for(deps, conn_id)
-    fake.command_statuses = ["started"]
+    # finite: a runner that ignored the abort would finish the import and fail the
+    # assertions below, instead of polling for the whole command timeout
+    fake.command_statuses = ["started", "started", "started", "completed"]
     calls = {"n": 0}
 
     def stop_after_first_poll() -> bool:

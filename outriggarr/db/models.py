@@ -112,6 +112,9 @@ class Subscription(Base):
     title: Mapped[str] = mapped_column(String(300), nullable=False, default="")
     source_url: Mapped[str] = mapped_column(String(1000), nullable=False)
     format: Mapped[str | None] = mapped_column(String(500))  # None → global default
+    # Newest videos listed per scan; None → the global scan_video_limit. A channel whose
+    # episodes sit behind hundreds of newer uploads needs a deeper listing than the rest.
+    video_limit: Mapped[int | None] = mapped_column(Integer)
     # Which optional strategies run, in the matcher's fixed order. Override always runs.
     strategies: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     date_tolerance_days: Mapped[int] = mapped_column(Integer, nullable=False, default=2)

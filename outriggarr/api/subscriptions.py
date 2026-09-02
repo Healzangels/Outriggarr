@@ -25,11 +25,15 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/subscriptions", tags=["subscriptions"])
 
 
+MAX_VIDEO_LIMIT = 5000  # a flat listing of ~1200 entries takes ~13 s; this bounds a scan
+
+
 class SubscriptionIn(BaseModel):
     connection_id: int
     series_id: int
     source_url: str = Field(min_length=1, max_length=1000)
     format: str | None = Field(default=None, max_length=500)
+    video_limit: int | None = Field(default=None, ge=1, le=MAX_VIDEO_LIMIT)
     strategies: list[str] = Field(default_factory=lambda: ["title"])
     date_tolerance_days: int = Field(default=2, ge=0, le=60)
     date_offset_days: int = Field(default=0, ge=-60, le=60)

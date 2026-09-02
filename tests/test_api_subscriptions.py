@@ -231,3 +231,14 @@ def test_override_by_url(client, arr, source) -> None:
         ).status_code
         == 404
     )
+
+
+def test_video_limit_round_trip_and_range(client, arr, source) -> None:
+    conn_id = seed(client, arr, source)
+    assert client.post("/api/subscriptions", json=body(conn_id, video_limit=0)).status_code == 422
+    assert (
+        client.post("/api/subscriptions", json=body(conn_id, video_limit=5001)).status_code == 422
+    )
+    r = client.post("/api/subscriptions", json=body(conn_id, video_limit=1200))
+    assert r.status_code < 300 and r.json()["video_limit"] == 1200
+    assert client.get(f"/api/subscriptions/{r.json()['id']}").json()["video_limit"] == 1200

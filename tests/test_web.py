@@ -533,3 +533,36 @@ def test_grab_marks_unavailable_videos(client: TestClient) -> None:
     page = client.get("/grab").text
     assert "unavailable video" in page and "include: v.title !== v.id" in page
     assert 'aria-label="season"' in page and "htmx:responseError" in page
+
+
+def test_subscription_form_video_limit_and_picker_datalist(client: TestClient) -> None:
+    _seed_series(client)
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={"connection_id": 1, "series_id": 5, "source_url": "https://www.youtube.com/@hotones"},
+    ).json()["id"]
+    page = client.get(f"/subscriptions/{sub_id}").text
+    assert 'name="video_limit"' in page and "global setting (50)" in page
+    base = {
+        "source_url": "https://www.youtube.com/@hotones",
+        "strategies": ["title"],
+        "date_tolerance_days": "2",
+        "date_offset_days": "0",
+        "title_regex": "",
+        "format": "",
+    }
+    edit = f"/subscriptions/{sub_id}/edit"
+    r = client.post(edit, data={**base, "video_limit": "1200"}, follow_redirects=False)
+    assert r.status_code == 303
+    assert client.get(f"/api/subscriptions/{sub_id}").json()["video_limit"] == 1200
+    r = client.post(edit, data={**base, "video_limit": "lots"}, follow_redirects=False)
+    assert r.status_code == 400 and "whole number" in r.text
+    assert client.get(f"/api/subscriptions/{sub_id}").json()["video_limit"] == 1200
+    r = client.post(edit, data={**base, "video_limit": ""}, follow_redirects=False)
+    assert r.status_code == 303
+    assert client.get(f"/api/subscriptions/{sub_id}").json()["video_limit"] is None
+    # the picker is one shared datalist of listed videos, posted as a URL pin
+    prev = client.get(f"/subscriptions/{sub_id}/preview").text
+    if "Unmatched" in prev:
+        assert '<datalist id="listed-videos">' in prev and 'list="listed-videos"' in prev
+        assert 'name="video_id"' not in prev
