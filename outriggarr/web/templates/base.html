@@ -19,6 +19,22 @@
       bar.textContent = `Request failed (${e.detail.xhr.status}): ${detail}`;
       bar.setAttribute('role', 'alert');
     });
+    // A notice that answers an action ("Cleared job #5.", "Queued 3 job(s).") fades out
+    // by itself; errors and in-progress notices stay until something replaces them.
+    (function () {
+      const LINGER_MS = 8000;
+      const dismiss = (el) => { el.style.transition = 'opacity .6s'; el.style.opacity = '0'; setTimeout(() => el.remove(), 650); };
+      const arm = (root) => {
+        if (!root || !root.querySelectorAll) return;
+        root.querySelectorAll('.notice[role=status]:not(.bad):not([aria-busy])').forEach((el) => {
+          if (el.dataset.armed) return;
+          el.dataset.armed = '1';
+          setTimeout(() => dismiss(el), LINGER_MS);
+        });
+      };
+      document.addEventListener('htmx:afterSwap', (e) => arm(e.detail && e.detail.target ? e.detail.target : e.target));
+      document.addEventListener('DOMContentLoaded', () => arm(document));
+    })();
   </script>
   <script defer src="{{ static('alpine.min.js') }}"></script>
 </head>
