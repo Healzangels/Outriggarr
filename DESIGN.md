@@ -192,6 +192,8 @@ Benefit/risk of the GUI vs v0.1's headless daemon: it adds one HTTP port on the 
 - Volumes: `/config` (DB, cookies), `/staging` (also mounted in Sonarr and Radarr from the same host path). Paths are overridable with `OUTRIGGARR_CONFIG_DIR` / `OUTRIGGARR_STAGING_DIR`; the DB URL with `OUTRIGGARR_DATABASE_URL`.
 - One published port for the GUI (`OUTRIGGARR_PORT`, default 8080 inside the container). Same bridge as Sonarr/Radarr; reaches them by container name.
 - Migrations run in-process at startup; the `alembic` CLI reads the same env vars.
+- Run as the same uid/gid as Sonarr/Radarr (`--user 99:100` on the current stack) so the *arr can move staged files; `PUID`/`PGID` handling proper is M5. The image needs a JavaScript runtime for yt-dlp's YouTube extractor (it warns "No supported JavaScript runtime", deno expected) — M5.
+- Shipping source from macOS: `COPYFILE_DISABLE=1 tar --no-xattrs ...`, or AppleDouble `._*.py` files land in `migrations/versions/` and Alembic fails at startup with "source code string cannot contain null bytes".
 
 ## Stack
 
@@ -214,7 +216,7 @@ Each milestone is independently useful and ends with a confirmation step. The in
 |---|---|---|
 | M0 | Skeleton | Repo layout per CLAUDE.md; FastAPI boots; DB + first Alembic migration (`connection`, `setting`, `job`); `/health`; Dockerfile builds and runs. |
 | M1 | Connections | `ArrClient` protocol; Sonarr and Radarr `status()`, `quality_definitions()`, `wanted()`; connections CRUD + *Test* over the JSON API against the real instances. |
-| M2 | Job pipeline, headless | Runner: download → manual import → cleanup, with retry/backoff. Proven by posting one job for a real wanted Sonarr episode via the JSON API and seeing the file land in the library, renamed by Sonarr, with the staging folder empty. Same for one Radarr movie. |
+| M2 | Job pipeline, headless | Runner: download → manual import → cleanup, with retry/backoff. Proven by posting one job for a real wanted Sonarr episode via the JSON API and seeing the file land in the library, renamed by Sonarr, with the staging folder empty. Same for one Radarr movie. **Sonarr half proven 2026-09-01** (Hot Ones S30E09: ManualImport move+rename into the series folder, `hasFile` true, staging empty). Radarr half pending a movie to test with. |
 | M3 | Grab + Activity screens | Paste URL/playlist → resolve → target picker (series/season/episode, movie search) → bulk-fill → queue. Activity with progress, retry, cancel. |
 | M4 | Subscriptions | `matcher.py` (pure, tested); scheduler; overrides; Series screen with match preview and unmatched list; `Scan now`. |
 | M5 | Operational polish | PUID/PGID; cookies file; yt-dlp extra opts; opt-in yt-dlp self-update; optional Sonarr tag; README. |
