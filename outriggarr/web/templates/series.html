@@ -7,7 +7,7 @@
 {% else %}
 <p class="muted">Sonarr: {{ connection.name }} · subscribed series get a source attached here; which episodes are wanted still comes from Sonarr.</p>
 <input type="search" name="q" placeholder="Search Sonarr series…" autocomplete="off"
-       hx-get="/series/rows" hx-trigger="keyup changed delay:300ms, search" hx-target="#series-rows">
+       hx-get="/series/rows" hx-trigger="input changed delay:300ms, search" hx-target="#series-rows">
 <div id="series-rows" hx-get="/series/rows" hx-trigger="load" hx-swap="innerHTML"></div>
 {% endif %}
 

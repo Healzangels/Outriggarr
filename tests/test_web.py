@@ -135,6 +135,7 @@ def test_series_search_rows_and_subscribe_flow(client: TestClient) -> None:
     _seed_series(client)
     r = client.get("/series")
     assert r.status_code == 200 and 'hx-get="/series/rows"' in r.text
+    assert 'hx-trigger="input changed delay:300ms, search"' in r.text  # keyup misses paste
     assert "Type to search" in client.get("/series/rows").text
     rows = client.get("/series/rows?q=hot").text
     assert "Hot Ones" in rows and "Hot Zone" in rows and 'href="/series/5/subscribe"' in rows
