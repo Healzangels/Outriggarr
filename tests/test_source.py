@@ -680,7 +680,8 @@ def test_detected_audio_language_reads_the_chosen_audio_track() -> None:
     merged = {
         "language": "en",  # the video's page language is not the audio track's
         "requested_formats": [
-            {"format_id": "137", "vcodec": "avc1", "acodec": "none", "language": None},
+            # the video-only format may carry a language too; the audio track's is the one
+            {"format_id": "137", "vcodec": "avc1", "acodec": "none", "language": "en"},
             {"format_id": "140-1", "vcodec": "none", "acodec": "mp4a", "language": "ja"},
         ],
     }
