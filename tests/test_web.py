@@ -487,3 +487,49 @@ def test_grab_excludes_rows_that_already_have_a_file_after_fill(client: TestClie
     assert "if (e && e.has_file) r.include = false" in page
     assert "if (m.has_file) row.include = false" in page
     assert ".slice(0, 300)" in page
+
+
+# ---- polish pass 2 -----------------------------------------------------------------
+
+
+def test_activity_delete_button_and_cap_note(client: TestClient) -> None:
+    conn_id = client.post("/api/connections", json=SONARR).json()["id"]
+    job_id = _job(client, conn_id)
+    rows = client.get("/activity/rows?view=all").text
+    assert "/delete?view=all" not in rows, "queued jobs cannot be deleted"
+    with client.app.state.session_factory() as s:
+        s.get(Job, job_id).status = JobStatus.done
+        s.commit()
+    rows = client.get("/activity/rows?view=all").text
+    assert f'hx-post="/activity/jobs/{job_id}/delete?view=all"' in rows
+    r = client.post(f"/activity/jobs/{job_id}/delete?view=all")
+    assert r.status_code == 200 and f"Job {job_id} deleted" in r.text
+    assert client.get("/api/jobs").json() == []
+    assert 'role="tab"' in client.get("/activity").text
+
+
+def test_preview_hints_when_the_source_cannot_carry_the_episodes(client: TestClient) -> None:
+    from outriggarr.source import VideoRef
+
+    _seed_series(client)
+    source = client.app.state.source
+    source.recent = [
+        VideoRef("z1", "Totally Unrelated Upload", "https://y/z1", 1, 1, None),
+        VideoRef("dead", "dead", "https://y/dead", None, 2, None),
+    ]
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={"connection_id": 1, "series_id": 5, "source_url": "https://www.youtube.com/@hotones"},
+    ).json()["id"]
+    prev = client.get(f"/subscriptions/{sub_id}/preview").text
+    assert "may not carry these episodes" in prev
+    assert "unavailable video" in prev and '<option value="dead">' not in prev
+    source.recent = [VideoRef("a", "Six Spicy Wings | Hot Ones", "https://y/a", 1, 1, None)]
+    assert "may not carry these episodes" not in client.get(f"/subscriptions/{sub_id}/preview").text
+
+
+def test_grab_marks_unavailable_videos(client: TestClient) -> None:
+    client.post("/api/connections", json=SONARR)
+    page = client.get("/grab").text
+    assert "unavailable video" in page and "include: v.title !== v.id" in page
+    assert 'aria-label="season"' in page and "htmx:responseError" in page

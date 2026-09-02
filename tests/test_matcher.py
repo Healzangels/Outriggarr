@@ -206,3 +206,9 @@ def test_no_air_date_means_no_date_candidates() -> None:
     eps = [ep(1, 1, 1, "x", None)]
     r = match(eps, [vid("a", "y", date(2026, 1, 1))], [], MatchConfig(("date",)))
     assert r.unmatched[0].candidates["date"] == ()
+
+
+def test_unavailable_videos_never_title_match() -> None:
+    eps = [ep(1, 1, 1, "dQw4w9WgXcQ Two Words")]
+    r = match(eps, [vid("dQw4w9WgXcQ", "dQw4w9WgXcQ")], [], MatchConfig(("title",)))
+    assert r.matches == () and r.unmatched[0].candidates["title"] == ()

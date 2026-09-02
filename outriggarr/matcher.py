@@ -159,6 +159,7 @@ def _title_candidates(ep: Episode, videos: list[Video]) -> tuple[str, list[Video
     want = normalise_title(ep.title)
     if not want:
         return ("none", [])
+    videos = [v for v in videos if v.title != v.id]  # dead/private entries carry only their id
     exact = [v for v in videos if normalise_title(v.title) == want]
     if exact:
         return ("exact", exact)

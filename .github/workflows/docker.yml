@@ -24,7 +24,7 @@ jobs:
       - run: uv sync --frozen
       - run: uv run ruff check . && uv run ruff format --check .
       - run: uv run pytest -q
-      - run: OUTRIGGARR_CONFIG_DIR=/tmp/ci-config uv run alembic upgrade head && OUTRIGGARR_CONFIG_DIR=/tmp/ci-config uv run alembic check
+      - run: mkdir -p /tmp/ci-config && OUTRIGGARR_CONFIG_DIR=/tmp/ci-config uv run alembic upgrade head && OUTRIGGARR_CONFIG_DIR=/tmp/ci-config uv run alembic check
 
   image:
     needs: test

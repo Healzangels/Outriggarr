@@ -10,6 +10,16 @@
   <link rel="stylesheet" href="/static/pico.min.css">
   <link rel="stylesheet" href="/static/app.css">
   <script src="/static/htmx.min.js"></script>
+  <script>
+    // Any 4xx/5xx from an HTMX action shows up instead of silently doing nothing.
+    document.addEventListener('htmx:responseError', (e) => {
+      let detail = '';
+      try { detail = JSON.parse(e.detail.xhr.responseText).detail || ''; } catch (_) { detail = e.detail.xhr.statusText; }
+      const bar = document.getElementById('flash') || document.body.insertBefore(Object.assign(document.createElement('p'), { id: 'flash', className: 'notice bad container' }), document.querySelector('main'));
+      bar.textContent = `Request failed (${e.detail.xhr.status}): ${detail}`;
+      bar.setAttribute('role', 'alert');
+    });
+  </script>
   <script defer src="/static/alpine.min.js"></script>
 </head>
 <body>

@@ -57,15 +57,15 @@
         <tbody>
           <template x-for="(row, i) in rows" :key="row.video.id">
             <tr>
-              <td><input type="checkbox" x-model="row.include"></td>
+              <td><input type="checkbox" x-model="row.include" :aria-label="'include ' + row.video.title"></td>
               <td x-text="row.video.playlist_index ?? ''"></td>
-              <td><a :href="row.video.url" target="_blank" rel="noopener" x-text="row.video.title"></a>
+              <td><template x-if="row.video.title === row.video.id"><span class="muted">unavailable video</span></template><a x-show="row.video.title !== row.video.id" :href="row.video.url" target="_blank" rel="noopener" x-text="row.video.title"></a>
                   <br><span class="muted" x-text="fmtDuration(row.video.duration)"></span></td>
               <td>
                 <template x-if="kind === 'sonarr'">
                   <fieldset role="group" style="margin:0">
-                    <input type="number" min="0" placeholder="S" x-model.number="row.season" :disabled="!series" style="max-width:5em">
-                    <input type="number" min="0" placeholder="E" x-model.number="row.number" :disabled="!series" style="max-width:5em">
+                    <input type="number" min="0" placeholder="S" aria-label="season" x-model.number="row.season" :disabled="!series" style="max-width:5em">
+                    <input type="number" min="0" placeholder="E" aria-label="episode" x-model.number="row.number" :disabled="!series" style="max-width:5em">
                   </fieldset>
                 </template>
                 <template x-if="kind === 'radarr'">
@@ -89,7 +89,7 @@
           Queue <span x-text="readyCount()"></span> job(s)
         </button>
         <span class="muted"><span x-text="rows.filter(r => r.include).length"></span> selected · <span x-text="readyCount()"></span> ready</span>
-        <span class="notice" x-show="result" x-html="result" style="margin:0"></span>
+        <span class="notice" role="status" aria-live="polite" x-show="result" x-html="result" style="margin:0"></span>
       </div>
     </div>
   </template>
@@ -115,7 +115,7 @@ function grabApp() {
       this.error = ''; this.result = ''; this.resolving = true;
       try {
         this.videos = await this.api('POST', '/api/resolve', { url: this.url });
-        this.rows = this.videos.map(v => ({ video: v, include: true, season: null, number: null, movieId: null, movieLabel: '', movieQuery: '', movieResults: [] }));
+        this.rows = this.videos.map(v => ({ video: v, include: v.title !== v.id, season: null, number: null, movieId: null, movieLabel: '', movieQuery: '', movieResults: [] }));
         if (!this.videos.length) this.error = 'No videos found at that URL.';
       } catch (e) { this.error = e.message; this.videos = []; this.rows = []; }
       this.resolving = false;

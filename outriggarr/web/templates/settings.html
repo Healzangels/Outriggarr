@@ -26,8 +26,8 @@
     <div class="form-actions">
       <button type="submit">Save</button>
       <button type="button" class="secondary" hx-post="/settings/connections/{{ c.id }}/test" hx-target="#test-{{ c.id }}" hx-swap="innerHTML" hx-indicator="#test-busy-{{ c.id }}">Test</button>
-      <span id="test-busy-{{ c.id }}" class="htmx-indicator muted" aria-busy="true">testing…</span>
-      <span id="test-{{ c.id }}"></span>
+      <span id="test-busy-{{ c.id }}" class="htmx-indicator muted">testing…</span>
+      <span id="test-{{ c.id }}" role="status" aria-live="polite"></span>
     </div>
   </form>
   <form method="post" action="/settings/connections/{{ c.id }}/delete" data-confirm="Delete connection {{ c.name }}?" onsubmit="return confirm(this.dataset.confirm)">
@@ -100,8 +100,8 @@
   <div class="form-actions">
     <button type="submit">Save notifications</button>
     <button type="button" class="secondary" hx-post="/settings/notify/test" hx-target="#notify-test" hx-swap="innerHTML" hx-indicator="#notify-busy">Send test</button>
-    <span id="notify-busy" class="htmx-indicator muted" aria-busy="true">sending…</span>
-    <span id="notify-test"></span>
+    <span id="notify-busy" class="htmx-indicator muted">sending…</span>
+    <span id="notify-test" role="status" aria-live="polite"></span>
   </div>
 </form>
 </article>

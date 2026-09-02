@@ -11,8 +11,12 @@
     {% if report.dry_run %}<span class="chip">preview only</span>{% endif %}
   </span>
 </div>
-{% if notice %}<p class="notice">{{ notice }}</p>{% endif %}
+{% if notice %}<p class="notice" role="status" aria-live="polite">{{ notice }}</p>{% endif %}
 {% if report.error %}<p class="notice bad">Scan failed: {{ report.error }}</p>{% endif %}
+{% set nothing_seen = report.unmatched and not report.matches and not report.skipped_existing and (report.unmatched | map(attribute="candidates") | map("dictsort") | map("map", attribute="1") | map("sum", start=[]) | map("length") | sum == 0) %}
+{% if nothing_seen %}
+<p class="notice warn">None of the {{ report.videos | length }} listed videos resembles any wanted episode. This source may not carry these episodes (a different playlist, an older web series, or a channel that posts under other titles). Try the channel's uploads or another playlist, or pin videos below.</p>
+{% endif %}
 
 {% if report.matches %}
 <h4>Matches</h4>
@@ -56,7 +60,7 @@
           <input type="hidden" name="season" value="{{ u.season }}"><input type="hidden" name="episode" value="{{ u.number }}">
           <select name="video_id" style="max-width:20em; display:inline-block; margin:0 .2em .2em 0">
             <option value="">pick a listed video for {{ u.code }}…</option>
-            {% for v in report.videos %}<option value="{{ v.id }}">{{ v.title | truncate(70) }}</option>{% endfor %}
+            {% for v in report.videos if v.title != v.id %}<option value="{{ v.id }}">{{ v.title | truncate(70) }}</option>{% endfor %}
           </select>
           <input type="url" name="video_url" placeholder="…or paste a video URL" style="max-width:20em; display:inline-block; margin:0 .2em .2em 0">
           <button type="submit">Set</button>
@@ -86,5 +90,5 @@
 {% endif %}
 
 <details><summary>{{ report.videos | length }} video(s) listed from the source</summary>
-<ol>{% for v in report.videos %}<li><a href="{{ v.url }}" target="_blank" rel="noopener">{{ v.title }}</a> <span class="muted mono">{{ v.id }}{% if v.upload_date %} · {{ v.upload_date }}{% endif %}</span></li>{% endfor %}</ol>
+<ol>{% for v in report.videos %}<li>{% if v.title == v.id %}<span class="muted">unavailable video</span>{% else %}<a href="{{ v.url }}" target="_blank" rel="noopener">{{ v.title }}</a>{% endif %} <span class="muted mono">{{ v.id }}{% if v.upload_date %} · {{ v.upload_date }}{% endif %}</span></li>{% endfor %}</ol>
 </details>

@@ -6,7 +6,7 @@
 </div>
 <div class="tabs" role="tablist" aria-label="views">
   {% for f in filters %}
-    <a href="/activity?view={{ f }}" {% if f == view %}aria-current="page"{% endif %}>{{ f }}<span class="count">{{ counts[f] }}</span></a>
+    <a href="/activity?view={{ f }}" role="tab" aria-selected="{{ 'true' if f == view else 'false' }}" {% if f == view %}aria-current="page"{% endif %}>{{ f }}<span class="count">{{ counts[f] }}</span></a>
   {% endfor %}
 </div>
 <div id="jobs" hx-get="/activity/rows?view={{ view }}" hx-trigger="every 3s" hx-swap="innerHTML">

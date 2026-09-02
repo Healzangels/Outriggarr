@@ -1,4 +1,5 @@
-{% if notice %}<p class="notice warn">{{ notice }}</p>{% endif %}
+{% if notice %}<p class="notice warn" role="status" aria-live="polite">{{ notice }}</p>{% endif %}
+{% if total is defined and total > jobs | length %}<p class="muted">Showing the newest {{ jobs | length }} of {{ total }}.</p>{% endif %}
 {% if not jobs %}
 <p class="empty">No jobs{% if view != "all" %} in "{{ view }}"{% endif %}. Queue one from <a href="/grab">Grab</a> or subscribe to a series under <a href="/series">Series</a>.</p>
 {% else %}
@@ -34,6 +35,7 @@
       <td class="actions">
         {% if job.status in RETRYABLE %}<button hx-post="/activity/jobs/{{ job.id }}/retry?view={{ view }}" hx-target="#jobs">Retry</button>{% endif %}
         {% if job.status in CANCELLABLE %}<button class="secondary outline" hx-post="/activity/jobs/{{ job.id }}/cancel?view={{ view }}" hx-target="#jobs" hx-confirm="Cancel job {{ job.id }}?">Cancel</button>{% endif %}
+        {% if job.status in DELETABLE and not (job.status.value == "failed" and job.next_retry_at) %}<button class="secondary outline" hx-post="/activity/jobs/{{ job.id }}/delete?view={{ view }}" hx-target="#jobs" hx-confirm="Delete job {{ job.id }} and its staged files?" title="Remove this job from the history">Delete</button>{% endif %}
       </td>
     </tr>
   {% endfor %}

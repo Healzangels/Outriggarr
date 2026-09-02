@@ -22,7 +22,7 @@ from outriggarr.api.connections import (
     update_connection,
 )
 from outriggarr.api.deps import ArrFactoryDep, DbSession, RunnerDepsDep
-from outriggarr.api.jobs import CANCELLABLE, RETRYABLE, cancel_job, retry_job
+from outriggarr.api.jobs import CANCELLABLE, DELETABLE, RETRYABLE, cancel_job, delete_job, retry_job
 from outriggarr.api.library import library_cache
 from outriggarr.api.settings import update_settings
 from outriggarr.api.subscriptions import (
@@ -47,7 +47,11 @@ TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 templates.env.globals.update(
-    RETRYABLE=RETRYABLE, CANCELLABLE=CANCELLABLE, JobStatus=JobStatus, app_version=__version__
+    RETRYABLE=RETRYABLE,
+    CANCELLABLE=CANCELLABLE,
+    DELETABLE=DELETABLE,
+    JobStatus=JobStatus,
+    app_version=__version__,
 )
 
 
@@ -97,6 +101,7 @@ def _render(request: Request, name: str, context: dict, **kw):
 templates.TemplateResponse = _render  # type: ignore[method-assign]
 
 ACTIVE = (JobStatus.queued, JobStatus.downloading, JobStatus.importing)
+ACTIVITY_LIMIT = 200
 FILTERS = {
     "all": None,
     "active": ACTIVE,
@@ -105,21 +110,35 @@ FILTERS = {
 }
 
 
+def counts_for(session: DbSession) -> dict[str, int]:
+    return {
+        f: (
+            session.scalar(select(func.count()).select_from(Job).where(Job.status.in_(sts)))
+            if sts
+            else session.scalar(select(func.count()).select_from(Job))
+        )
+        or 0
+        for f, sts in FILTERS.items()
+    }
+
+
 def _jobs(session: DbSession, view: str) -> list[Job]:
     q = select(Job).order_by(Job.created_at.desc(), Job.id.desc())
     statuses = FILTERS.get(view)
     if statuses:
         q = q.where(Job.status.in_(statuses))
-    return list(session.scalars(q.limit(200)))
+    return list(session.scalars(q.limit(ACTIVITY_LIMIT)))
 
 
 def _rows(
     request: Request, session: DbSession, view: str, notice: str | None = None
 ) -> HTMLResponse:
+    jobs = _jobs(session, view)
+    total = counts_for(session).get(view, len(jobs))
     return templates.TemplateResponse(
         request,
         "partials/jobs_table.html",
-        {"jobs": _jobs(session, view), "view": view, "notice": notice},
+        {"jobs": jobs, "view": view, "notice": notice, "total": total, "limit": ACTIVITY_LIMIT},
     )
 
 
@@ -138,18 +157,19 @@ def activity(
     request: Request, session: DbSession, view: Annotated[str, Query()] = "all"
 ) -> HTMLResponse:
     view = view if view in FILTERS else "all"
-    counts = {
-        f: (
-            session.scalar(select(func.count()).select_from(Job).where(Job.status.in_(sts)))
-            if sts
-            else session.scalar(select(func.count()).select_from(Job))
-        )
-        for f, sts in FILTERS.items()
-    }
+    counts = counts_for(session)
+    jobs = _jobs(session, view)
     return templates.TemplateResponse(
         request,
         "activity.html",
-        {"jobs": _jobs(session, view), "view": view, "filters": list(FILTERS), "counts": counts},
+        {
+            "jobs": jobs,
+            "view": view,
+            "filters": list(FILTERS),
+            "counts": counts,
+            "total": counts.get(view, len(jobs)),
+            "limit": ACTIVITY_LIMIT,
+        },
     )
 
 
@@ -169,6 +189,21 @@ def activity_retry(
     except HTTPException as exc:
         return _rows(request, session, view, notice=str(exc.detail))
     return _rows(request, session, view)
+
+
+@router.post("/activity/jobs/{job_id}/delete")
+def activity_delete(
+    request: Request,
+    job_id: int,
+    session: DbSession,
+    deps: RunnerDepsDep,
+    view: Annotated[str, Query()] = "all",
+) -> HTMLResponse:
+    try:
+        delete_job(session, job_id, deps.staging_dir)
+    except HTTPException as exc:
+        return _rows(request, session, view, notice=str(exc.detail))
+    return _rows(request, session, view, notice=f"Job {job_id} deleted.")
 
 
 @router.post("/activity/jobs/{job_id}/cancel")
