@@ -24,7 +24,8 @@ from outriggarr.api.settings import router as settings_router
 from outriggarr.api.subscriptions import router as subscriptions_router
 from outriggarr.arr import ArrFactory, make_client
 from outriggarr.db.session import make_engine, make_session_factory, run_migrations
-from outriggarr.settings import Settings, ytdlp_options
+from outriggarr.notify import AppriseNotifier, Notifier
+from outriggarr.settings import Settings, apprise_urls, ytdlp_options
 from outriggarr.source import VideoSource, YtDlpSource
 from outriggarr.web.pages import STATIC_DIR
 from outriggarr.web.pages import router as pages_router
@@ -40,6 +41,7 @@ def create_app(
     start_worker: bool = True,
     arr_factory: ArrFactory | None = None,
     source: VideoSource | None = None,
+    notifier: Notifier | None = None,
 ) -> FastAPI:
     settings = settings or Settings.from_env()
     source_given = source
@@ -68,11 +70,18 @@ def create_app(
         else:
             source = source_given
         app.state.source = source
+        sf_notify = app.state.session_factory
+
+        def _urls() -> list[str]:
+            with sf_notify() as s:
+                return apprise_urls(s)
+
         app.state.runner_deps = RunnerDeps(
             session_factory=app.state.session_factory,
             arr_factory=app.state.arr_factory,
             source=source,
             staging_dir=settings.staging_dir,
+            notifier=notifier or AppriseNotifier(_urls),
         )
 
         stop = asyncio.Event()

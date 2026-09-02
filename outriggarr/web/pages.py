@@ -519,6 +519,9 @@ async def _read_form(request: Request) -> dict[str, str]:
 async def settings_downloads_post(request: Request, session: DbSession) -> HTMLResponse:
     data = await _read_form(request)
     changes = {k: data.get(k, "") for k in DEFAULTS if k in data}
+    if data.get("_notify_form"):  # unchecked boxes are simply absent from the POST
+        for k in ("notify_on_failed", "notify_on_scan_error", "notify_on_done"):
+            changes[k] = "1" if data.get(k) == "1" else "0"
     try:
         update_settings(session, changes)
     except Exception as exc:
@@ -541,6 +544,22 @@ def _connection_body(data: dict[str, str]) -> ConnectionIn:
         staging_path_remote=data.get("staging_path_remote", ""),
         enabled=data.get("enabled") is not None,
     )
+
+
+@router.post("/settings/notify/test")
+async def settings_notify_test(request: Request, session: DbSession, deps: RunnerDepsDep):
+    from outriggarr.api.settings import notify_test
+
+    try:
+        result = await notify_test(session, deps)
+        text = (
+            "✓ sent"
+            if result["sent"]
+            else "✗ no target accepted the message (check the URLs / logs)"
+        )
+    except Exception as exc:
+        text = "✗ " + str(getattr(exc, "detail", None) or exc)
+    return HTMLResponse(f'<span class="{"ok" if text.startswith("✓") else "warn"}">{text}</span>')
 
 
 @router.post("/settings/connections")

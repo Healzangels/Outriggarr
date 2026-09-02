@@ -405,3 +405,30 @@ def test_branding_assets_and_favicon(client: TestClient) -> None:
 def test_settings_page_has_subtitle_fields(client: TestClient) -> None:
     page = client.get("/settings").text
     assert 'name="subtitles_langs"' in page and 'name="subtitles_auto"' in page
+
+
+def test_settings_notifications_form_and_test_button(client: TestClient, notifier) -> None:
+    page = client.get("/settings").text
+    assert 'name="apprise_urls"' in page and 'hx-post="/settings/notify/test"' in page
+    assert "✗ no Apprise URLs" in client.post("/settings/notify/test").text
+    r = client.post(
+        "/settings/downloads",
+        data={
+            "apprise_urls": "json://localhost:1/hook",
+            "_notify_form": "1",
+            "notify_on_done": "1",
+        },
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    s = client.get("/api/settings").json()
+    assert s["apprise_urls"] == "json://localhost:1/hook"
+    assert (s["notify_on_done"], s["notify_on_failed"], s["notify_on_scan_error"]) == (
+        "1",
+        "0",
+        "0",
+    ), "unchecked boxes save as 0"
+    assert "✓ sent" in client.post("/settings/notify/test").text
+    assert notifier.sent[-1][0] == "Outriggarr: test"
+    r = client.post("/settings/downloads", data={"apprise_urls": "nope://x", "_notify_form": "1"})
+    assert r.status_code == 400 and "did not accept" in r.text

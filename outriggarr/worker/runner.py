@@ -37,6 +37,7 @@ from outriggarr.naming import (
     quality_for_height,
     quality_from_filename,
 )
+from outriggarr.notify import Notifier, NullNotifier
 from outriggarr.settings import get_setting
 from outriggarr.source import DownloadAborted, SourceError, VideoSource
 
@@ -58,6 +59,7 @@ class RunnerDeps:
     poll_seconds: float = 5.0
     command_poll_seconds: float = 2.0
     scheduler_tick_seconds: float = 60.0
+    notifier: Notifier = field(default_factory=NullNotifier)
     now: Callable[[], datetime] = utcnow
     sleep: Callable[[float], object] = field(default=asyncio.sleep)
 
@@ -189,6 +191,7 @@ async def _guarded(deps: RunnerDeps, job_id: int, stop_is_set: Callable[[], bool
             if job is not None:
                 _fail(job, f"internal error: {exc!r}", retry=False, now=deps.now())
                 session.commit()
+                await _notify_failed(deps, session, job)
 
 
 async def process_job(
@@ -234,10 +237,13 @@ async def process_job(
         except _Retry as exc:
             _fail(job, str(exc), retry=True, now=deps.now())
             session.commit()
+            if job.next_retry_at is None:  # attempts exhausted
+                await _notify_failed(deps, session, job)
             return
         except _NoRetry as exc:
             _fail(job, str(exc), retry=False, now=deps.now())
             session.commit()
+            await _notify_failed(deps, session, job)
             return
 
         shutil.rmtree(dest, ignore_errors=True)
@@ -246,11 +252,36 @@ async def process_job(
             job.status = JobStatus.done
             job.progress_pct = 100
             log.info("job %d done: %s", job.id, staged.name)
+            session.commit()
+            if get_setting(session, "notify_on_done") == "1":
+                await notify(
+                    deps,
+                    "Outriggarr: imported",
+                    f"{job.target_label or job.target_key}\n{job.video_title}",
+                )
         else:
             job.status = JobStatus.cancelled
             job.error = "target already has a file; nothing imported"
             log.info("job %d: target already satisfied, staged file discarded", job.id)
         session.commit()
+
+
+async def notify(deps: RunnerDeps, title: str, body: str) -> None:
+    """Fire-and-forget; runs the (blocking) notifier in a thread and never raises."""
+    try:
+        await asyncio.to_thread(deps.notifier.send, title, body)
+    except Exception:
+        log.exception("notifier crashed")
+
+
+async def _notify_failed(deps: RunnerDeps, session: Session, job: Job) -> None:
+    if get_setting(session, "notify_on_failed") != "1":
+        return
+    await notify(
+        deps,
+        "Outriggarr: job failed",
+        f"#{job.id} {job.target_label or job.target_key}\n{job.video_title}\n\n{job.error}",
+    )
 
 
 def _cancelled_meanwhile(session: Session, job: Job) -> bool:

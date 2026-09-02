@@ -304,4 +304,24 @@ class FakeVideoSource:
         )
 
 
-__all__ = ["ArrError", "FakeArrClient", "FakeArrFactory", "FakeVideoSource", "SourceError"]
+@dataclass
+class FakeNotifier:
+    sent: list[tuple[str, str]] = field(default_factory=list)
+    result: bool = True
+    error: Exception | None = None
+
+    def send(self, title: str, body: str) -> bool:
+        if self.error is not None:
+            raise self.error
+        self.sent.append((title, body))
+        return self.result
+
+
+__all__ = [
+    "ArrError",
+    "FakeArrClient",
+    "FakeArrFactory",
+    "FakeNotifier",
+    "FakeVideoSource",
+    "SourceError",
+]

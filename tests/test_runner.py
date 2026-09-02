@@ -18,7 +18,7 @@ from outriggarr.worker.runner import (
     process_job,
     run_worker,
 )
-from tests.fakes import FakeArrClient, FakeArrFactory, FakeVideoSource
+from tests.fakes import FakeArrClient, FakeArrFactory, FakeNotifier, FakeVideoSource
 
 pytestmark = pytest.mark.anyio
 
@@ -44,6 +44,7 @@ def deps(session_factory, staging: Path):
         poll_seconds=0.01,
         command_poll_seconds=0.0,
         now=lambda: NOW,
+        notifier=FakeNotifier(),
     )
 
 
@@ -697,3 +698,54 @@ async def test_no_subtitles_when_setting_blank(deps, session_factory) -> None:
         s.commit()
     await process_job(deps, job_id)
     assert deps.source.calls[0]["subtitle_langs"] == ()
+
+
+async def test_notify_on_terminal_failure_only(deps, session_factory) -> None:
+    conn_id = add_connection(session_factory)
+    job_id = add_job(session_factory, conn_id)
+    fake_for(deps, conn_id)
+    deps.source.error = SourceError("ERROR: [youtube] v1: Video unavailable")
+    for _ in range(MAX_ATTEMPTS - 1):
+        await process_job(deps, job_id)
+        assert deps.notifier.sent == [], "retryable failures stay quiet"
+    await process_job(deps, job_id)  # attempts exhausted
+    (title, body) = deps.notifier.sent[0]
+    assert title == "Outriggarr: job failed"
+    assert f"#{job_id}" in body and "Video unavailable" in body
+
+
+async def test_notify_on_rejection_and_not_on_done_by_default(deps, session_factory) -> None:
+    conn_id = add_connection(session_factory)
+    job_id = add_job(session_factory, conn_id)
+    fake = fake_for(deps, conn_id)
+    fake.candidate_rejections = ("Not an upgrade",)
+    await process_job(deps, job_id)
+    assert [t for t, _ in deps.notifier.sent] == ["Outriggarr: job failed"]
+    assert "Not an upgrade" in deps.notifier.sent[0][1]
+
+    deps.notifier.sent.clear()
+    fake.candidate_rejections = ()
+    with session_factory() as s:
+        set_setting(s, "notify_on_failed", "0")
+        s.commit()
+    job2 = add_job(session_factory, conn_id, video_id="v2", episode_id=43)
+    await process_job(deps, job2)
+    assert get_job(deps, job2).status is JobStatus.done
+    assert deps.notifier.sent == [], "done is quiet unless notify_on_done"
+    with session_factory() as s:
+        set_setting(s, "notify_on_done", "1")
+        s.commit()
+    job3 = add_job(session_factory, conn_id, video_id="v3", episode_id=44)
+    await process_job(deps, job3)
+    assert [t for t, _ in deps.notifier.sent] == ["Outriggarr: imported"]
+
+
+async def test_notifier_crash_never_touches_the_job(deps, session_factory) -> None:
+    conn_id = add_connection(session_factory)
+    job_id = add_job(session_factory, conn_id)
+    fake = fake_for(deps, conn_id)
+    fake.candidate_rejections = ("Sample",)
+    deps.notifier.error = RuntimeError("discord is down")
+    await process_job(deps, job_id)
+    job = get_job(deps, job_id)
+    assert job.status is JobStatus.failed and job.error == "import rejected: Sample"

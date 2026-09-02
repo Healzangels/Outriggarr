@@ -23,7 +23,9 @@ Sonarr and Radarr stay the management platforms: they decide what is wanted (mon
 
 **Later (explicitly not v1)**
 
-- Radarr auto-matching; multiple *arr instances; built-in auth; notifications; a public API key for automation; Torznab/download-client emulation so grabs show in Sonarr's queue; quality upgrades (cutoff-unmet).
+- Radarr auto-matching; multiple *arr instances; built-in auth; a public API key for automation; Torznab/download-client emulation so grabs show in Sonarr's queue; quality upgrades (cutoff-unmet).
+
+**Pulled forward (2026-09-02, owner's call): notifications via Apprise** — only for Outriggarr's own events, which nothing else can report: a job failing for good (retries exhausted, import rejected, internal error), a subscription scan error (announced once per new error text, not every interval), and optionally a job import (off by default because the *arr announces it). URLs and toggles live in Settings → Notifications with a *Send test* button; delivery never affects a job.
 
 ## Prior art
 
@@ -122,7 +124,8 @@ Default yt-dlp format: `bestvideo*[height<=1080][vcodec^=avc1]+bestaudio[acodec^
 | Screen | What it does |
 |---|---|
 | **Settings → Connections** | Add/edit Sonarr and Radarr: URL, API key, remote staging path. *Test* button (hits `/api/v3/system/status`, checks the reported `appName` matches the connection kind, and checks the staging path is visible via `/api/v3/filesystem`). `/filesystem` returns an empty listing for a missing directory, identical to an empty one, so the check lists the parent and looks for the staging directory in it. |
-| **Settings → Downloads** | Scan interval, concurrency, videos per scan, default yt-dlp format, container, cookies file, extra yt-dlp options (JSON passthrough — one escape hatch instead of a setting per feature; merged LAST so it always wins), optional Sonarr tag label. |
+| **Settings → Downloads** | Scan interval, concurrency, videos per scan, default yt-dlp format, container, cookies file, extra yt-dlp options (JSON passthrough — one escape hatch instead of a setting per feature; merged LAST so it always wins), subtitle languages, audio language tag, optional Sonarr tag label. |
+| **Settings → Notifications** | Apprise URLs (one per line) and the event toggles; *Send test*. |
 | **Series** | Search box over Sonarr's series (live, cached), with a *subscribed* indicator. Subscribe → form: source URL, format override, strategies, tolerance/offset, regex. Detail view: match preview (a dry-run scan loaded by HTMX), unmatched list with a "set override" picker over the listed videos or a pasted URL, an *Episodes in Sonarr* panel per season (file / missing / unaired / unmonitored, with the covering job), *Scan now* (refreshes the preview, queues nothing) and *Download N matched* (queues the matches), settings, recent jobs. The series search shows Sonarr's file counts. Forms are plain HTML posts (python-multipart). |
 | **Grab** | Paste a video or playlist URL → flat-resolve → table of videos. For each: pick a target (Sonarr series → season/episode picker, or Radarr movie search). Playlist helper: "start at S01E01 and number sequentially" bulk-fill, editable per row. *Queue* creates jobs. Implemented as one Alpine.js component talking to the JSON API (`/api/resolve`, the library lookups, `POST /api/jobs`); a row is queueable only when its S/E resolves to a real Sonarr episode id (or a movie is picked); rows whose target already has a file are flagged. Known gap: YouTube season playlists usually list newest first, so "fill sequentially" needs the per-row correction it was designed for; a "reverse order" toggle is a cheap follow-up for M5. Sonarr's full series listing is ~22 MB / ~5 s on a 5 600-series library, hence the 60 s cache and a slow first search. |
 | **Activity** | One table, views all/active/failed/done, refreshed by HTMX every 3 s; error text verbatim in a collapsible; *Retry* / *Cancel* post to the web routes, which call the same functions as the JSON API and return the refreshed table. |
@@ -154,6 +157,7 @@ GET/PUT              /api/settings
 | `db/` | SQLAlchemy 2.x models + Alembic migrations. SQLite file in `/config`. |
 | `arr/base.py` | `ArrClient` protocol: `status()`, `wanted(series_id=None)`, `quality_definitions()`, `path_visible(path)` (M1); `manual_import_candidates(folder)`, `manual_import(files)`, `command(id)` (M2). Errors raise `ArrError` whose message carries the request and the verbatim response body. |
 | `arr/sonarr.py`, `arr/radarr.py` | Implementations over a shared `arr/common.py` HTTP base. Differences are confined here (`episodeIds` vs `movieId`, `wanted/missing` shapes). Sonarr v4 has no `seriesId` filter on `wanted/missing`, so the client pages the whole list and filters. |
+| `notify.py` | `Notifier` protocol + `AppriseNotifier`; the only module importing apprise. |
 | `source.py` | `VideoSource` protocol: `download(url, dest_dir, fmt, merge_container, progress, should_abort)` (M2); `list_recent(url, limit)`, `resolve(url)` (video or playlist → videos), `fetch_info(video_id)` arrive with M3/M4. `YtDlpSource` implements it; yt-dlp writes `<video id>.<ext>` and the runner renames to the staging name once the height is known. |
 | `matcher.py` | Pure functions over episodes + videos + overrides. No I/O. |
 | `naming.py` | Staging filename + quality mapping. |

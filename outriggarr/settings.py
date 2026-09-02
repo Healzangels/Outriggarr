@@ -63,7 +63,17 @@ DEFAULTS: dict[str, str] = {
     # alongside the video when "Import Extra Files" includes srt.
     "subtitles_langs": "en",
     "subtitles_auto": "0",  # "1" also accepts auto-generated captions (machine transcripts)
+    # Apprise URLs (one per line) and which of Outriggarr's own events to announce.
+    "apprise_urls": "",
+    "notify_on_failed": "1",  # a job failed for good (no more retries) or was rejected
+    "notify_on_scan_error": "1",  # a subscription scan hit an error (announced once per new error)
+    "notify_on_done": "0",  # a job imported (the *arr usually announces this itself)
 }
+
+
+def apprise_urls(session: Session) -> list[str]:
+    return [u.strip() for u in get_setting(session, "apprise_urls").splitlines() if u.strip()]
+
 
 MERGE_CONTAINERS = ("mkv", "mp4", "webm")
 
@@ -102,6 +112,14 @@ def validate_setting(key: str, value: str) -> str:
         if not isinstance(parsed, dict):
             raise ValueError("ytdlp_extra_opts must be a JSON object")
         return json.dumps(parsed)
+    if key == "apprise_urls":
+        from outriggarr.notify import validate_apprise_urls
+
+        return "\n".join(validate_apprise_urls(value))
+    if key in ("notify_on_failed", "notify_on_scan_error", "notify_on_done"):
+        if value not in ("0", "1"):
+            raise ValueError(f"{key} must be 0 or 1")
+        return value
     if key == "subtitles_langs":
         langs = [x.strip() for x in value.split(",") if x.strip()]
         bad = [x for x in langs if not re.fullmatch(r"[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})?", x)]

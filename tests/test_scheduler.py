@@ -334,3 +334,29 @@ async def test_url_override_outside_listing_is_matched(deps, session_factory) ->
     with session_factory() as s:
         job = s.query(Job).filter(Job.video_id == "old1").one()
         assert job.video_url == "https://y/old1" and job.video_title == "An older upload of Nine"
+
+
+async def test_scan_error_notified_once_per_new_error(deps, session_factory) -> None:
+    from tests.fakes import FakeNotifier
+
+    deps.notifier = FakeNotifier()
+    sub_id, conn_id = make_sub(session_factory)
+    fake_client(deps, conn_id)
+    deps.source.recent_error = SourceError("ERROR: channel gone")
+    await scan_subscription(deps, sub_id)
+    await scan_subscription(deps, sub_id)  # same error again → no second message
+    assert [t for t, _ in deps.notifier.sent] == ["Outriggarr: scan error"]
+    assert "channel gone" in deps.notifier.sent[0][1] and "Show" in deps.notifier.sent[0][1]
+    deps.source.recent_error = SourceError("ERROR: something else")
+    await scan_subscription(deps, sub_id)
+    assert len(deps.notifier.sent) == 2
+    deps.source.recent_error = None
+    await scan_subscription(deps, sub_id)  # recovery is quiet
+    await scan_subscription(deps, sub_id, dry_run=True)
+    assert len(deps.notifier.sent) == 2
+    with session_factory() as s:
+        set_setting(s, "notify_on_scan_error", "0")
+        s.commit()
+    deps.source.recent_error = SourceError("ERROR: muted")
+    await scan_subscription(deps, sub_id)
+    assert len(deps.notifier.sent) == 2

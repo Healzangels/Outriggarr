@@ -67,4 +67,19 @@
   </div>
   <button type="submit">Save downloads</button>
 </form>
+
+<h3>Notifications</h3>
+<form method="post" action="/settings/downloads">
+  <label>Apprise URLs <span class="muted">(one per line, e.g. <code>discord://webhook_id/webhook_token</code>, <code>pover://user@token</code>; see the Apprise wiki)</span>
+    <textarea name="apprise_urls" rows="3" placeholder="discord://…">{{ settings.apprise_urls }}</textarea></label>
+  <div class="grid">
+    <label><input type="checkbox" name="notify_on_failed" value="1" {% if settings.notify_on_failed == "1" %}checked{% endif %}> Job failed for good</label>
+    <label><input type="checkbox" name="notify_on_scan_error" value="1" {% if settings.notify_on_scan_error == "1" %}checked{% endif %}> Subscription scan error</label>
+    <label><input type="checkbox" name="notify_on_done" value="1" {% if settings.notify_on_done == "1" %}checked{% endif %}> Job imported <span class="muted">(Sonarr/Radarr usually announce this)</span></label>
+  </div>
+  <input type="hidden" name="_notify_form" value="1">
+  <button type="submit">Save notifications</button>
+  <button type="button" class="secondary" hx-post="/settings/notify/test" hx-target="#notify-test" hx-swap="innerHTML">Send test</button>
+  <span id="notify-test"></span>
+</form>
 {% endblock %}

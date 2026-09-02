@@ -27,7 +27,7 @@ from outriggarr.matcher import (
 from outriggarr.naming import episode_code
 from outriggarr.settings import get_setting
 from outriggarr.source import SourceError, VideoRef
-from outriggarr.worker.runner import RunnerDeps
+from outriggarr.worker.runner import RunnerDeps, notify
 
 log = logging.getLogger(__name__)
 
@@ -134,9 +134,20 @@ async def scan_subscription(
         except (ArrError, SourceError) as exc:
             report.error = str(exc)
         if not dry_run:
+            previous_error = (sub.last_scan_result or {}).get("error")
             sub.last_scan_at = now
             sub.last_scan_result = report.summary()
             session.commit()
+            if (
+                report.error
+                and report.error != previous_error
+                and get_setting(session, "notify_on_scan_error") == "1"
+            ):
+                await notify(
+                    deps,
+                    "Outriggarr: scan error",
+                    f"{sub.title} (subscription {sub.id})\n{report.error}",
+                )
         return report
 
 

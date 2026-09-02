@@ -72,6 +72,10 @@ Strategies run in a fixed order and the first one that yields exactly one candid
 
 Everything the GUI does is a JSON endpoint under `/api` (FastAPI docs at `/docs`): connections (+test), subscriptions (+preview, scan, overrides), jobs (+retry, cancel), resolve, live series/episode/movie lookups, settings. No API key: the reverse proxy is the boundary.
 
+## Notifications
+
+Settings → Notifications takes [Apprise](https://github.com/caronc/apprise) URLs, one per line (Discord, Telegram, Pushover, ntfy, Gotify, email, …). Outriggarr announces its own events only: a job that failed for good, a subscription scan error (once per new error), and optionally a completed import. *Send test* confirms delivery.
+
 ## Subtitles
 
 When the upload carries captions in a language listed in the *Subtitle languages* setting (default `en`), they are downloaded and converted to `.srt` sidecars named after the video, e.g. `Show - S01E02 - Title [WEBDL-1080p].en.srt`. Sonarr/Radarr import them with the episode when *Settings → Media Management → Import Extra Files* is on and includes `srt` (the connection Test warns if not). Auto-generated captions are skipped unless *Auto-generated captions too* is enabled.

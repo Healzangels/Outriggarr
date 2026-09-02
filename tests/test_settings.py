@@ -114,3 +114,57 @@ def test_subtitles_langs_invalid(value: str) -> None:
     with pytest.raises(ValueError):
         validate_setting("subtitles_auto", "yes")
     assert validate_setting("subtitles_auto", "1") == "1"
+
+
+def test_apprise_url_validation() -> None:
+    assert validate_setting("apprise_urls", "") == ""
+    ok = validate_setting(
+        "apprise_urls", "json://localhost:1/hook\n , mailto://user:pass@gmail.com"
+    )
+    assert ok.split("\n") == ["json://localhost:1/hook", "mailto://user:pass@gmail.com"]
+    with pytest.raises(ValueError, match="did not accept"):
+        validate_setting("apprise_urls", "nope://what")
+    with pytest.raises(ValueError):
+        validate_setting("notify_on_done", "maybe")
+
+
+def test_notify_test_endpoint(client: TestClient, notifier) -> None:
+    r = client.post("/api/settings/notify/test")
+    assert r.status_code == 422 and "no Apprise URLs" in r.json()["detail"]
+    client.put("/api/settings", json={"apprise_urls": "json://localhost:1/hook"})
+    r = client.post("/api/settings/notify/test")
+    assert r.status_code == 200 and r.json() == {"sent": True, "targets": 1}
+    assert notifier.sent == [("Outriggarr: test", "Notifications work.")]
+    notifier.result = False
+    assert client.post("/api/settings/notify/test").json()["sent"] is False
+
+
+def test_apprise_notifier_reads_urls_per_send(monkeypatch) -> None:
+    import apprise
+
+    from outriggarr.notify import AppriseNotifier, NullNotifier
+
+    calls: list[tuple[list[str], str]] = []
+
+    class StubApprise:
+        def __init__(self):
+            self.urls = []
+
+        def add(self, u):
+            self.urls.append(u)
+            return True
+
+        def notify(self, title, body):
+            calls.append((list(self.urls), title))
+            return True
+
+    monkeypatch.setattr(apprise, "Apprise", StubApprise)
+    urls = ["json://a/1"]
+    n = AppriseNotifier(lambda: list(urls))
+    assert n.send("t", "b") is True
+    urls.append("json://b/2")
+    assert n.send("t2", "b") is True
+    assert calls == [(["json://a/1"], "t"), (["json://a/1", "json://b/2"], "t2")]
+    urls.clear()
+    assert n.send("t3", "b") is False, "no URLs → nothing sent"
+    assert NullNotifier().send("x", "y") is False
