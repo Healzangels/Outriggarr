@@ -175,7 +175,7 @@ def activity(
 
 
 REVIEW_LIMIT = 500
-RISK_ORDER = ("date", "regex", "contains", "unknown", "exact", "override")
+RISK_ORDER = ("date", "regex", "unknown", "contains", "exact", "override")  # riskiest first
 
 
 def _tier_from_titles(job: Job) -> str:
