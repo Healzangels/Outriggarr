@@ -96,7 +96,7 @@ details.error summary { cursor: pointer; }
 .steps { color: var(--o-muted); font-size: .9em; margin: 0 0 .75rem; }
 
 /* footer */
-footer.container { margin-top: 2.5rem; padding: 1rem 0; border-top: 1px solid var(--o-border); color: var(--o-muted); font-size: .82em; display: flex; flex-wrap: wrap; gap: .5rem 1.25rem; align-items: center; }
+footer.container { margin-top: 2.5rem; padding: 1rem 0; border-top: 1px solid var(--o-border); color: var(--o-muted); font-size: .82em; display: flex; flex-wrap: wrap; justify-content: center; text-align: center; gap: .5rem 1.25rem; align-items: center; }
 
 @media (max-width: 720px) {
   .truncate { max-width: 20ch; }
