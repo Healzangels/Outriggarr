@@ -7,10 +7,6 @@
   · strategies: override{% for st in sub.strategies %}, {{ st }}{% endfor %}
   {% if sub.last_scan_at %} · last scan {{ sub.last_scan_at.strftime("%Y-%m-%d %H:%M") }}Z{% endif %}</p>
 
-<p>
-  <button hx-post="/subscriptions/{{ sub.id }}/scan" hx-target="#preview" hx-indicator="#scan-busy">Scan now</button>
-  <span id="scan-busy" class="htmx-indicator muted">scanning…</span>
-</p>
 <div id="preview" hx-get="/subscriptions/{{ sub.id }}/preview" hx-trigger="load" hx-swap="innerHTML">
   <p class="muted" aria-busy="true">Loading match preview…</p>
 </div>

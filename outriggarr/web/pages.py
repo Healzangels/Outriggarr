@@ -372,9 +372,27 @@ async def subscription_episodes(
 async def subscription_scan(
     request: Request, subscription_id: int, session: DbSession, deps: RunnerDepsDep
 ) -> HTMLResponse:
+    """Scan now = refresh the preview. Nothing is queued; that is the Download button."""
+    report = await run_scan(deps, subscription_id, dry_run=True)
+    notice = None
+    if not report.error:
+        notice = (
+            f"Scan done: {len(report.matches)} matched, {len(report.unmatched)} unmatched, "
+            f"{len(report.skipped_existing)} already have jobs. Nothing queued."
+        )
+    return _preview_response(request, session, report, notice)
+
+
+@router.post("/subscriptions/{subscription_id}/download")
+async def subscription_download(
+    request: Request, subscription_id: int, session: DbSession, deps: RunnerDepsDep
+) -> HTMLResponse:
+    """Download = a real scan: every match becomes a job."""
     report = await run_scan(deps, subscription_id, dry_run=False)
-    n = len(report.created_job_ids)
-    notice = f"Scan done: {n} job(s) queued." if not report.error else None
+    notice = None
+    if not report.error:
+        n = len(report.created_job_ids)
+        notice = f"Queued {n} job(s)." if n else "Nothing to queue: no new matches."
     return _preview_response(request, session, report, notice)
 
 

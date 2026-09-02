@@ -164,6 +164,10 @@ def test_series_search_rows_and_subscribe_flow(client: TestClient) -> None:
     assert r.status_code == 400 and "http://" in r.text
 
 
+def prev_buttons(client: TestClient, sub_id: int) -> str:
+    return client.get(f"/subscriptions/{sub_id}/preview").text
+
+
 def test_subscription_page_preview_scan_and_override(client: TestClient) -> None:
     _seed_series(client)
     sub_id = client.post(
@@ -172,7 +176,8 @@ def test_subscription_page_preview_scan_and_override(client: TestClient) -> None
     ).json()["id"]
     page = client.get(f"/subscriptions/{sub_id}")
     assert page.status_code == 200
-    assert f'hx-get="/subscriptions/{sub_id}/preview"' in page.text and "Scan now" in page.text
+    assert f'hx-get="/subscriptions/{sub_id}/preview"' in page.text
+    assert "Scan now" in prev_buttons(client, sub_id) and "Download" in prev_buttons(client, sub_id)
 
     prev = client.get(f"/subscriptions/{sub_id}/preview").text
     assert "would queue" in prev and "S30E06" in prev
@@ -186,8 +191,14 @@ def test_subscription_page_preview_scan_and_override(client: TestClient) -> None
     assert "<code>b</code>" in r.text and "S30E07" in r.text
 
     scan = client.post(f"/subscriptions/{sub_id}/scan")
-    assert scan.status_code == 200 and "2 job(s) queued" in scan.text
+    assert scan.status_code == 200 and "Nothing queued" in scan.text
+    assert "2 matched" in scan.text and "Download 2 matched" in scan.text
+    assert client.get("/api/jobs").json() == [], "Scan now never queues"
+    dl = client.post(f"/subscriptions/{sub_id}/download")
+    assert dl.status_code == 200 and "Queued 2 job(s)" in dl.text
     assert len(client.get("/api/jobs").json()) == 2
+    again = client.post(f"/subscriptions/{sub_id}/download")
+    assert "Nothing to queue" in again.text and "disabled" in again.text
     assert "already have jobs" in client.get(f"/subscriptions/{sub_id}/preview").text
 
     r = client.post(f"/subscriptions/{sub_id}/overrides/b/delete")

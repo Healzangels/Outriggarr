@@ -1,3 +1,9 @@
+<p>
+  <button class="secondary" hx-post="/subscriptions/{{ sub.id }}/scan" hx-target="#preview" hx-indicator="#scan-busy">Scan now</button>
+  {% set queueable = report.matches | rejectattr("job_id") | rejectattr("skipped") | list | length %}
+  <button hx-post="/subscriptions/{{ sub.id }}/download" hx-target="#preview" hx-indicator="#scan-busy" {% if not queueable %}disabled{% endif %}>Download{% if queueable %} {{ queueable }} matched{% endif %}</button>
+  <span id="scan-busy" class="htmx-indicator muted">working…</span>
+</p>
 {% if notice %}<p class="notice">{{ notice }}</p>{% endif %}
 {% if report.error %}<p class="warn">Scan failed: {{ report.error }}</p>{% endif %}
 <p class="muted">{{ report.videos | length }} video(s) listed from the source ·
