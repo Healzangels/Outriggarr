@@ -11,6 +11,7 @@ from outriggarr.matcher import (
     Override,
     Video,
     compile_title_regex,
+    length_mismatch,
     match,
     normalise_title,
     parse_with_regex,
@@ -48,7 +49,7 @@ def test_override_wins_over_everything() -> None:
     eps = [ep(1, 1, 1, "Exact")]
     videos = [vid("a", "Exact"), vid("b", "Something else")]
     r = match(eps, videos, [Override("b", 1, 1)], MatchConfig(("title",)))
-    assert r.matches == (Match(eps[0], videos[1], "override"),)
+    assert r.matches == (Match(eps[0], videos[1], "override", "override"),)
     assert r.unmatched == ()
 
 
@@ -71,7 +72,7 @@ def test_title_containment_when_no_exact() -> None:
         vid("b", "Sean Evans Reveals the Season 30 Hot Sauce Lineup | Hot Ones"),
     ]
     r = match(eps, videos, [], MatchConfig(("title",)))
-    assert r.matches == (Match(eps[0], videos[0], "title"),)
+    assert r.matches == (Match(eps[0], videos[0], "title", "contains"),)
 
 
 def test_short_titles_never_match_by_containment() -> None:
@@ -168,10 +169,10 @@ def test_date_strategy_tolerance_and_offset() -> None:
         vid("undated", "c", None),
     ]
     cfg = MatchConfig(("date",), date_tolerance_days=1, date_offset_days=0)
-    assert match(eps, videos, [], cfg).matches == (Match(eps[0], videos[1], "date"),)
+    assert match(eps, videos, [], cfg).matches == (Match(eps[0], videos[1], "date", "date"),)
     # offset +4 days moves the window onto neither... tolerance 0 → only exact
     cfg2 = MatchConfig(("date",), date_tolerance_days=0, date_offset_days=-4)
-    assert match(eps, videos, [], cfg2).matches == (Match(eps[0], videos[0], "date"),)
+    assert match(eps, videos, [], cfg2).matches == (Match(eps[0], videos[0], "date", "date"),)
     wide = MatchConfig(("date",), date_tolerance_days=10)
     r = match(eps, videos, [], wide)
     assert r.matches == () and r.unmatched[0].candidates["date"] == ("early", "near")
@@ -243,3 +244,72 @@ def test_a_strategy_reruns_after_an_exact_claim_frees_a_candidate() -> None:
     ]
     r = match(eps, videos, [], MatchConfig(("title",)))
     assert {(m.episode.id, m.video.id) for m in r.matches} == {(36, "ny"), (37, "la")}
+
+
+@pytest.mark.parametrize(
+    ("runtime", "duration", "held"),
+    [
+        (None, 180, False),  # unknown runtime is no evidence
+        (0, 180, False),
+        (24, None, False),  # unknown duration is no evidence
+        (24, 1400, False),  # within the slack
+        (24, 900, False),  # 0.62x: within the ratio
+        (24, 2700, False),  # 1.9x: within the ratio
+        (24, 180, True),  # a 3-minute clip for a 24-minute episode
+        (24, 3600, True),  # an hour-long stream for a 24-minute episode
+        (5, 600, False),  # short-form: 10 min for 5 is within the 5-minute slack
+        (5, 660, True),  # 11 min for 5: beyond both the slack and the ratio
+    ],
+)
+def test_length_mismatch_rule(runtime, duration, held) -> None:
+    reason = length_mismatch(runtime, duration)
+    assert (reason is not None) is held
+    if held:
+        assert "Sonarr says the episode runs" in reason and f"{runtime} min" in reason
+
+
+def test_length_check_holds_non_exact_tiers_only_and_pins_never() -> None:
+    # Containment and date pairings are held when the length contradicts the runtime;
+    # an exact title and a pin are never held (TVDB runtimes are wrong far more often
+    # than a same-titled video is the wrong one).
+    eps = [
+        Episode(1, 1, 1, "Alpha Beta", date(2026, 1, 8), runtime_minutes=24),
+        Episode(2, 1, 2, "Gamma Delta", date(2026, 1, 9), runtime_minutes=24),
+        Episode(3, 1, 3, "Epsilon Zeta", date(2026, 1, 10), runtime_minutes=24),
+        Episode(4, 1, 4, "Eta Theta", date(2026, 1, 11), runtime_minutes=24),
+    ]
+    videos = [
+        Video("a", "Alpha Beta | Show clip", "https://x/a", duration=120),  # contains, 2 min
+        Video("b", "Gamma Delta", "https://x/b", duration=120),  # exact, 2 min
+        Video("c", "Something else", "https://x/c", date(2026, 1, 10), duration=120),  # date, 2 min
+        Video("d", "Whatever", "https://x/d", duration=120),  # pinned, 2 min
+    ]
+    cfg = MatchConfig(("title", "date"), date_tolerance_days=0)
+    r = match(eps, videos, [Override("d", 1, 4)], cfg)
+    assert {(m.episode.id, m.video.id, m.tier) for m in r.matches} == {
+        (2, "b", "exact"),
+        (4, "d", "override"),
+    }
+    assert {(h.episode.id, h.video.id, h.tier) for h in r.held} == {
+        (1, "a", "contains"),
+        (3, "c", "date"),
+    }
+    assert all(h.reason == "video runs 2m00s, Sonarr says the episode runs 24 min" for h in r.held)
+    assert r.unmatched == (), "a held episode is neither matched nor unmatched"
+    assert r.matched_video_ids == frozenset({"a", "b", "c", "d"}), "a held video is off the table"
+    # a later strategy may still find the right video for a held episode
+    videos.append(Video("e", "The real thing", "https://x/e", date(2026, 1, 8), duration=1500))
+    r2 = match(eps, videos, [Override("d", 1, 4)], cfg)
+    assert {(m.episode.id, m.video.id, m.tier) for m in r2.matches} >= {(1, "e", "date")}
+    assert {h.episode.id for h in r2.held} == {3}
+
+
+def test_held_episodes_still_get_date_fetches() -> None:
+    eps = [Episode(1, 1, 1, "Alpha Beta", date(2026, 1, 8), runtime_minutes=24)]
+    videos = [
+        Video("a", "Alpha Beta | clip", "https://x/a", duration=120),
+        Video("u", "Undated", "https://x/u"),
+    ]
+    r = match(eps, videos, [], MatchConfig(("title", "date")))
+    assert r.held and not r.unmatched
+    assert [v.id for v in videos_needing_dates(r, videos, MatchConfig(("title", "date")))] == ["u"]

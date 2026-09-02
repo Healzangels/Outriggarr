@@ -195,6 +195,11 @@ class Job(Base):
         ForeignKey("subscription.id", ondelete="SET NULL")
     )
     format: Mapped[str | None] = mapped_column(String(500))  # None → global default
+    # How the scheduler paired video and episode (override/regex/exact/contains/date;
+    # NULL for a manual grab) and the length evidence it had, for the Matches review page.
+    matched_by: Mapped[str | None] = mapped_column(String(20))
+    video_duration: Mapped[int | None] = mapped_column(Integer)  # seconds, from the listing
+    target_runtime: Mapped[int | None] = mapped_column(Integer)  # minutes, from the *arr
     status: Mapped[JobStatus] = mapped_column(
         Enum(JobStatus), nullable=False, default=JobStatus.queued, index=True
     )

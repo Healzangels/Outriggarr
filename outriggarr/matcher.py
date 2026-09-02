@@ -29,6 +29,7 @@ class Episode:
     number: int
     title: str
     air_date: date | None
+    runtime_minutes: int | None = None  # the *arr's runtime (TVDB); 0/None = unknown
 
 
 @dataclass(frozen=True)
@@ -37,6 +38,7 @@ class Video:
     title: str
     url: str
     upload_date: date | None = None
+    duration: int | None = None  # seconds, from the flat listing when it carries one
 
 
 @dataclass(frozen=True)
@@ -59,6 +61,19 @@ class Match:
     episode: Episode
     video: Video
     strategy: str
+    tier: str = ""  # "exact"/"contains" for the title strategy, else the strategy name
+
+
+@dataclass(frozen=True)
+class Held:
+    """A pairing a strategy made but the length check contradicts: reported, never
+    queued. The user can pin the video if it is right (pins are never held)."""
+
+    episode: Episode
+    video: Video
+    strategy: str
+    tier: str
+    reason: str
 
 
 @dataclass(frozen=True)
@@ -72,10 +87,40 @@ class Unmatched:
 class MatchResult:
     matches: tuple[Match, ...]
     unmatched: tuple[Unmatched, ...]
+    held: tuple[Held, ...] = ()
 
     @property
     def matched_video_ids(self) -> frozenset[str]:
-        return frozenset(m.video.id for m in self.matches)
+        return frozenset(m.video.id for m in self.matches) | frozenset(
+            h.video.id for h in self.held
+        )
+
+
+LENGTH_SLACK_SECONDS = 300  # a difference under five minutes is never evidence
+LENGTH_RATIO = 2.0  # beyond half/double the runtime the video is probably something else
+
+
+def length_mismatch(runtime_minutes: int | None, duration_seconds: int | None) -> str | None:
+    """A reason when a video's length contradicts the episode's runtime; None when they
+    agree or either is unknown (an unknown runtime is no evidence, not a veto).
+    Calibrated on 282 real matches: every correct one sat within 0.39–2.31x the TVDB
+    runtime, and the outliers were exact-title matches whose flat TVDB runtime was the
+    wrong number, not the wrong video."""
+    if not runtime_minutes or not duration_seconds:
+        return None
+    runtime = runtime_minutes * 60
+    if abs(duration_seconds - runtime) <= LENGTH_SLACK_SECONDS:
+        return None
+    if runtime / LENGTH_RATIO <= duration_seconds <= runtime * LENGTH_RATIO:
+        return None
+    return (
+        f"video runs {mmss(duration_seconds)}, Sonarr says the episode runs {runtime_minutes} min"
+    )
+
+
+def mmss(seconds: int) -> str:
+    m, s = divmod(int(seconds), 60)
+    return f"{m}m{s:02d}s"
 
 
 _PUNCT = re.compile(r"[^\w\s]+", re.UNICODE)
@@ -195,6 +240,7 @@ def match(
     by_video = {o.video_id: o for o in overrides}
     pool: list[Video] = [v for v in videos if not is_unavailable(v)]
     matched: dict[int, Match] = {}
+    held: list[Held] = []
     seen: dict[int, dict[str, tuple[str, ...]]] = {ep.id: {} for ep in episodes}
 
     for strategy in enabled:
@@ -202,7 +248,7 @@ def match(
             # A pinned video is exactly one episode's; it is never a candidate for another.
             eligible = pool if strategy == "override" else [v for v in pool if v.id not in by_video]
             claims: dict[str, list[tuple[Episode, str]]] = {}  # video id → (episode, tier)
-            before = len(matched)
+            before = (len(matched), len(pool))
             for ep in episodes:
                 if ep.id in matched:
                     continue
@@ -227,21 +273,40 @@ def match(
                 if winner is None:
                     continue
                 video = next(v for v in pool if v.id == video_id)
-                matched[winner.id] = Match(winner, video, strategy)
                 pool.remove(video)
-            if len(matched) == before:
+                tier = next(t for e, t in claimants if e is winner)
+                # Pins are the user's word and an exact title vouches for itself (a wrong
+                # runtime on TVDB is far commoner than a same-titled wrong video); the
+                # other tiers are held when the video's length contradicts the runtime.
+                reason = (
+                    None
+                    if strategy == "override" or tier == "exact"
+                    else length_mismatch(winner.runtime_minutes, video.duration)
+                )
+                if reason:
+                    held.append(Held(winner, video, strategy, tier, reason))
+                    continue  # the episode stays open for the later strategies
+                matched[winner.id] = Match(winner, video, strategy, tier)
+            if (len(matched), len(pool)) == before:
                 break
 
+    held_out = tuple(h for h in held if h.episode.id not in matched)  # a later match wins
+    held_ids = {h.episode.id for h in held_out}
     return MatchResult(
         matches=tuple(matched[ep.id] for ep in episodes if ep.id in matched),
-        unmatched=tuple(Unmatched(ep, seen[ep.id]) for ep in episodes if ep.id not in matched),
+        unmatched=tuple(
+            Unmatched(ep, seen[ep.id])
+            for ep in episodes
+            if ep.id not in matched and ep.id not in held_ids
+        ),
+        held=held_out,
     )
 
 
 def videos_needing_dates(result: MatchResult, videos: list[Video], cfg: MatchConfig) -> list[Video]:
     """Videos worth a per-video fetch: only when the date strategy is on, something is
     still unmatched, and the video is unassigned and undated."""
-    if "date" not in cfg.strategies or not result.unmatched:
+    if "date" not in cfg.strategies or not (result.unmatched or result.held):
         return []
     used = result.matched_video_ids
     return [

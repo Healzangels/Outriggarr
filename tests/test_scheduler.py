@@ -597,3 +597,35 @@ async def test_subscription_video_limit_overrides_the_global_setting(deps, sessi
     report = await scan_subscription(deps, sub_id)
     assert report.error is None
     assert deps.source.listed == [("https://www.youtube.com/@show", 1200)]
+
+
+async def test_length_mismatch_is_held_not_queued_and_jobs_carry_the_evidence(
+    deps, session_factory
+) -> None:
+    from outriggarr.db.models import Job
+
+    sub_id, conn_id = make_sub(session_factory)
+    client = fake_client(deps, conn_id)
+    # S30E07 runs 30 min on TVDB; its containment candidate is a 100-second video
+    client.episodes_by_series[5] = [
+        EpisodeRef(11, 30, 6, "Six Spicy Wings", False, True, NOW - timedelta(days=10)),
+        EpisodeRef(
+            12, 30, 7, "Seven Spicy Wings", False, True, NOW - timedelta(days=3), runtime=30
+        ),
+    ]
+    report = await scan_subscription(deps, sub_id)
+    assert report.error is None
+    assert [(h["code"], h["video_id"], h["tier"]) for h in report.held] == [
+        ("S30E07", "v7", "contains")
+    ]
+    assert report.held[0]["reason"] == "video runs 1m40s, Sonarr says the episode runs 30 min"
+    assert [m["code"] for m in report.matches] == ["S30E06"] and not report.unmatched
+    assert report.summary()["held"] == 1 and report.summary()["wanted"] == 2
+    with session_factory() as s:
+        jobs = s.query(Job).all()
+        assert [j.target_label[-15:] for j in jobs] == ["Six Spicy Wings"]
+        assert (jobs[0].matched_by, jobs[0].video_duration, jobs[0].target_runtime) == (
+            "contains",
+            100,
+            None,
+        )

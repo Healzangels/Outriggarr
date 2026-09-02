@@ -11,7 +11,7 @@ from fastapi import APIRouter, Form, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from outriggarr import __version__
 from outriggarr.api.connections import (
@@ -40,7 +40,7 @@ from outriggarr.api.subscriptions import (
 )
 from outriggarr.arr.base import ArrError
 from outriggarr.db.models import Connection, ConnectionKind, Job, JobStatus, Subscription
-from outriggarr.matcher import OPTIONAL_STRATEGIES
+from outriggarr.matcher import OPTIONAL_STRATEGIES, length_mismatch, mmss, normalise_title
 from outriggarr.settings import DEFAULTS, MERGE_CONTAINERS, all_settings, get_setting
 
 router = APIRouter(include_in_schema=False)
@@ -171,6 +171,60 @@ def activity(
             "total": counts.get(view, len(jobs)),
             "limit": ACTIVITY_LIMIT,
         },
+    )
+
+
+REVIEW_LIMIT = 500
+RISK_ORDER = ("date", "regex", "contains", "unknown", "exact", "override")
+
+
+def _tier_from_titles(job: Job) -> str:
+    """Jobs from before matched_by was recorded: read the tier off the titles."""
+    label = job.target_label or ""
+    want = normalise_title(label.split(" - ", 1)[1] if " - " in label else "")
+    have = normalise_title(job.video_title or "")
+    if want and want == have:
+        return "exact"
+    if want and f" {want} " in f" {have} ":
+        return "contains"
+    return "unknown"
+
+
+def review_entry(job: Job) -> dict:
+    tier = job.matched_by or _tier_from_titles(job)
+    reason = length_mismatch(job.target_runtime, job.video_duration)
+    return {
+        "job": job,
+        "tier": tier,
+        "reason": reason,
+        "video_length": mmss(job.video_duration) if job.video_duration else None,
+        "needs_look": tier not in ("exact", "override") or reason is not None,
+    }
+
+
+@router.get("/matches")
+def matches_page(
+    request: Request, session: DbSession, view: Annotated[str, Query()] = "review"
+) -> HTMLResponse:
+    view = view if view in ("review", "all") else "review"
+    jobs = session.scalars(
+        select(Job)
+        .where(Job.subscription_id.is_not(None))
+        .options(selectinload(Job.subscription))
+        .order_by(Job.created_at.desc(), Job.id.desc())
+        .limit(REVIEW_LIMIT)
+    ).all()
+    entries = [review_entry(j) for j in jobs]
+    counts = {"review": sum(1 for e in entries if e["needs_look"]), "all": len(entries)}
+    if view == "review":
+        entries = [e for e in entries if e["needs_look"]]
+    entries.sort(
+        key=lambda e: (not e["reason"], RISK_ORDER.index(e["tier"]))
+    )  # stable: newest within
+    return templates.TemplateResponse(
+        request,
+        "matches.html",
+        {"entries": entries, "view": view, "counts": counts, "total": counts[view]},
     )
 
 

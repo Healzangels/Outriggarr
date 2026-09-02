@@ -43,6 +43,7 @@ class ScanReport:
     videos: list[dict] = field(default_factory=list)
     matches: list[dict] = field(default_factory=list)
     unmatched: list[dict] = field(default_factory=list)
+    held: list[dict] = field(default_factory=list)  # paired, but the length check objects
     skipped_existing: list[dict] = field(default_factory=list)
     created_job_ids: list[int] = field(default_factory=list)
     error: str | None = None
@@ -51,10 +52,14 @@ class ScanReport:
         return {
             "at": self.scanned_at.isoformat(),
             "videos": len(self.videos),
-            "wanted": len(self.matches) + len(self.unmatched) + len(self.skipped_existing),
+            "wanted": len(self.matches)
+            + len(self.unmatched)
+            + len(self.held)
+            + len(self.skipped_existing),
             "matched": len(self.matches),
             "created": len(self.created_job_ids),
             "unmatched": len(self.unmatched),
+            "held": len(self.held),
             "skipped_existing": len(self.skipped_existing),
             "error": self.error,
         }
@@ -76,6 +81,7 @@ def _episode(e: EpisodeRef) -> Episode:
         number=e.episode_number,
         title=e.title,
         air_date=e.air_date or (e.air_date_utc.date() if e.air_date_utc else None),
+        runtime_minutes=e.runtime,
     )
 
 
@@ -84,7 +90,7 @@ def _video(v: VideoRef) -> Video:
     if v.upload_date and len(v.upload_date) == 8:
         with contextlib.suppress(ValueError):
             upload = datetime.strptime(v.upload_date, "%Y%m%d").date()
-    return Video(id=v.id, title=v.title, url=v.url, upload_date=upload)
+    return Video(id=v.id, title=v.title, url=v.url, upload_date=upload, duration=v.duration)
 
 
 def _episode_dict(ep: Episode) -> dict:
@@ -250,7 +256,7 @@ async def _scan(
 
     result = match(todo, videos, overrides, cfg)
     need = videos_needing_dates(result, videos, cfg)
-    if need and not any(u.episode.air_date for u in result.unmatched):
+    if need and not any(x.episode.air_date for x in (*result.unmatched, *result.held)):
         need = []  # nothing to compare a date against
     need = [v for v in need if not _date_known(session, v.id)][:DATE_FETCH_LIMIT]
     if need:
@@ -337,7 +343,20 @@ def _fill_report(report: ScanReport, result: MatchResult, videos: list[Video]) -
                 "video_title": m.video.title,
                 "video_url": m.video.url,
                 "strategy": m.strategy,
+                "tier": m.tier,
                 "job_id": None,
+            }
+        )
+    for h in result.held:
+        report.held.append(
+            {
+                **_episode_dict(h.episode),
+                "video_id": h.video.id,
+                "video_title": h.video.title,
+                "video_url": h.video.url,
+                "strategy": h.strategy,
+                "tier": h.tier,
+                "reason": h.reason,
             }
         )
     for u in result.unmatched:
@@ -374,6 +393,9 @@ def _create_jobs(
             video_url=m.video.url,
             video_title=m.video.title[:500],
             format=sub.format,
+            matched_by=m.tier if m.strategy == "title" else m.strategy,
+            video_duration=m.video.duration,
+            target_runtime=m.episode.runtime_minutes,
         )
         session.add(job)
         try:

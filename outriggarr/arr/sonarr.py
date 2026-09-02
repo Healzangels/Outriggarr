@@ -94,6 +94,7 @@ class SonarrClient(ArrHttp):
                     monitored=bool(e.get("monitored")),
                     air_date_utc=parse_datetime(e.get("airDateUtc")),
                     air_date=parse_date(e.get("airDate")),
+                    runtime=int(e["runtime"]) if e.get("runtime") else None,
                 )
                 for e in data
             ),

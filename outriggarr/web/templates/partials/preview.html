@@ -7,6 +7,7 @@
     <span class="chip">{{ report.videos | length }} videos listed</span>
     <span class="chip {{ 'ok' if report.matches else '' }}">{{ report.matches | length }} matched</span>
     <span class="chip {{ 'warn' if report.unmatched else '' }}">{{ report.unmatched | length }} unmatched</span>
+    {% if report.held %}<span class="chip warn" title="Paired, but the video's length contradicts the episode's runtime">{{ report.held | length }} held</span>{% endif %}
     <span class="chip">{{ report.skipped_existing | length }} already have jobs</span>
     {% if report.dry_run %}<span class="chip">preview only</span>{% endif %}
   </span>
@@ -30,6 +31,30 @@
       <td><a href="{{ m.video_url }}" target="_blank" rel="noopener" class="truncate" title="{{ m.video_title }}">{{ m.video_title }}</a><span class="two-line muted mono">{{ m.video_id }}</span></td>
       <td><span class="chip">{{ m.strategy }}</span></td>
       <td>{% if m.job_id %}<a href="/activity">#{{ m.job_id }}</a>{% elif m.skipped %}<span class="muted">{{ m.skipped }}</span>{% elif report.dry_run %}<span class="muted">would queue</span>{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+
+{% if report.held %}
+<h4>Held <span class="muted">· paired, but the video's length contradicts the episode's runtime; nothing is queued unless you pin it</span></h4>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Episode</th><th>Video</th><th>Why held</th><th></th></tr></thead>
+  <tbody>
+  {% for h in report.held %}
+    <tr>
+      <td><strong>{{ h.code }}</strong> {{ h.title }}<span class="two-line muted">{{ h.air_date or "" }}</span></td>
+      <td><a href="{{ h.video_url }}" target="_blank" rel="noopener" class="truncate" title="{{ h.video_title }}">{{ h.video_title }}</a><span class="two-line"><span class="chip">{{ h.tier }}</span></span></td>
+      <td class="warn">{{ h.reason }}</td>
+      <td>
+        <form class="inline" hx-post="/subscriptions/{{ sub.id }}/overrides" hx-target="#preview">
+          <input type="hidden" name="season" value="{{ h.season }}"><input type="hidden" name="episode" value="{{ h.number }}"><input type="hidden" name="video_url" value="{{ h.video_url }}">
+          <button type="submit" class="secondary" title="Pins this video to the episode; pins are never held">It's right, pin it</button>
+        </form>
+      </td>
     </tr>
   {% endfor %}
   </tbody>

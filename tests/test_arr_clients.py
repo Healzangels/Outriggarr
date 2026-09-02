@@ -551,8 +551,9 @@ async def test_sonarr_series_and_episodes_parse() -> None:
                         "hasFile": True,
                         "monitored": False,
                         "airDateUtc": "2024-01-02T00:00:00Z",
+                        "runtime": 24,
                     },
-                    {"id": 1, "seasonNumber": 1, "episodeNumber": 1},
+                    {"id": 1, "seasonNumber": 1, "episodeNumber": 1, "runtime": 0},
                 ],
             )
         raise AssertionError(r.url)
@@ -567,7 +568,7 @@ async def test_sonarr_series_and_episodes_parse() -> None:
     eps = await client.episodes(5)
     assert eps == [
         EpisodeRef(1, 1, 1, "", False, False, None),
-        EpisodeRef(2, 1, 2, "B", True, False, datetime(2024, 1, 2, tzinfo=UTC)),
+        EpisodeRef(2, 1, 2, "B", True, False, datetime(2024, 1, 2, tzinfo=UTC), runtime=24),
     ]
     with pytest.raises(ArrError, match="no movies"):
         await client.movies()

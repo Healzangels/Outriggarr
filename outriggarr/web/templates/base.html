@@ -26,7 +26,7 @@
   <nav class="container">
     <ul><li><a href="/activity" class="brand"><img src="/static/outriggarr.svg" alt="" width="28" height="28"><strong>Outriggarr</strong></a></li></ul>
     <ul>
-      {% for href, label in (("/activity", "Activity"), ("/series", "Series"), ("/grab", "Grab"), ("/settings", "Settings")) %}
+      {% for href, label in (("/activity", "Activity"), ("/matches", "Matches"), ("/series", "Series"), ("/grab", "Grab"), ("/settings", "Settings")) %}
       <li><a href="{{ href }}" class="{% if request.url.path.startswith(href) or (href == '/series' and request.url.path.startswith('/subscriptions')) %}active{% endif %}">{{ label }}</a></li>
       {% endfor %}
     </ul>

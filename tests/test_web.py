@@ -566,3 +566,84 @@ def test_subscription_form_video_limit_and_picker_datalist(client: TestClient) -
     if "Unmatched" in prev:
         assert '<datalist id="listed-videos">' in prev and 'list="listed-videos"' in prev
         assert 'name="video_id"' not in prev
+
+
+def test_preview_holds_a_length_mismatch_and_pin_releases_it(client: TestClient) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from outriggarr.arr.base import EpisodeRef, SeriesRef
+    from outriggarr.source import VideoRef
+    from tests.fakes import FakeArrClient
+
+    now = datetime.now(UTC)
+    client.app.state.arr_factory.by_url["http://sonarr-host:1234"] = FakeArrClient(
+        series_list=[SeriesRef(5, "Hot Ones", 2015, 1, True)],
+        episodes_by_series={
+            5: [
+                EpisodeRef(
+                    11, 30, 6, "Six Spicy Wings", False, True, now - timedelta(days=1), runtime=25
+                )
+            ]
+        },
+    )
+    source = client.app.state.source
+    clip = VideoRef("a", "Six Spicy Wings | Hot Ones", "https://y/a", 90, 1, None)
+    source.recent = [clip]
+    source.infos["https://y/a"] = clip
+    client.post("/api/connections", json=SONARR)
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={"connection_id": 1, "series_id": 5, "source_url": "https://www.youtube.com/@hotones"},
+    ).json()["id"]
+    prev = client.get(f"/subscriptions/{sub_id}/preview").text
+    assert "1 held" in prev and "video runs 1m30s, Sonarr says the episode runs 25 min" in prev
+    assert "It's right, pin it" in prev and "would queue" not in prev
+    r = client.post(f"/subscriptions/{sub_id}/download")
+    assert r.status_code == 200 and client.get("/api/jobs").json() == []
+    # pinning it is the release valve: pins are never held
+    r = client.post(
+        f"/subscriptions/{sub_id}/overrides",
+        data={"video_url": "https://y/a", "season": "30", "episode": "6"},
+    )
+    assert (
+        r.status_code == 200 and "held" not in r.text.split("Your pins")[0].split("unmatched")[-1]
+    )
+    assert "would queue" in r.text
+    page = client.get("/matches").text
+    assert "Nothing needs a look" in page
+    client.post(f"/subscriptions/{sub_id}/download")
+    (job,) = client.get("/api/jobs").json()
+    assert (job["matched_by"], job["video_duration"], job["target_runtime"]) == ("override", 90, 25)
+    page = client.get("/matches?view=review").text
+    assert "Six Spicy Wings" in page and "1m30s vs 25 min ✗" in page, "flagged even though pinned"
+    assert '<span class="chip ok">override</span>' in page
+
+
+def test_matches_page_tiers_and_fallback_for_old_jobs(client: TestClient) -> None:
+    from outriggarr.db.models import Job, TargetKind
+    from outriggarr.web.pages import review_entry
+
+    _seed_series(client)
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={"connection_id": 1, "series_id": 5, "source_url": "https://www.youtube.com/@hotones"},
+    ).json()["id"]
+    client.post(f"/subscriptions/{sub_id}/download")
+    page = client.get("/matches").text
+    assert "Six Spicy Wings" in page and '<span class="chip warn">contains</span>' in page
+    assert f'href="/subscriptions/{sub_id}"' in page
+    assert "needs a look" in page and "Matches" in client.get("/activity").text  # nav link
+    old = Job(
+        connection_id=1,
+        target_kind=TargetKind.episode,
+        target_key="x",
+        video_id="v",
+        video_url="https://y/v",
+        video_title="Seven Spicy Wings",
+        target_label="Hot Ones S30E07 - Seven Spicy Wings",
+    )
+    assert review_entry(old)["tier"] == "exact" and review_entry(old)["needs_look"] is False
+    old.video_title = "Seven Spicy Wings | Hot Ones"
+    assert review_entry(old)["tier"] == "contains" and review_entry(old)["needs_look"] is True
+    old.video_title = "Something"
+    assert review_entry(old)["tier"] == "unknown"

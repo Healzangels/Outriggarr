@@ -79,6 +79,7 @@ class EpisodeRef:
     monitored: bool
     air_date_utc: datetime | None
     air_date: date | None = None  # Sonarr's local calendar day (`airDate`), for date matching
+    runtime: int | None = None  # minutes (TVDB via Sonarr); 0 or absent → None
 
 
 @dataclass(frozen=True)
