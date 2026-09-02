@@ -47,9 +47,6 @@ class SonarrClient(ArrHttp):
             monitored=all(bool(e.get("monitored")) for e in episodes),
         )
 
-    def _candidate_hint(self, target: Target) -> dict[str, Any]:
-        return {"seriesId": target.series_id}
-
     def _import_ids(self, target: Target) -> dict[str, Any]:
         return {"seriesId": target.series_id, "episodeIds": list(target.episode_ids)}
 

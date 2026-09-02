@@ -152,9 +152,9 @@ class ArrClient(Protocol):
 
     async def target_info(self, target: Target) -> TargetInfo: ...
 
-    async def manual_import_candidates(self, folder: str, target: Target) -> list[ImportCandidate]:
-        """GET /manualimport for `folder` (as the *arr sees it), hinting the target's
-        series/movie so the *arr does not guess from the filename."""
+    async def manual_import_candidates(self, folder: str) -> list[ImportCandidate]:
+        """GET /manualimport?folder=<folder as the *arr sees it>. Never pass seriesId /
+        movieId here: that flips the *arr into listing the SERIES/MOVIE folder instead."""
         ...
 
     async def manual_import(self, files: list[ImportFile]) -> int:

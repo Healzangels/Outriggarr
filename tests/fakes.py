@@ -105,8 +105,8 @@ class FakeArrClient:
             raise self.info_error
         return self._info(target)
 
-    async def manual_import_candidates(self, folder: str, target: Target) -> list[ImportCandidate]:
-        self.calls.append(("manual_import_candidates", (folder, target)))
+    async def manual_import_candidates(self, folder: str) -> list[ImportCandidate]:
+        self.calls.append(("manual_import_candidates", folder))
         if self.candidates_error is not None:
             raise self.candidates_error
         if self.candidates_override is not None:

@@ -235,7 +235,7 @@ QUALITY_DEFS = [
 ]
 
 
-async def test_sonarr_manual_import_candidates_hint_series_and_parse() -> None:
+async def test_sonarr_manual_import_candidates_folder_only_and_parse() -> None:
     body = [
         {
             "id": 1,
@@ -252,14 +252,14 @@ async def test_sonarr_manual_import_candidates_hint_series_and_parse() -> None:
         assert r.url.path == "/base/api/v3/manualimport"
         assert r.url.params["folder"] == "/data/outriggarr/7"
         assert r.url.params["filterExistingFiles"] == "true"
-        assert r.url.params["seriesId"] == "5"
+        # seriesId would make Sonarr list the series folder instead of ours (seen live)
+        assert "seriesId" not in r.url.params
         assert "movieId" not in r.url.params
+        assert set(r.url.params.keys()) == {"folder", "filterExistingFiles"}
         return httpx.Response(200, json=body)
 
     client, _ = make(SonarrClient, handler)
-    (c,) = await client.manual_import_candidates(
-        "/data/outriggarr/7", Target(series_id=5, episode_ids=(42,))
-    )
+    (c,) = await client.manual_import_candidates("/data/outriggarr/7")
     assert c.path == "/data/outriggarr/7/Show - S01E02 [WEBDL-1080p].mkv"
     assert c.relative_path == "Show - S01E02 [WEBDL-1080p].mkv"
     assert c.size == 12345
@@ -267,14 +267,14 @@ async def test_sonarr_manual_import_candidates_hint_series_and_parse() -> None:
     assert c.languages == (Language(0, "Unknown"), Language(1, "English"))
 
 
-async def test_radarr_manual_import_candidates_hint_movie() -> None:
+async def test_radarr_manual_import_candidates_folder_only() -> None:
     def handler(r: httpx.Request) -> httpx.Response:
-        assert r.url.params["movieId"] == "77"
-        assert "seriesId" not in r.url.params
+        assert set(r.url.params.keys()) == {"folder", "filterExistingFiles"}
+        assert r.url.params["folder"] == "/f"
         return httpx.Response(200, json=[])
 
     client, _ = make(RadarrClient, handler)
-    assert await client.manual_import_candidates("/f", Target(movie_id=77)) == []
+    assert await client.manual_import_candidates("/f") == []
 
 
 async def test_sonarr_manual_import_posts_command_with_explicit_ids() -> None:

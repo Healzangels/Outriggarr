@@ -109,10 +109,10 @@ class ArrHttp:
             message=data.get("message"),
         )
 
-    async def manual_import_candidates(self, folder: str, target: Target) -> list[ImportCandidate]:
-        params: dict[str, Any] = {"folder": folder, "filterExistingFiles": "true"}
-        params.update(self._candidate_hint(target))
-        data = await self.get("manualimport", params)
+    async def manual_import_candidates(self, folder: str) -> list[ImportCandidate]:
+        # Proven live 2026-09-01: adding seriesId (Sonarr) / movieId (Radarr) makes the
+        # *arr list the existing series/movie folder and ignore `folder` entirely.
+        data = await self.get("manualimport", {"folder": folder, "filterExistingFiles": "true"})
         return [_candidate(d) for d in data]
 
     async def manual_import(self, files: list[ImportFile]) -> int:
@@ -142,9 +142,6 @@ class ArrHttp:
         return int(data["id"])
 
     # -- per-kind hooks ---------------------------------------------------------------
-
-    def _candidate_hint(self, target: Target) -> dict[str, Any]:  # pragma: no cover
-        raise NotImplementedError
 
     def _import_ids(self, target: Target) -> dict[str, Any]:  # pragma: no cover
         raise NotImplementedError

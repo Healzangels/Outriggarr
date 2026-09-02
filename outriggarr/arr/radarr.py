@@ -28,9 +28,6 @@ class RadarrClient(ArrHttp):
             monitored=bool(m.get("monitored")),
         )
 
-    def _candidate_hint(self, target: Target) -> dict[str, Any]:
-        return {"movieId": target.movie_id}
-
     def _import_ids(self, target: Target) -> dict[str, Any]:
         return {"movieId": target.movie_id}
 

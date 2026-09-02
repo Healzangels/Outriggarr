@@ -273,7 +273,7 @@ async def _import_stage(
         info = await client.target_info(target)
         if info.has_file:
             return False
-        candidates = await client.manual_import_candidates(remote_folder, target)
+        candidates = await client.manual_import_candidates(remote_folder)
         cand = next(
             (
                 c

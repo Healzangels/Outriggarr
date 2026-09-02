@@ -133,7 +133,7 @@ async def test_episode_happy_path(deps: RunnerDeps, session_factory) -> None:
 
     # the *arr was asked about the folder AS IT SEES IT, hinting the series
     folders = [args for name, args in fake.calls if name == "manual_import_candidates"]
-    assert folders == [(f"/data/outriggarr/{job_id}", Target(series_id=5, episode_ids=(42,)))]
+    assert folders == [f"/data/outriggarr/{job_id}"]
 
     # import carried explicit ids, our quality, and English for an Unknown language
     (files,) = fake.imports
