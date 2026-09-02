@@ -125,6 +125,34 @@ def channel_videos_url(url: str) -> str:
 OptsProvider = Callable[[], dict[str, Any]]
 
 
+YOUTUBE_SIGNIN_COOKIE = "LOGIN_INFO"  # present on .youtube.com only for a signed-in account
+
+
+def has_signin_cookie(netscape: str) -> bool:
+    """True when a Netscape cookie jar carries YouTube's sign-in cookie."""
+    for line in netscape.splitlines():
+        line = line.removeprefix("#HttpOnly_")
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split("\t")
+        if len(parts) >= 7 and "youtube.com" in parts[0] and parts[5] == YOUTUBE_SIGNIN_COOKIE:
+            return True
+    return False
+
+
+def cookies_state(path: str | Path | None) -> str:
+    """'none' (no cookies file configured), 'unreadable', 'signed in', or 'signed out': a
+    jar without the sign-in cookie, because the export was never signed in or because
+    YouTube ended the session (it does when a browser keeps using the same account)."""
+    if not path:
+        return "none"
+    try:
+        text = Path(path).read_text(errors="replace")
+    except OSError:
+        return "unreadable"
+    return "signed in" if has_signin_cookie(text) else "signed out"
+
+
 def pot_provider_ready(server_home: Path | None) -> bool:
     """True when the bgutil script and a Node runtime are both present: yt-dlp can then
     fetch PO tokens, which YouTube requires for the best formats of some videos (every
@@ -185,6 +213,7 @@ class YtDlpSource:
             yield opts
             return
         before = os.stat(original)
+        was_signed_in = has_signin_cookie(Path(original).read_text(errors="replace"))
         fd, private = tempfile.mkstemp(prefix="outriggarr-cookies-", suffix=".txt")
         os.close(fd)
         shutil.copyfile(original, private)
@@ -197,8 +226,21 @@ class YtDlpSource:
                     before.st_mtime_ns,
                     before.st_size,
                 )
+                signed_out = was_signed_in and not has_signin_cookie(
+                    Path(private).read_text(errors="replace")
+                )
                 if not unchanged:
                     log.info("cookies file %s changed while yt-dlp ran; keeping it", original)
+                elif signed_out:
+                    # YouTube cleared the sign-in during this run (it invalidates a session
+                    # a browser is also using). Keep the operator's export as it was, so
+                    # what happened stays visible, and say what to do.
+                    log.warning(
+                        "YouTube signed the cookie session out during this run; %s is kept as "
+                        "exported. Export again from a private window signed in to YouTube, "
+                        "then close that window so the browser cannot rotate the session.",
+                        original,
+                    )
                 elif os.access(original, os.W_OK) and os.path.getsize(private) > 0:
                     staged = f"{original}.{os.getpid()}.tmp"
                     shutil.copyfile(private, staged)

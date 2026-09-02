@@ -8,7 +8,8 @@ from fastapi import APIRouter, Request, Response
 from sqlalchemy import text
 
 from outriggarr import __version__
-from outriggarr.source import pot_provider_ready
+from outriggarr.settings import get_setting
+from outriggarr.source import cookies_state, pot_provider_ready
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -45,6 +46,7 @@ def health(request: Request, response: Response) -> dict[str, object]:
     """200 when downloads can work; 503 "degraded" with the reasons when they cannot."""
     with request.app.state.session_factory() as session:
         session.execute(text("SELECT 1"))
+        cookies_path = get_setting(session, "cookies_path")
     from yt_dlp.version import __version__ as ytdlp_version
 
     staging = request.app.state.settings.staging_dir
@@ -59,6 +61,9 @@ def health(request: Request, response: Response) -> dict[str, object]:
         "ffmpeg": shutil.which("ffmpeg") is not None,
         # off = age-gated videos top out at 480p (YouTube wants a proof-of-origin token)
         "po_token_provider": pot_provider_ready(request.app.state.settings.pot_server_home),
+        # none / unreadable / signed in / signed out — "signed out" means age-gated videos
+        # will fail until the cookies file is exported again
+        "youtube_session": cookies_state(cookies_path),
         # False means downloads will fail: fix the mount's ownership (see entrypoint.sh)
         "staging_writable": staging_writable(staging),
         "worker_alive": liveness.get("worker"),

@@ -42,7 +42,7 @@ from outriggarr.arr.base import ArrError
 from outriggarr.db.models import Connection, ConnectionKind, Job, JobStatus, Subscription
 from outriggarr.matcher import OPTIONAL_STRATEGIES, length_mismatch, mmss, normalise_title
 from outriggarr.settings import DEFAULTS, MERGE_CONTAINERS, all_settings, get_setting
-from outriggarr.source import pot_provider_ready
+from outriggarr.source import cookies_state, pot_provider_ready
 
 router = APIRouter(include_in_schema=False)
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
@@ -82,7 +82,10 @@ def _tooling(request: Request) -> dict:
     from yt_dlp.version import __version__ as ytdlp_version
 
     staging = request.app.state.settings.staging_dir
+    with request.app.state.session_factory() as session:
+        cookies_path = get_setting(session, "cookies_path")
     return {
+        "youtube_session": cookies_state(cookies_path),
         "yt_dlp": ytdlp_version,
         "js_runtime": next((r for r in ("deno", "node", "bun") if shutil.which(r)), None),
         "ffmpeg": shutil.which("ffmpeg") is not None,

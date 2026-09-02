@@ -444,3 +444,60 @@ def test_po_token_provider_is_wired_when_present_and_operator_args_merge(
     monkeypatch.setattr(shutil, "which", lambda name: None)
     YtDlpSource(extra_opts=lambda: {}, pot_server_home=home).resolve("https://youtu.be/x")
     assert "extractor_args" not in seen[1], "no node: nothing is promised to yt-dlp"
+
+
+JAR_SIGNED_IN = (
+    "# Netscape HTTP Cookie File\n"
+    ".youtube.com\tTRUE\t/\tTRUE\t1790000000\tPREF\tf6=400\n"
+    "#HttpOnly_.youtube.com\tTRUE\t/\tTRUE\t1790000000\tLOGIN_INFO\tAFmmF2sw\n"
+)
+JAR_SIGNED_OUT = (
+    "# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t1790000000\tPREF\tf6=400\n"
+)
+
+
+def test_cookies_state_reads_the_sign_in_cookie(tmp_path) -> None:
+    from outriggarr.source import cookies_state, has_signin_cookie
+
+    assert cookies_state(None) == "none" and cookies_state("") == "none"
+    assert cookies_state(tmp_path / "missing.txt") == "unreadable"
+    jar = tmp_path / "c.txt"
+    jar.write_text(JAR_SIGNED_IN)
+    assert cookies_state(jar) == "signed in"
+    jar.write_text(JAR_SIGNED_OUT)
+    assert cookies_state(jar) == "signed out"
+    # a LOGIN_INFO on another site does not count
+    assert has_signin_cookie(".example.com\tTRUE\t/\tTRUE\t1\tLOGIN_INFO\tx\n") is False
+
+
+def test_a_jar_that_lost_the_sign_in_is_never_written_back(monkeypatch, tmp_path, caplog) -> None:
+    import logging
+
+    import yt_dlp
+
+    from outriggarr.source import YtDlpSource
+
+    jar = tmp_path / "cookies.txt"
+    jar.write_text(JAR_SIGNED_IN)
+
+    class SignsOut:
+        def __init__(self, opts):
+            self.opts = opts
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            # YouTube cleared LOGIN_INFO during the run; yt-dlp saves what is left
+            Path(self.opts["cookiefile"]).write_text(JAR_SIGNED_OUT + "rotated\n")
+            return False
+
+        def extract_info(self, url, download=False):
+            return {"id": "x", "title": "t", "webpage_url": url}
+
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", SignsOut)
+    src = YtDlpSource(extra_opts=lambda: {"cookiefile": str(jar)})
+    with caplog.at_level(logging.WARNING, logger="outriggarr.source"):
+        src.fetch_info("https://youtu.be/x")
+    assert jar.read_text() == JAR_SIGNED_IN, "the operator's signed-in export is kept"
+    assert any("signed the cookie session out" in r.getMessage() for r in caplog.records)
