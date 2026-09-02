@@ -7,6 +7,12 @@ from fastapi.testclient import TestClient
 from outriggarr.db.session import make_engine, make_session_factory, run_migrations
 from outriggarr.main import create_app
 from outriggarr.settings import Settings
+from tests.fakes import FakeArrFactory
+
+
+@pytest.fixture
+def anyio_backend() -> str:
+    return "asyncio"
 
 
 @pytest.fixture
@@ -30,6 +36,11 @@ def session_factory(settings: Settings):
 
 
 @pytest.fixture
-def client(settings: Settings) -> Iterator[TestClient]:
-    with TestClient(create_app(settings, start_worker=False)) as c:
+def arr() -> FakeArrFactory:
+    return FakeArrFactory()
+
+
+@pytest.fixture
+def client(settings: Settings, arr: FakeArrFactory) -> Iterator[TestClient]:
+    with TestClient(create_app(settings, start_worker=False, arr_factory=arr)) as c:
         yield c

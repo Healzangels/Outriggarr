@@ -1,0 +1,134 @@
+from __future__ import annotations
+
+from fastapi.testclient import TestClient
+
+from outriggarr.arr.base import ArrError, SystemStatus
+from outriggarr.db.models import Connection, Job, TargetKind
+from tests.fakes import FakeArrClient, FakeArrFactory
+
+SONARR = {
+    "kind": "sonarr",
+    "name": "Sonarr",
+    "url": "http://sonarr-host:1234/",
+    "api_key": "k1",
+    "staging_path_remote": "/staging/",
+}
+
+
+def test_crud_roundtrip(client: TestClient) -> None:
+    r = client.post("/api/connections", json=SONARR)
+    assert r.status_code == 201, r.text
+    created = r.json()
+    assert created["id"] == 1
+    assert created["url"] == "http://sonarr-host:1234"  # trailing slash stripped
+    assert created["staging_path_remote"] == "/staging"
+    assert created["enabled"] is True
+
+    assert client.get("/api/connections").json() == [created]
+    assert client.get("/api/connections/1").json() == created
+    assert client.get("/api/connections/2").status_code == 404
+
+    r = client.put("/api/connections/1", json={**SONARR, "name": "Renamed", "enabled": False})
+    assert r.status_code == 200
+    assert r.json()["name"] == "Renamed"
+    assert r.json()["enabled"] is False
+    assert client.get("/api/connections/1").json()["name"] == "Renamed"
+
+    assert client.delete("/api/connections/1").status_code == 204
+    assert client.get("/api/connections").json() == []
+    assert client.delete("/api/connections/1").status_code == 404
+
+
+def test_validation(client: TestClient) -> None:
+    assert client.post("/api/connections", json={**SONARR, "kind": "lidarr"}).status_code == 422
+    assert client.post("/api/connections", json={**SONARR, "url": "sonarr:8989"}).status_code == 422
+    assert client.post("/api/connections", json={**SONARR, "api_key": ""}).status_code == 422
+    r = client.post("/api/connections", json={**SONARR, "staging_path_remote": "staging"})
+    assert r.status_code == 422
+    assert "absolute" in r.text
+
+
+def test_delete_refused_while_jobs_reference_it(client: TestClient) -> None:
+    conn_id = client.post("/api/connections", json=SONARR).json()["id"]
+    with client.app.state.session_factory() as s:
+        conn = s.get(Connection, conn_id)
+        s.add(
+            Job(
+                connection=conn,
+                target_kind=TargetKind.episode,
+                series_id=1,
+                episode_ids=[1],
+                target_key=Job.make_target_key(TargetKind.episode, series_id=1, episode_ids=[1]),
+                video_id="v",
+                video_url="https://example.invalid/v",
+            )
+        )
+        s.commit()
+    r = client.delete(f"/api/connections/{conn_id}")
+    assert r.status_code == 409
+    assert "1 job" in r.json()["detail"]
+    assert client.get(f"/api/connections/{conn_id}").status_code == 200
+
+
+def test_test_ok(client: TestClient, arr: FakeArrFactory) -> None:
+    conn_id = client.post("/api/connections", json=SONARR).json()["id"]
+    arr.by_url["http://sonarr-host:1234"] = FakeArrClient(
+        status_result=SystemStatus("Sonarr", "4.0.9"), visible_paths={"/staging"}
+    )
+    r = client.post(f"/api/connections/{conn_id}/test")
+    assert r.status_code == 200
+    assert r.json() == {
+        "ok": True,
+        "app_name": "Sonarr",
+        "version": "4.0.9",
+        "staging_visible": True,
+        "error": None,
+    }
+    fake = arr.by_url["http://sonarr-host:1234"]
+    assert fake.calls == [("status", None), ("path_visible", "/staging")]
+    assert arr.made[0].api_key == "k1"
+
+
+def test_test_status_failure_is_verbatim(client: TestClient, arr: FakeArrFactory) -> None:
+    conn_id = client.post("/api/connections", json=SONARR).json()["id"]
+    arr.by_url["http://sonarr-host:1234"] = FakeArrClient(
+        status_result=ArrError("GET http://sonarr-host:1234/api/v3/system/status -> HTTP 401: nope")
+    )
+    body = client.post(f"/api/connections/{conn_id}/test").json()
+    assert body["ok"] is False
+    assert body["error"] == "GET http://sonarr-host:1234/api/v3/system/status -> HTTP 401: nope"
+    assert body["staging_visible"] is None
+
+
+def test_test_staging_not_visible(client: TestClient, arr: FakeArrFactory) -> None:
+    conn_id = client.post("/api/connections", json=SONARR).json()["id"]
+    arr.by_url["http://sonarr-host:1234"] = FakeArrClient(visible_paths=set())
+    body = client.post(f"/api/connections/{conn_id}/test").json()
+    assert body["ok"] is False
+    assert body["staging_visible"] is False
+    assert body["app_name"] == "Sonarr"
+    assert "/staging" in body["error"]
+
+
+def test_test_filesystem_error_is_verbatim(client: TestClient, arr: FakeArrFactory) -> None:
+    conn_id = client.post("/api/connections", json=SONARR).json()["id"]
+    arr.by_url["http://sonarr-host:1234"] = FakeArrClient(path_error=ArrError("HTTP 500: boom"))
+    body = client.post(f"/api/connections/{conn_id}/test").json()
+    assert body["ok"] is False
+    assert body["error"] == "HTTP 500: boom"
+    assert body["version"] == "0.0.0"
+
+
+def test_test_detects_kind_mismatch(client: TestClient, arr: FakeArrFactory) -> None:
+    conn_id = client.post("/api/connections", json=SONARR).json()["id"]
+    arr.by_url["http://sonarr-host:1234"] = FakeArrClient(
+        status_result=SystemStatus("Radarr", "5.0")
+    )
+    body = client.post(f"/api/connections/{conn_id}/test").json()
+    assert body["ok"] is False
+    assert "sonarr" in body["error"] and "Radarr" in body["error"]
+    assert arr.by_url["http://sonarr-host:1234"].calls == [("status", None)]
+
+
+def test_test_unknown_connection(client: TestClient) -> None:
+    assert client.post("/api/connections/99/test").status_code == 404

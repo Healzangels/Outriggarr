@@ -115,7 +115,7 @@ Quality from downloaded height: ≥2160 → WEBDL-2160p, ≥1080 → WEBDL-1080p
 
 | Screen | What it does |
 |---|---|
-| **Settings → Connections** | Add/edit Sonarr and Radarr: URL, API key, remote staging path. *Test* button (hits `/api/v3/system/status` and checks the staging path is visible via `/api/v3/filesystem`). |
+| **Settings → Connections** | Add/edit Sonarr and Radarr: URL, API key, remote staging path. *Test* button (hits `/api/v3/system/status`, checks the reported `appName` matches the connection kind, and checks the staging path is visible via `/api/v3/filesystem`). `/filesystem` returns an empty listing for a missing directory, identical to an empty one, so the check lists the parent and looks for the staging directory in it. |
 | **Settings → Downloads** | Scan interval, concurrency, default yt-dlp format, container, cookies file, extra yt-dlp options (JSON passthrough — one escape hatch instead of a setting per feature). |
 | **Series** | Table of Sonarr's series pulled live, with a *subscribed* indicator. Subscribe → form: source URL, format override, strategies, tolerance/offset, regex. Detail view: wanted episodes, match preview, unmatched list with "set override", *Scan now*. |
 | **Grab** | Paste a video or playlist URL → flat-resolve → table of videos. For each: pick a target (Sonarr series → season/episode picker, or Radarr movie search). Playlist helper: "start at S01E01 and number sequentially" bulk-fill, editable per row. *Queue* creates jobs. |
@@ -144,8 +144,8 @@ GET/PUT              /api/settings
 | Module | Responsibility |
 |---|---|
 | `db/` | SQLAlchemy 2.x models + Alembic migrations. SQLite file in `/config`. |
-| `arr/base.py` | `ArrClient` protocol: `status()`, `wanted()`, `manual_import_candidates(folder)`, `manual_import(files)`, `command(id)`, `quality_definitions()`. |
-| `arr/sonarr.py`, `arr/radarr.py` | Implementations. Differences are confined here (`episodeIds` vs `movieId`, `wanted/missing` shapes). |
+| `arr/base.py` | `ArrClient` protocol: `status()`, `wanted(series_id=None)`, `quality_definitions()`, `path_visible(path)` (M1); `manual_import_candidates(folder)`, `manual_import(files)`, `command(id)` (M2). Errors raise `ArrError` whose message carries the request and the verbatim response body. |
+| `arr/sonarr.py`, `arr/radarr.py` | Implementations over a shared `arr/common.py` HTTP base. Differences are confined here (`episodeIds` vs `movieId`, `wanted/missing` shapes). Sonarr v4 has no `seriesId` filter on `wanted/missing`, so the client pages the whole list and filters. |
 | `source.py` | `VideoSource` protocol: `list_recent(url, limit)`, `resolve(url)` (video or playlist → videos), `fetch_info(video_id)`, `download(video_id, dest, opts, progress_cb)`. `YtDlpSource` implements it. |
 | `matcher.py` | Pure functions over episodes + videos + overrides. No I/O. |
 | `naming.py` | Staging filename + quality mapping. |
