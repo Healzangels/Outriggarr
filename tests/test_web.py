@@ -354,6 +354,11 @@ def test_subscription_episodes_panel_states_and_jobs(client: TestClient) -> None
     client.post(f"/api/subscriptions/{sub_id}/scan")  # queues S30E06 via title
     page = client.get(f"/subscriptions/{sub_id}").text
     assert f'hx-get="/subscriptions/{sub_id}/episodes"' in page
+    series = client.get("/series").text
+    assert "1 matched</span>" in series and "1 new job</span>" in series, (
+        "the list says what the last scan did, not what is queued now"
+    )
+    assert "1 queued" not in series
 
     html = client.get(f"/subscriptions/{sub_id}/episodes").text
     assert html.index("Season 30") < html.index("Season 29"), "newest season first"
