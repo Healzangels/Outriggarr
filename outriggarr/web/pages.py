@@ -786,12 +786,12 @@ async def subscription_download(
     all: Annotated[str, Form()] = "",
     selected: Annotated[str, Form()] = "",
 ) -> HTMLResponse:
-    """Download = a manual scan: every current match, or only the ticked episodes,
+    """Download = a manual scan: every current match, or only the selected episodes,
     whatever the auto-download policy says."""
     ids = None if all or not selected else set(episode_id or [])
     if ids is not None and not ids:
         report = await run_scan(deps, subscription_id, dry_run=True)
-        return _preview_response(request, session, report, "Nothing ticked.")
+        return _preview_response(request, session, report, "Nothing selected.")
     report = await run_scan(deps, subscription_id, dry_run=False, manual=True, episode_ids=ids)
     notice = None
     if not report.error:

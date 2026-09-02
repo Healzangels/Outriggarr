@@ -680,7 +680,7 @@ async def test_auto_download_policy_gates_scheduled_scans_only(deps, session_fac
         "S30E06": False
     }
 
-    # a manual download ignores the policy: only the ticked episode, or all of them
+    # a manual download ignores the policy: only the selected episode, or all of them
     picked = await scan_subscription(deps, sub_id, manual=True, episode_ids={999})
     assert picked.created_job_ids == [] and picked.matches[0]["skipped"] == "not selected"
     picked = await scan_subscription(deps, sub_id, manual=True, episode_ids={11})

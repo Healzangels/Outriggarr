@@ -184,7 +184,7 @@ def test_subscription_page_preview_scan_and_override(client: TestClient) -> None
     assert "Scan now" in prev_buttons(client, sub_id) and "Download" in prev_buttons(client, sub_id)
 
     prev = client.get(f"/subscriptions/{sub_id}/preview").text
-    assert "would queue" in prev and "S30E06" in prev
+    assert "select to download" in prev and "S30E06" in prev  # a match, no job yet
     assert "S30E07" in prev and "no candidate" in prev
     assert f'hx-post="/subscriptions/{sub_id}/overrides"' in prev
 
@@ -396,7 +396,7 @@ def test_override_form_accepts_a_url(client: TestClient) -> None:
     assert r.status_code == 200
     assert "Override set for Seven, older upload (from URL)" in r.text
     assert ">URL<" in r.text and "S30E07" in r.text
-    assert "would queue" in r.text  # S30E07 now matches via the override
+    assert "select to download" in r.text  # S30E07 now matches via the override
     r = client.post(f"/subscriptions/{sub_id}/overrides", data={"season": "30", "episode": "7"})
     assert "Pick a video or paste a URL" in r.text
     prev = client.get(f"/subscriptions/{sub_id}/preview").text
@@ -602,7 +602,7 @@ def test_preview_holds_a_length_mismatch_and_pin_releases_it(client: TestClient)
     ).json()["id"]
     prev = client.get(f"/subscriptions/{sub_id}/preview").text
     assert "1 held" in prev and "video runs 1m30s, Sonarr says the episode runs 25 min" in prev
-    assert "It's right, pin it" in prev and "would queue on the next scan" not in prev
+    assert "It's right, pin it" in prev and "select to download" not in prev  # held: no row
     r = client.post(f"/subscriptions/{sub_id}/download")
     assert r.status_code == 200 and client.get("/api/jobs").json() == []
     # pinning it is the release valve: pins are never held
@@ -613,7 +613,7 @@ def test_preview_holds_a_length_mismatch_and_pin_releases_it(client: TestClient)
     assert (
         r.status_code == 200 and "held" not in r.text.split("Your pins")[0].split("unmatched")[-1]
     )
-    assert "would queue" in r.text
+    assert "select to download" in r.text  # pinned: a plain match row now
     page = client.get("/matches?view=review").text
     assert "Nothing needs a look" in page
     client.post(f"/subscriptions/{sub_id}/download")
@@ -1006,15 +1006,15 @@ def test_subscribe_form_defaults_to_future_and_preview_downloads_selected(
         json={"connection_id": 1, "series_id": 5, "sources": ["https://www.youtube.com/@hotones"]},
     ).json()["id"]
     prev = client.get(f"/subscriptions/{sub_id}/preview").text
-    assert "auto: future only, 0 of 1 would queue" in prev and "waits for you" in prev
+    assert "auto: future only, 0 of 1 would queue" in prev and "select to download" in prev
     assert 'name="episode_id" value="11"' in prev and "Download selected" in prev
     assert 'id="selected-count">0</span>' in prev and 'id="tick-all"' in prev, "a live count"
     untouched = 'name="episode_id" value="11" aria-label="download S30E06">'
-    assert untouched in prev, "unticked by default"
+    assert untouched in prev, "unselected by default"
     assert "picks.addEventListener('change', update)" in prev
     # ticking nothing queues nothing; ticking S30E06 queues just that; the scheduler alone would not
     r = client.post(f"/subscriptions/{sub_id}/download", data={"selected": "1"})
-    assert "Nothing ticked." in r.text and client.get("/api/jobs").json() == []
+    assert "Nothing selected." in r.text and client.get("/api/jobs").json() == []
     r = client.post(
         f"/subscriptions/{sub_id}/download", data={"selected": "1", "episode_id": ["11"]}
     )
