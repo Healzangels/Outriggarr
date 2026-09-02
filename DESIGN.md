@@ -113,6 +113,8 @@ Optional `title_regex` with named groups `season`/`episode` for channels that nu
 
 Quality from downloaded height: ≥2160 → WEBDL-2160p, ≥1080 → WEBDL-1080p, ≥720 → WEBDL-720p, else WEBDL-480p. The target's quality profile must allow it or the import is rejected (and the GUI says so).
 
+Default yt-dlp format: `bestvideo*[height<=1080][vcodec^=avc1]+bestaudio[acodec^=mp4a]/bestvideo*[height<=1080]+bestaudio/best[height<=1080]`. YouTube serves many uploads at 2160p AV1; the cap matches the profiles in use and H.264/AAC avoids player transcodes. Raise it in Settings → Downloads (or per subscription) for a 4K profile.
+
 ## GUI screens (v1)
 
 | Screen | What it does |

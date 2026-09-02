@@ -8,7 +8,7 @@ import pytest
 
 from outriggarr.arr.base import ArrError, ImportCandidate, Language, Target
 from outriggarr.db.models import Connection, ConnectionKind, Job, JobStatus, TargetKind
-from outriggarr.settings import set_setting
+from outriggarr.settings import DEFAULTS, set_setting
 from outriggarr.source import SourceError
 from outriggarr.worker.runner import (
     BACKOFF,
@@ -126,7 +126,8 @@ async def test_episode_happy_path(deps: RunnerDeps, session_factory) -> None:
     assert not (deps.staging_dir / str(job_id)).exists(), "staging folder must be removed"
 
     # download used the DB settings
-    assert deps.source.calls[0]["fmt"] == "bestvideo*+bestaudio/best"
+    assert deps.source.calls[0]["fmt"] == DEFAULTS["default_format"]
+    assert "[height<=1080]" in deps.source.calls[0]["fmt"]
     assert deps.source.calls[0]["container"] == "mkv"
     assert deps.source.calls[0]["dest"] == deps.staging_dir / str(job_id)
 

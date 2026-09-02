@@ -41,7 +41,12 @@ class Settings:
 DEFAULTS: dict[str, str] = {
     "scan_interval_minutes": "30",
     "concurrency": "1",
-    "default_format": "bestvideo*+bestaudio/best",
+    # 1080p cap + H.264/AAC preference: every profile on the target stack tops out at
+    # WEBDL-1080p and AV1/VP9 forces transcodes on most players. Editable in Settings.
+    "default_format": (
+        "bestvideo*[height<=1080][vcodec^=avc1]+bestaudio[acodec^=mp4a]"
+        "/bestvideo*[height<=1080]+bestaudio/best[height<=1080]"
+    ),
     "merge_container": "mkv",
     "ytdlp_extra_opts": "{}",
     "cookies_path": "",
