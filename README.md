@@ -23,7 +23,7 @@ Everything is a job: a subscription scan and a manual grab produce the same row 
 ```yaml
 services:
   outriggarr:
-    image: outriggarr:dev            # built from this repo, see below
+    image: <dockerhub-user>/outriggarr:latest   # built and pushed by GitHub Actions on every push to main
     container_name: outriggarr
     environment:
       PUID: "1000"                   # match your Sonarr/Radarr user so they can move staged files
@@ -39,7 +39,9 @@ services:
     networks: [arr]                  # the network your *arr containers are on
 ```
 
-Build: `docker build -t outriggarr .` (needs internet: it fetches ffmpeg, deno and Python packages). YouTube's JavaScript challenges are solved by deno plus the bundled `yt-dlp-ejs` package; nothing is downloaded at runtime for that.
+Images: every push to `main` runs the tests and pushes `latest` (plus a `sha-…` tag) to Docker Hub; a `vX.Y.Z` git tag also pushes `X.Y.Z` and `X.Y`. Local build: `docker build -t outriggarr .` (needs internet: it fetches ffmpeg, deno and Python packages).
+
+Unraid: add the container with the image above, `PUID`/`PGID`/`UMASK` matching your Sonarr/Radarr template, a config path under your appdata share mapped to `/config`, the shared staging directory mapped to `/staging`, the same custom network as the *arr containers, and port 8080. YouTube's JavaScript challenges are solved by deno plus the bundled `yt-dlp-ejs` package; nothing is downloaded at runtime for that.
 
 Then open the GUI → **Settings** → add Sonarr (and Radarr): URL, API key, and the staging path *as that app sees it*. **Test** checks the API key, that the server really is the kind you said, and that it can see the staging directory.
 
@@ -85,3 +87,7 @@ uv run uvicorn outriggarr.main:app --reload
 ```
 
 Tests use fakes for Sonarr/Radarr and yt-dlp; nothing touches the network. `DESIGN.md` is the source of truth for scope and architecture; `CLAUDE.md` holds the working rules.
+
+## Licence
+
+MIT — see `LICENSE`.
