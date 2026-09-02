@@ -20,6 +20,18 @@ class DownloadAborted(Exception):
 
 
 @dataclass(frozen=True)
+class VideoRef:
+    """One video from a flat listing (no per-video fetch)."""
+
+    id: str
+    title: str
+    url: str
+    duration: int | None
+    playlist_index: int | None
+    upload_date: str | None  # YYYYMMDD when the listing carries it, else None
+
+
+@dataclass(frozen=True)
 class DownloadResult:
     path: Path
     height: int | None
@@ -33,6 +45,10 @@ AbortCheck = Callable[[], bool]
 
 
 class VideoSource(Protocol):
+    def resolve(self, url: str) -> list[VideoRef]:
+        """Blocking. A video URL → [that video]; a playlist URL → its videos, flat."""
+        ...
+
     def download(
         self,
         url: str,
@@ -65,6 +81,27 @@ class _YtDlpLogger:
 
 
 class YtDlpSource:
+    def resolve(self, url: str) -> list[VideoRef]:
+        import yt_dlp
+        from yt_dlp.utils import DownloadError
+
+        opts: dict[str, Any] = {
+            "extract_flat": "in_playlist",
+            "skip_download": True,
+            "quiet": True,
+            "no_warnings": False,
+            "noprogress": True,
+            "logger": _YtDlpLogger(),
+        }
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+        except DownloadError as exc:
+            raise SourceError(str(exc)) from exc
+        if info is None:
+            raise SourceError(f"yt-dlp returned no info for {url}")
+        return videos_from_info(info)
+
     def download(
         self,
         url: str,
@@ -110,6 +147,35 @@ class YtDlpSource:
         if info is None:
             raise SourceError(f"yt-dlp returned no info for {url}")
         return _result_from_info(info)
+
+
+def videos_from_info(info: dict[str, Any]) -> list[VideoRef]:
+    """Normalise a flat yt-dlp info dict (playlist or single video) to VideoRefs.
+    Nested playlists (a channel's tabs) are skipped; M4 handles channels."""
+    if info.get("_type") == "playlist":
+        out: list[VideoRef] = []
+        for i, e in enumerate(info.get("entries") or [], start=1):
+            if not e or e.get("_type") == "playlist" or not e.get("id"):
+                continue
+            out.append(_ref(e, e.get("playlist_index") or i))
+        return out
+    if not info.get("id"):
+        raise SourceError("yt-dlp returned an entry without an id")
+    return [_ref(info, None)]
+
+
+def _ref(e: dict[str, Any], index: int | None) -> VideoRef:
+    vid = str(e["id"])
+    url = e.get("webpage_url") or e.get("url") or f"https://www.youtube.com/watch?v={vid}"
+    duration = e.get("duration")
+    return VideoRef(
+        id=vid,
+        title=str(e.get("title") or vid),
+        url=str(url),
+        duration=int(duration) if duration else None,
+        playlist_index=int(index) if index is not None else None,
+        upload_date=str(e["upload_date"]) if e.get("upload_date") else None,
+    )
 
 
 def _result_from_info(info: dict[str, Any]) -> DownloadResult:

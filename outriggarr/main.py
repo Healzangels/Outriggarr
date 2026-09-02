@@ -13,15 +13,19 @@ from contextlib import asynccontextmanager
 
 import httpx
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from outriggarr import __version__
 from outriggarr.api.connections import router as connections_router
 from outriggarr.api.health import router as health_router
 from outriggarr.api.jobs import router as jobs_router
+from outriggarr.api.library import router as library_router
 from outriggarr.arr import ArrFactory, make_client
 from outriggarr.db.session import make_engine, make_session_factory, run_migrations
 from outriggarr.settings import Settings
 from outriggarr.source import VideoSource, YtDlpSource
+from outriggarr.web.pages import STATIC_DIR
+from outriggarr.web.pages import router as pages_router
 from outriggarr.worker.runner import RunnerDeps, run_worker
 
 log = logging.getLogger(__name__)
@@ -35,6 +39,7 @@ def create_app(
     source: VideoSource | None = None,
 ) -> FastAPI:
     settings = settings or Settings.from_env()
+    source = source or YtDlpSource()
     logging.basicConfig(
         level=settings.log_level, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
     )
@@ -49,6 +54,7 @@ def create_app(
         app.state.session_factory = make_session_factory(engine)
         app.state.http = httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0))
         app.state.arr_factory = arr_factory or (lambda conn: make_client(conn, app.state.http))
+        app.state.source = source
 
         stop = asyncio.Event()
         task = None
@@ -57,7 +63,7 @@ def create_app(
             deps = RunnerDeps(
                 session_factory=app.state.session_factory,
                 arr_factory=app.state.arr_factory,
-                source=source or YtDlpSource(),
+                source=source,
                 staging_dir=settings.staging_dir,
             )
             task = asyncio.create_task(run_worker(deps, stop))
@@ -75,6 +81,9 @@ def create_app(
     app.include_router(health_router)
     app.include_router(connections_router)
     app.include_router(jobs_router)
+    app.include_router(library_router)
+    app.include_router(pages_router)
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
     return app
 
 

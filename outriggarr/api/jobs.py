@@ -7,9 +7,10 @@ from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
 from outriggarr.api.deps import DbSession
-from outriggarr.db.models import Connection, ConnectionKind, Job, JobStatus, TargetKind
+from outriggarr.db.models import Connection, ConnectionKind, Job, JobStatus, TargetKind, utcnow
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 
@@ -19,6 +20,7 @@ class TargetIn(BaseModel):
     series_id: int | None = None
     episode_ids: list[int] | None = None
     movie_id: int | None = None
+    label: str | None = Field(default=None, max_length=300)
 
     @model_validator(mode="after")
     def _shape(self) -> TargetIn:
@@ -59,6 +61,7 @@ class JobOut(BaseModel):
     video_id: str
     video_url: str
     video_title: str
+    target_label: str | None
     status: JobStatus
     progress_pct: int
     staged_path: str | None
@@ -105,6 +108,7 @@ def create_jobs(body: list[JobIn], session: DbSession) -> list[Job]:
             video_id=item.video.id,
             video_url=item.video.url,
             video_title=item.video.title,
+            target_label=t.label,
         )
         session.add(job)
         jobs.append(job)
@@ -162,9 +166,62 @@ def list_jobs(
     return list(session.scalars(q))
 
 
-@router.get("/{job_id}", response_model=JobOut)
-def get_job(job_id: int, session: DbSession) -> Job:
+def _get_or_404(session: Session, job_id: int) -> Job:
     job = session.get(Job, job_id)
     if job is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"job {job_id} not found")
     return job
+
+
+@router.get("/{job_id}", response_model=JobOut)
+def get_job(job_id: int, session: DbSession) -> Job:
+    return _get_or_404(session, job_id)
+
+
+RETRYABLE = (JobStatus.failed, JobStatus.cancelled)
+CANCELLABLE = (JobStatus.queued, JobStatus.downloading, JobStatus.failed)
+
+
+def retry_job(session: Session, job_id: int) -> Job:
+    """failed | cancelled → queued. Plain function so the web layer can call it too."""
+    job = _get_or_404(session, job_id)
+    if job.status not in RETRYABLE:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"job {job_id} is {job.status.value}; only failed or cancelled jobs can be retried",
+        )
+    job.status = JobStatus.queued
+    job.next_retry_at = None
+    job.error = None
+    job.finished_at = None
+    job.progress_pct = 0
+    session.commit()
+    return job
+
+
+def cancel_job(session: Session, job_id: int, now: datetime | None = None) -> Job:
+    """queued | downloading | failed → cancelled. A running download notices via the
+    runner's abort check; staged files are swept by the worker."""
+    job = _get_or_404(session, job_id)
+    if job.status not in CANCELLABLE:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"job {job_id} is {job.status.value}; only queued, downloading or failed jobs "
+            "can be cancelled",
+        )
+    job.status = JobStatus.cancelled
+    job.next_retry_at = None
+    job.error = job.error or "cancelled"
+    job.finished_at = now or utcnow()
+    session.commit()
+    return job
+
+
+@router.post("/{job_id}/retry", response_model=JobOut)
+def retry(job_id: int, session: DbSession) -> Job:
+    return retry_job(session, job_id)
+
+
+@router.post("/{job_id}/cancel", response_model=JobOut)
+def cancel(job_id: int, session: DbSession) -> Job:
+    return cancel_job(session, job_id)

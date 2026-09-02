@@ -15,6 +15,15 @@ def anyio_backend() -> str:
     return "asyncio"
 
 
+@pytest.fixture(autouse=True)
+def _clear_library_cache():
+    from outriggarr.api.library import library_cache
+
+    library_cache.clear()
+    yield
+    library_cache.clear()
+
+
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
     return Settings.from_env(

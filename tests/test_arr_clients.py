@@ -514,3 +514,82 @@ def test_target_validation() -> None:
         Target(movie_id=1, series_id=2)
     assert Target(movie_id=1).is_movie
     assert not Target(series_id=1, episode_ids=(2,)).is_movie
+
+
+# ---- M3: library lookups ----------------------------------------------------------
+
+
+async def test_sonarr_series_and_episodes_parse() -> None:
+    def handler(r: httpx.Request) -> httpx.Response:
+        if r.url.path == "/base/api/v3/series":
+            return httpx.Response(
+                200,
+                json=[
+                    {"id": 5, "title": "Show", "year": 2020, "tvdbId": 77, "monitored": True},
+                    {"id": 6, "title": "Bare"},
+                ],
+            )
+        if r.url.path == "/base/api/v3/episode":
+            assert r.url.params["seriesId"] == "5"
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": 2,
+                        "seasonNumber": 1,
+                        "episodeNumber": 2,
+                        "title": "B",
+                        "hasFile": True,
+                        "monitored": False,
+                        "airDateUtc": "2024-01-02T00:00:00Z",
+                    },
+                    {"id": 1, "seasonNumber": 1, "episodeNumber": 1},
+                ],
+            )
+        raise AssertionError(r.url)
+
+    from outriggarr.arr.base import EpisodeRef, SeriesRef
+
+    client, _ = make(SonarrClient, handler)
+    assert await client.series() == [
+        SeriesRef(5, "Show", 2020, 77, True),
+        SeriesRef(6, "Bare", None, None, False),
+    ]
+    eps = await client.episodes(5)
+    assert eps == [
+        EpisodeRef(1, 1, 1, "", False, False, None),
+        EpisodeRef(2, 1, 2, "B", True, False, datetime(2024, 1, 2, tzinfo=UTC)),
+    ]
+    with pytest.raises(ArrError, match="no movies"):
+        await client.movies()
+
+
+async def test_radarr_movies_parse() -> None:
+    from outriggarr.arr.base import MovieRef
+
+    client, rec = make(
+        RadarrClient,
+        lambda r: httpx.Response(
+            200,
+            json=[
+                {
+                    "id": 7,
+                    "title": "Film",
+                    "year": 2001,
+                    "tmdbId": 9,
+                    "hasFile": False,
+                    "monitored": True,
+                },
+                {"id": 8, "title": "Bare"},
+            ],
+        ),
+    )
+    assert await client.movies() == [
+        MovieRef(7, "Film", 2001, 9, False, True),
+        MovieRef(8, "Bare", None, None, False, False),
+    ]
+    assert str(rec.requests[0].url) == f"{BASE}/api/v3/movie"
+    with pytest.raises(ArrError, match="no series"):
+        await client.series()
+    with pytest.raises(ArrError, match="no episodes"):
+        await client.episodes(1)

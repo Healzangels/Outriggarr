@@ -2,7 +2,16 @@ from __future__ import annotations
 
 from typing import Any
 
-from outriggarr.arr.base import ArrError, Target, TargetInfo, Wanted, WantedEpisode
+from outriggarr.arr.base import (
+    ArrError,
+    EpisodeRef,
+    MovieRef,
+    SeriesRef,
+    Target,
+    TargetInfo,
+    Wanted,
+    WantedEpisode,
+)
 from outriggarr.arr.common import ArrHttp, parse_datetime
 
 
@@ -49,6 +58,40 @@ class SonarrClient(ArrHttp):
 
     def _import_ids(self, target: Target) -> dict[str, Any]:
         return {"seriesId": target.series_id, "episodeIds": list(target.episode_ids)}
+
+    async def series(self) -> list[SeriesRef]:
+        data = await self.get("series")
+        return [
+            SeriesRef(
+                id=int(s["id"]),
+                title=str(s.get("title") or ""),
+                year=int(s["year"]) if s.get("year") else None,
+                tvdb_id=int(s["tvdbId"]) if s.get("tvdbId") else None,
+                monitored=bool(s.get("monitored")),
+            )
+            for s in data
+        ]
+
+    async def episodes(self, series_id: int) -> list[EpisodeRef]:
+        data = await self.get("episode", {"seriesId": series_id})
+        return sorted(
+            (
+                EpisodeRef(
+                    id=int(e["id"]),
+                    season_number=int(e["seasonNumber"]),
+                    episode_number=int(e["episodeNumber"]),
+                    title=str(e.get("title") or ""),
+                    has_file=bool(e.get("hasFile")),
+                    monitored=bool(e.get("monitored")),
+                    air_date_utc=parse_datetime(e.get("airDateUtc")),
+                )
+                for e in data
+            ),
+            key=lambda e: (e.season_number, e.episode_number),
+        )
+
+    async def movies(self) -> list[MovieRef]:
+        raise ArrError("Sonarr has no movies")
 
 
 def _episode(r: dict[str, Any]) -> WantedEpisode:

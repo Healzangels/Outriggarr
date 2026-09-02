@@ -2,7 +2,16 @@ from __future__ import annotations
 
 from typing import Any
 
-from outriggarr.arr.base import ArrError, Target, TargetInfo, Wanted, WantedMovie
+from outriggarr.arr.base import (
+    ArrError,
+    EpisodeRef,
+    MovieRef,
+    SeriesRef,
+    Target,
+    TargetInfo,
+    Wanted,
+    WantedMovie,
+)
 from outriggarr.arr.common import ArrHttp
 
 
@@ -30,6 +39,26 @@ class RadarrClient(ArrHttp):
 
     def _import_ids(self, target: Target) -> dict[str, Any]:
         return {"movieId": target.movie_id}
+
+    async def series(self) -> list[SeriesRef]:
+        raise ArrError("Radarr has no series")
+
+    async def episodes(self, series_id: int) -> list[EpisodeRef]:
+        raise ArrError("Radarr has no episodes")
+
+    async def movies(self) -> list[MovieRef]:
+        data = await self.get("movie")
+        return [
+            MovieRef(
+                id=int(m["id"]),
+                title=str(m.get("title") or ""),
+                year=int(m["year"]) if m.get("year") else None,
+                tmdb_id=int(m["tmdbId"]) if m.get("tmdbId") else None,
+                has_file=bool(m.get("hasFile")),
+                monitored=bool(m.get("monitored")),
+            )
+            for m in data
+        ]
 
 
 def _movie(r: dict[str, Any]) -> WantedMovie:

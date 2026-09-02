@@ -96,3 +96,64 @@ def test_validation(client: TestClient) -> None:
     r = client.post("/api/jobs", json=[movie])
     assert r.status_code == 201
     assert r.json()[0]["movie_id"] == 7 and r.json()[0]["video_title"] == ""
+
+
+def test_target_label_stored_and_returned(client: TestClient) -> None:
+    conn_id = client.post("/api/connections", json=SONARR).json()["id"]
+    body = episode_job(conn_id)
+    body["target"]["label"] = "Show S01E02 - Title"
+    (job,) = client.post("/api/jobs", json=[body]).json()
+    assert job["target_label"] == "Show S01E02 - Title"
+    plain = episode_job(conn_id, "other")
+    assert client.post("/api/jobs", json=[plain]).json()[0]["target_label"] is None
+
+
+def _set_status(client: TestClient, job_id: int, status: str) -> None:
+    from outriggarr.db.models import Job, JobStatus
+
+    with client.app.state.session_factory() as s:
+        job = s.get(Job, job_id)
+        job.status = JobStatus(status)
+        job.staged_path = "/staging/x"
+        job.error = "stale error from the previous attempt"
+        s.commit()
+
+
+def test_retry_transitions(client: TestClient) -> None:
+    conn_id = client.post("/api/connections", json=SONARR).json()["id"]
+    job_id = client.post("/api/jobs", json=[episode_job(conn_id)]).json()[0]["id"]
+    # queued → 409
+    r = client.post(f"/api/jobs/{job_id}/retry")
+    assert r.status_code == 409 and "queued" in r.json()["detail"]
+    for st in ("failed", "cancelled"):
+        _set_status(client, job_id, st)
+        r = client.post(f"/api/jobs/{job_id}/retry")
+        assert r.status_code == 200, r.text
+        assert r.json()["status"] == "queued"
+        assert r.json()["error"] is None and r.json()["next_retry_at"] is None
+        assert r.json()["finished_at"] is None and r.json()["progress_pct"] == 0
+    for st in ("downloading", "importing", "done"):
+        _set_status(client, job_id, st)
+        assert client.post(f"/api/jobs/{job_id}/retry").status_code == 409
+    assert client.post("/api/jobs/999/retry").status_code == 404
+
+
+def test_cancel_transitions(client: TestClient) -> None:
+    conn_id = client.post("/api/connections", json=SONARR).json()["id"]
+    job_id = client.post("/api/jobs", json=[episode_job(conn_id)]).json()[0]["id"]
+    # a fresh queued job has no error: cancel says so
+    r = client.post(f"/api/jobs/{job_id}/cancel")
+    assert r.status_code == 200 and r.json()["status"] == "cancelled"
+    assert r.json()["error"] == "cancelled" and r.json()["finished_at"] is not None
+    for st in ("queued", "downloading", "failed"):
+        _set_status(client, job_id, st)
+        r = client.post(f"/api/jobs/{job_id}/cancel")
+        assert r.status_code == 200, r.text
+        assert r.json()["status"] == "cancelled"
+        assert r.json()["finished_at"] is not None
+        assert r.json()["error"] == "stale error from the previous attempt", "failure text kept"
+        assert r.json()["staged_path"] == "/staging/x", "the worker sweeps the file, not the API"
+    for st in ("importing", "done", "cancelled"):
+        _set_status(client, job_id, st)
+        assert client.post(f"/api/jobs/{job_id}/cancel").status_code == 409
+    assert client.post("/api/jobs/999/cancel").status_code == 404

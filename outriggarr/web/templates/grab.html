@@ -1,0 +1,186 @@
+{% extends "base.html" %}
+{% block title %}Grab · Outriggarr{% endblock %}
+{% block content %}
+<h2>Grab</h2>
+{% if not connections %}
+<p class="warn">No enabled connections. Add Sonarr/Radarr first (JSON API <code>/api/connections</code>; Settings screen arrives in a later milestone).</p>
+{% endif %}
+<div x-data="grabApp()" x-init="init()">
+  <form @submit.prevent="resolve()">
+    <fieldset role="group">
+      <input type="url" x-model="url" placeholder="Video or playlist URL" required>
+      <button type="submit" :aria-busy="resolving" :disabled="resolving">Resolve</button>
+    </fieldset>
+  </form>
+  <p class="warn" x-show="error" x-text="error"></p>
+
+  <template x-if="videos.length">
+    <div>
+      <div class="grid">
+        <label>Target
+          <select x-model.number="connectionId" @change="connectionChanged()">
+            {% for c in connections %}<option value="{{ c.id }}">{{ c.name }} ({{ c.kind.value }})</option>{% endfor %}
+          </select>
+        </label>
+        <template x-if="kind === 'sonarr'">
+          <div class="rel">
+            <label>Series
+              <input type="search" x-model="seriesQuery" @input.debounce.300ms="searchSeries()" placeholder="type to search Sonarr" autocomplete="off">
+            </label>
+            <ul class="results" x-show="seriesResults.length" @click.outside="seriesResults = []">
+              <template x-for="s in seriesResults" :key="s.id">
+                <li @click="pickSeries(s)"><span x-text="s.title"></span> <span class="muted" x-text="s.year ? '(' + s.year + ')' : ''"></span></li>
+              </template>
+            </ul>
+          </div>
+        </template>
+        <template x-if="kind === 'sonarr' && series">
+          <div class="grid">
+            <label>Season
+              <select x-model.number="bulk.season"><template x-for="s in seasons" :key="s"><option :value="s" x-text="'Season ' + s"></option></template></select>
+            </label>
+            <label>Start at episode
+              <input type="number" min="0" x-model.number="bulk.start">
+            </label>
+            <label>&nbsp;<button type="button" @click="fillSequential()">Fill sequentially</button></label>
+          </div>
+        </template>
+      </div>
+      <p class="muted" x-show="kind === 'sonarr' && series" x-text="series ? series.title + ' · ' + episodes.length + ' episodes in Sonarr' : ''"></p>
+
+      <table class="grab">
+        <thead><tr><th></th><th>#</th><th>Video</th><th x-text="kind === 'sonarr' ? 'Episode' : 'Movie'"></th><th>Status</th></tr></thead>
+        <tbody>
+          <template x-for="(row, i) in rows" :key="row.video.id">
+            <tr>
+              <td><input type="checkbox" x-model="row.include"></td>
+              <td x-text="row.video.playlist_index ?? ''"></td>
+              <td><a :href="row.video.url" target="_blank" rel="noopener" x-text="row.video.title"></a>
+                  <br><span class="muted" x-text="fmtDuration(row.video.duration)"></span></td>
+              <td>
+                <template x-if="kind === 'sonarr'">
+                  <fieldset role="group" style="margin:0">
+                    <input type="number" min="0" placeholder="S" x-model.number="row.season" :disabled="!series" style="max-width:5em">
+                    <input type="number" min="0" placeholder="E" x-model.number="row.number" :disabled="!series" style="max-width:5em">
+                  </fieldset>
+                </template>
+                <template x-if="kind === 'radarr'">
+                  <div class="rel">
+                    <input type="search" x-model="row.movieQuery" @input.debounce.300ms="searchMovies(row)" placeholder="search Radarr" autocomplete="off">
+                    <ul class="results" x-show="row.movieResults.length" @click.outside="row.movieResults = []">
+                      <template x-for="m in row.movieResults" :key="m.id">
+                        <li @click="pickMovie(row, m)"><span x-text="m.title"></span> <span class="muted" x-text="m.year ? '(' + m.year + ')' : ''"></span></li>
+                      </template>
+                    </ul>
+                  </div>
+                </template>
+              </td>
+              <td><span :class="rowStatus(row).warn ? 'warn' : 'muted'" x-text="rowStatus(row).text"></span></td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+      <button type="button" @click="queue()" :disabled="queueing || !readyCount()" :aria-busy="queueing">
+        Queue <span x-text="readyCount()"></span> job(s)
+      </button>
+      <p x-show="result" x-html="result"></p>
+    </div>
+  </template>
+</div>
+
+<script>
+function grabApp() {
+  const connections = {{ connection_ids | tojson }};
+  const kinds = {{ kinds | tojson }};
+  return {
+    url: '', resolving: false, error: '', videos: [], rows: [],
+    connectionId: connections[0] ?? null, kind: connections.length ? kinds[connections[0]] : null,
+    seriesQuery: '', seriesResults: [], series: null, episodes: [], seasons: [],
+    bulk: { season: 1, start: 1 }, queueing: false, result: '',
+    init() {},
+    async api(method, path, body) {
+      const r = await fetch(path, { method, headers: { 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail ?? data));
+      return data;
+    },
+    async resolve() {
+      this.error = ''; this.result = ''; this.resolving = true;
+      try {
+        this.videos = await this.api('POST', '/api/resolve', { url: this.url });
+        this.rows = this.videos.map(v => ({ video: v, include: true, season: null, number: null, movieId: null, movieLabel: '', movieQuery: '', movieResults: [] }));
+        if (!this.videos.length) this.error = 'No videos found at that URL.';
+      } catch (e) { this.error = e.message; this.videos = []; this.rows = []; }
+      this.resolving = false;
+    },
+    connectionChanged() {
+      this.kind = kinds[this.connectionId]; this.series = null; this.episodes = []; this.seasons = []; this.seriesQuery = ''; this.seriesResults = [];
+      this.rows.forEach(r => { r.season = null; r.number = null; r.movieId = null; r.movieLabel = ''; });
+    },
+    async searchSeries() {
+      if (!this.seriesQuery.trim()) { this.seriesResults = []; return; }
+      try { this.seriesResults = await this.api('GET', `/api/connections/${this.connectionId}/series?q=${encodeURIComponent(this.seriesQuery)}`); }
+      catch (e) { this.error = e.message; }
+    },
+    async pickSeries(s) {
+      this.series = s; this.seriesQuery = s.title; this.seriesResults = []; this.error = '';
+      try {
+        this.episodes = await this.api('GET', `/api/connections/${this.connectionId}/series/${s.id}/episodes`);
+        this.seasons = [...new Set(this.episodes.map(e => e.season_number))].sort((a, b) => a - b);
+        const latest = this.seasons.length ? this.seasons[this.seasons.length - 1] : 1;
+        this.bulk.season = latest;
+        const inSeason = this.episodes.filter(e => e.season_number === latest && !e.has_file);
+        this.bulk.start = inSeason.length ? inSeason[0].episode_number : 1;
+      } catch (e) { this.error = e.message; this.episodes = []; this.seasons = []; }
+    },
+    fillSequential() {
+      let n = this.bulk.start;
+      this.rows.forEach(r => { if (r.include) { r.season = this.bulk.season; r.number = n++; } });
+    },
+    episodeFor(row) {
+      if (row.season == null || row.number == null) return null;
+      return this.episodes.find(e => e.season_number === row.season && e.episode_number === row.number) ?? null;
+    },
+    async searchMovies(row) {
+      if (!row.movieQuery.trim()) { row.movieResults = []; return; }
+      try { row.movieResults = await this.api('GET', `/api/connections/${this.connectionId}/movies?q=${encodeURIComponent(row.movieQuery)}`); }
+      catch (e) { this.error = e.message; }
+    },
+    pickMovie(row, m) { row.movieId = m.id; row.movieLabel = m.title + (m.year ? ` (${m.year})` : ''); row.movieQuery = row.movieLabel; row.movieResults = []; row.movieHasFile = m.has_file; },
+    rowStatus(row) {
+      if (!row.include) return { text: 'skipped', warn: false };
+      if (this.kind === 'sonarr') {
+        if (!this.series) return { text: 'pick a series', warn: true };
+        if (row.season == null || row.number == null) return { text: 'set S/E', warn: true };
+        const e = this.episodeFor(row);
+        if (!e) return { text: `S${row.season}E${row.number} not in Sonarr`, warn: true };
+        return { text: (e.has_file ? 'has file · ' : '') + (e.title || 'ready'), warn: e.has_file };
+      }
+      if (!row.movieId) return { text: 'pick a movie', warn: true };
+      return { text: row.movieHasFile ? 'has file' : 'ready', warn: !!row.movieHasFile };
+    },
+    isReady(row) {
+      if (!row.include) return false;
+      return this.kind === 'sonarr' ? !!this.episodeFor(row) : !!row.movieId;
+    },
+    readyCount() { return this.rows.filter(r => this.isReady(r)).length; },
+    fmtDuration(s) { if (!s) return ''; const m = Math.floor(s / 60), r = s % 60; return `${m}:${String(r).padStart(2, '0')}`; },
+    async queue() {
+      this.queueing = true; this.result = ''; this.error = '';
+      const jobs = this.rows.filter(r => this.isReady(r)).map(r => {
+        const target = this.kind === 'sonarr'
+          ? (() => { const e = this.episodeFor(r); return { kind: 'episode', series_id: this.series.id, episode_ids: [e.id], label: `${this.series.title} S${String(r.season).padStart(2, '0')}E${String(r.number).padStart(2, '0')}${e.title ? ' - ' + e.title : ''}` }; })()
+          : { kind: 'movie', movie_id: r.movieId, label: r.movieLabel };
+        return { connection_id: this.connectionId, target, video: { url: r.video.url, id: r.video.id, title: r.video.title } };
+      });
+      try {
+        const created = await this.api('POST', '/api/jobs', jobs);
+        this.result = `Queued ${created.length} job(s). <a href="/activity">Open Activity</a>.`;
+        this.rows.forEach(r => { if (this.isReady(r)) r.include = false; });
+      } catch (e) { this.error = e.message; }
+      this.queueing = false;
+    },
+  };
+}
+</script>
+{% endblock %}

@@ -1,0 +1,5 @@
+Vendored front-end assets (no build step; served from /static):
+
+- pico.min.css   Pico CSS 2.1.1      MIT          https://picocss.com
+- htmx.min.js    htmx 2.0.4          BSD 2-Clause https://htmx.org
+- alpine.min.js  Alpine.js 3.14.8    MIT          https://alpinejs.dev

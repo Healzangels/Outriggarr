@@ -102,6 +102,9 @@ class Job(Base):
     video_id: Mapped[str] = mapped_column(String(100), nullable=False)
     video_url: Mapped[str] = mapped_column(String(1000), nullable=False)
     video_title: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    # Human label for the target ("Hot Ones S30E09 - …"), supplied by whoever creates the
+    # job (the GUI knows it); purely for display.
+    target_label: Mapped[str | None] = mapped_column(String(300))
     status: Mapped[JobStatus] = mapped_column(
         Enum(JobStatus), nullable=False, default=JobStatus.queued, index=True
     )

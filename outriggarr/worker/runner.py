@@ -46,6 +46,7 @@ BACKOFF: tuple[timedelta, ...] = (timedelta(hours=1), timedelta(hours=6), timede
 MAX_ATTEMPTS = len(BACKOFF) + 1
 COMMAND_TIMEOUT_SECONDS = 600.0
 PROGRESS_WRITE_INTERVAL = 2.0
+CANCEL_CHECK_INTERVAL = 2.0
 
 
 @dataclass
@@ -72,6 +73,43 @@ def target_of(job: Job) -> Target:
     if job.movie_id is not None:
         return Target(movie_id=job.movie_id)
     return Target(series_id=job.series_id, episode_ids=tuple(job.episode_ids or ()))
+
+
+def sweep_cancelled(session: Session, staging_dir: Path) -> int:
+    """Remove staging folders of cancelled jobs that still reference one."""
+    rows = list(
+        session.scalars(
+            select(Job).where(Job.status == JobStatus.cancelled, Job.staged_path.is_not(None))
+        )
+    )
+    for job in rows:
+        shutil.rmtree(staging_dir / str(job.id), ignore_errors=True)
+        job.staged_path = None
+    if rows:
+        session.commit()
+    return len(rows)
+
+
+def abort_check(
+    deps: RunnerDeps, job_id: int, stop_is_set: Callable[[], bool]
+) -> Callable[[], bool]:
+    """Abort when the worker is stopping or the job was cancelled (DB read, throttled)."""
+    last = 0.0
+    cancelled = False
+
+    def check() -> bool:
+        nonlocal last, cancelled
+        if stop_is_set():
+            return True
+        t = time.monotonic()
+        if t - last >= CANCEL_CHECK_INTERVAL:
+            last = t
+            with deps.session_factory() as s:
+                row = s.get(Job, job_id)
+                cancelled = row is not None and row.status is JobStatus.cancelled
+        return cancelled
+
+    return check
 
 
 def claim_next_jobs(session: Session, limit: int, now: datetime) -> list[int]:
@@ -102,6 +140,7 @@ async def run_worker(deps: RunnerDeps, stop: asyncio.Event) -> None:
         running = {t for t in running if not t.done()}
         try:
             with deps.session_factory() as session:
+                sweep_cancelled(session, deps.staging_dir)
                 concurrency = int(get_setting(session, "concurrency"))
                 ids = claim_next_jobs(session, concurrency - len(running), deps.now())
         except Exception:
@@ -117,9 +156,9 @@ async def run_worker(deps: RunnerDeps, stop: asyncio.Event) -> None:
     log.info("worker stopped")
 
 
-async def _guarded(deps: RunnerDeps, job_id: int, should_abort: Callable[[], bool]) -> None:
+async def _guarded(deps: RunnerDeps, job_id: int, stop_is_set: Callable[[], bool]) -> None:
     try:
-        await process_job(deps, job_id, should_abort)
+        await process_job(deps, job_id, abort_check(deps, job_id, stop_is_set))
     except Exception as exc:  # a bug, not a job outcome: record it, keep the worker alive
         log.exception("job %d crashed", job_id)
         with deps.session_factory() as session:
@@ -150,15 +189,23 @@ async def process_job(
 
         try:
             staged = await _download_stage(deps, session, job, client, target, dest, should_abort)
+            if _cancelled_meanwhile(session, job):
+                raise DownloadAborted("cancelled")
             job.status = JobStatus.importing
             session.commit()
             imported = await _import_stage(
                 deps, session, job, client, target, remote_folder, staged
             )
         except DownloadAborted:
-            job.status = JobStatus.queued
-            job.attempts -= 1
-            job.error = "interrupted; will resume"
+            shutil.rmtree(dest, ignore_errors=True)
+            if _cancelled_meanwhile(session, job):
+                job.staged_path = None
+                job.error = "cancelled during download"
+                job.finished_at = deps.now()
+            else:
+                job.status = JobStatus.queued
+                job.attempts -= 1
+                job.error = "interrupted; will resume"
             session.commit()
             return
         except _Retry as exc:
@@ -181,6 +228,12 @@ async def process_job(
             job.error = "target already has a file; nothing imported"
             log.info("job %d: target already satisfied, staged file discarded", job.id)
         session.commit()
+
+
+def _cancelled_meanwhile(session: Session, job: Job) -> bool:
+    """The API may have flipped the row to cancelled while we were busy in this session."""
+    session.refresh(job, attribute_names=["status"])
+    return job.status is JobStatus.cancelled
 
 
 async def _download_stage(

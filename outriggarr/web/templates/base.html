@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Outriggarr{% endblock %}</title>
+  <link rel="stylesheet" href="/static/pico.min.css">
+  <script src="/static/htmx.min.js"></script>
+  <script defer src="/static/alpine.min.js"></script>
+  <style>
+    main.container { max-width: 1200px; }
+    nav a.active { text-decoration: underline; }
+    .status { font-size: .8em; padding: .1em .5em; border-radius: .4em; white-space: nowrap; }
+    .status-queued, .status-downloading, .status-importing { background: #2a4a7a; }
+    .status-done { background: #2f6b3a; }
+    .status-failed { background: #7a2a2a; }
+    .status-cancelled { background: #555; }
+    td.actions { white-space: nowrap; }
+    td.actions button { margin: 0 .2em 0 0; padding: .2em .6em; font-size: .85em; }
+    details.error pre { white-space: pre-wrap; font-size: .8em; max-width: 60ch; }
+    progress { margin: 0; }
+    .muted { opacity: .7; font-size: .85em; }
+    table.grab td, table.grab th { vertical-align: top; }
+    .results { position: absolute; z-index: 10; background: var(--pico-card-background-color); border: 1px solid var(--pico-muted-border-color); max-height: 16em; overflow-y: auto; margin: 0; padding: 0; list-style: none; width: 100%; }
+    .results li { padding: .3em .6em; cursor: pointer; }
+    .results li:hover { background: var(--pico-secondary-background); }
+    .rel { position: relative; }
+    .warn { color: #e8a33d; }
+  </style>
+</head>
+<body>
+  <nav class="container">
+    <ul><li><strong>Outriggarr</strong></li></ul>
+    <ul>
+      <li><a href="/activity" class="{% if request.url.path.startswith('/activity') %}active{% endif %}">Activity</a></li>
+      <li><a href="/grab" class="{% if request.url.path.startswith('/grab') %}active{% endif %}">Grab</a></li>
+    </ul>
+  </nav>
+  <main class="container">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

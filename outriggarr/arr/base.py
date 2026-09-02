@@ -53,6 +53,36 @@ Wanted = WantedEpisode | WantedMovie
 
 
 @dataclass(frozen=True)
+class SeriesRef:
+    id: int
+    title: str
+    year: int | None
+    tvdb_id: int | None
+    monitored: bool
+
+
+@dataclass(frozen=True)
+class EpisodeRef:
+    id: int
+    season_number: int
+    episode_number: int
+    title: str
+    has_file: bool
+    monitored: bool
+    air_date_utc: datetime | None
+
+
+@dataclass(frozen=True)
+class MovieRef:
+    id: int
+    title: str
+    year: int | None
+    tmdb_id: int | None
+    has_file: bool
+    monitored: bool
+
+
+@dataclass(frozen=True)
 class Target:
     """What a job imports into: Sonarr episodes of one series, or one Radarr movie."""
 
@@ -151,6 +181,18 @@ class ArrClient(Protocol):
         ...
 
     async def target_info(self, target: Target) -> TargetInfo: ...
+
+    async def series(self) -> list[SeriesRef]:
+        """All series (Sonarr). Radarr raises ArrError."""
+        ...
+
+    async def episodes(self, series_id: int) -> list[EpisodeRef]:
+        """All episodes of one series (Sonarr). Radarr raises ArrError."""
+        ...
+
+    async def movies(self) -> list[MovieRef]:
+        """All movies (Radarr). Sonarr raises ArrError."""
+        ...
 
     async def manual_import_candidates(self, folder: str) -> list[ImportCandidate]:
         """GET /manualimport?folder=<folder as the *arr sees it>. Never pass seriesId /

@@ -432,3 +432,111 @@ async def test_second_job_for_same_target_is_cancelled_after_first_imports(deps,
     assert get_job(deps, first).status is JobStatus.done
     assert get_job(deps, second).status is JobStatus.cancelled
     assert len(deps.arr_factory.by_url["http://sonarr-host:1"].imports) == 1
+
+
+async def test_cancel_during_download_ends_cancelled_and_cleans_up(
+    deps, session_factory, monkeypatch
+):
+    import outriggarr.worker.runner as runner
+
+    monkeypatch.setattr(runner, "CANCEL_CHECK_INTERVAL", 0.0)
+    conn_id = add_connection(session_factory)
+    job_id = add_job(session_factory, conn_id)
+    fake = fake_for(deps, conn_id)
+
+    real = deps.source.download
+    seen: list[float] = []
+
+    def cancel_midway(url, dest_dir, *, progress, should_abort, **kw):
+        def p(pct: float) -> None:
+            seen.append(pct)
+            progress(pct)
+            if pct == 50.0:  # the user hits Cancel while the download runs
+                with session_factory() as s:
+                    s.get(Job, job_id).status = JobStatus.cancelled
+                    s.commit()
+
+        return real(url, dest_dir, progress=p, should_abort=should_abort, **kw)
+
+    deps.source.download = cancel_midway
+    await process_job(deps, job_id, runner.abort_check(deps, job_id, lambda: False))
+
+    assert seen == [50.0], "the download must be aborted mid-way, not run to completion"
+    job = get_job(deps, job_id)
+    assert job.status is JobStatus.cancelled
+    assert job.error == "cancelled during download"
+    assert job.staged_path is None
+    assert not (deps.staging_dir / str(job_id)).exists()
+    assert fake.imports == []
+
+
+async def test_cancel_after_download_before_import_is_honoured(deps, session_factory):
+    conn_id = add_connection(session_factory)
+    job_id = add_job(session_factory, conn_id)
+    fake = fake_for(deps, conn_id)
+    real = deps.source.download
+
+    def cancel_at_end(url, dest_dir, **kw):
+        result = real(url, dest_dir, **kw)
+        with session_factory() as s:
+            s.get(Job, job_id).status = JobStatus.cancelled
+            s.commit()
+        return result
+
+    deps.source.download = cancel_at_end
+    await process_job(deps, job_id, lambda: False)
+    job = get_job(deps, job_id)
+    assert job.status is JobStatus.cancelled
+    assert fake.imports == []
+    assert not (deps.staging_dir / str(job_id)).exists()
+
+
+def test_sweep_cancelled_removes_staging_folders(session_factory, staging: Path) -> None:
+    from outriggarr.worker.runner import sweep_cancelled
+
+    conn_id = add_connection(session_factory)
+    cancelled = add_job(
+        session_factory,
+        conn_id,
+        video_id="a",
+        status=JobStatus.cancelled,
+        staged_path=str(staging / "1" / "x.mkv"),
+    )
+    kept = add_job(
+        session_factory,
+        conn_id,
+        video_id="b",
+        status=JobStatus.failed,
+        staged_path=str(staging / "2" / "y.mkv"),
+    )
+    for j in (cancelled, kept):
+        (staging / str(j)).mkdir()
+        (staging / str(j) / "f.mkv").write_bytes(b"x")
+    with session_factory() as s:
+        assert sweep_cancelled(s, staging) == 1
+        assert sweep_cancelled(s, staging) == 0
+        assert s.get(Job, cancelled).staged_path is None
+        assert s.get(Job, kept).staged_path is not None
+    assert not (staging / str(cancelled)).exists()
+    assert (staging / str(kept)).exists()
+
+
+async def test_worker_sweeps_cancelled_jobs(deps, session_factory) -> None:
+    conn_id = add_connection(session_factory)
+    job_id = add_job(
+        session_factory,
+        conn_id,
+        status=JobStatus.cancelled,
+        staged_path=str(deps.staging_dir / "1" / "x.mkv"),
+    )
+    (deps.staging_dir / str(job_id)).mkdir()
+    stop = asyncio.Event()
+    task = asyncio.create_task(run_worker(deps, stop))
+    for _ in range(100):
+        await asyncio.sleep(0.01)
+        if not (deps.staging_dir / str(job_id)).exists():
+            break
+    stop.set()
+    await asyncio.wait_for(task, 2)
+    assert not (deps.staging_dir / str(job_id)).exists()
+    assert get_job(deps, job_id).staged_path is None

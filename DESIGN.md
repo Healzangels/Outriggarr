@@ -65,7 +65,7 @@ Deferred, not rejected. Source, matcher, and runner carry over unchanged if it i
 | `connection` | id, kind (`sonarr`/`radarr`), name, url, api_key, staging_path_remote (how that *arr sees `/staging`), enabled |
 | `subscription` | id, connection_id, series_id (Sonarr's), tvdb_id, title (snapshot for display), source_url, format (nullable → global default), strategies, date_tolerance_days, date_offset_days, title_regex, enabled, last_scan_at |
 | `override` | subscription_id, video_id, season, episode |
-| `job` | id, connection_id, target_kind (`episode`/`movie`), series_id, episode_ids (JSON), movie_id, target_key, video_id, video_url, video_title, status, progress_pct, staged_path, error, attempts, next_retry_at, created_at, finished_at |
+| `job` | id, connection_id, target_kind (`episode`/`movie`), series_id, episode_ids (JSON), movie_id, target_key, target_label (display only, supplied by the creator), video_id, video_url, video_title, status, progress_pct, staged_path, error, attempts, next_retry_at, created_at, finished_at |
 | `setting` | key, value — scan interval, concurrency, default format, merge container, yt-dlp extra opts (JSON), cookies path |
 
 Job status: `queued → downloading → importing → done | failed | cancelled`. Unique constraint on `(connection_id, target_key, video_id)` for dedupe, where `target_key` is derived from the target ids (`episode:<series_id>:<sorted episode ids>` or `movie:<movie_id>`) so SQLite has a scalar column to constrain instead of a JSON list.
@@ -122,8 +122,8 @@ Default yt-dlp format: `bestvideo*[height<=1080][vcodec^=avc1]+bestaudio[acodec^
 | **Settings → Connections** | Add/edit Sonarr and Radarr: URL, API key, remote staging path. *Test* button (hits `/api/v3/system/status`, checks the reported `appName` matches the connection kind, and checks the staging path is visible via `/api/v3/filesystem`). `/filesystem` returns an empty listing for a missing directory, identical to an empty one, so the check lists the parent and looks for the staging directory in it. |
 | **Settings → Downloads** | Scan interval, concurrency, default yt-dlp format, container, cookies file, extra yt-dlp options (JSON passthrough — one escape hatch instead of a setting per feature). |
 | **Series** | Table of Sonarr's series pulled live, with a *subscribed* indicator. Subscribe → form: source URL, format override, strategies, tolerance/offset, regex. Detail view: wanted episodes, match preview, unmatched list with "set override", *Scan now*. |
-| **Grab** | Paste a video or playlist URL → flat-resolve → table of videos. For each: pick a target (Sonarr series → season/episode picker, or Radarr movie search). Playlist helper: "start at S01E01 and number sequentially" bulk-fill, editable per row. *Queue* creates jobs. |
-| **Activity** | Queue (progress bars), history, failed with error text and *Retry* / *Cancel*. |
+| **Grab** | Paste a video or playlist URL → flat-resolve → table of videos. For each: pick a target (Sonarr series → season/episode picker, or Radarr movie search). Playlist helper: "start at S01E01 and number sequentially" bulk-fill, editable per row. *Queue* creates jobs. Implemented as one Alpine.js component talking to the JSON API (`/api/resolve`, the library lookups, `POST /api/jobs`); a row is queueable only when its S/E resolves to a real Sonarr episode id (or a movie is picked); rows whose target already has a file are flagged. |
+| **Activity** | One table, views all/active/failed/done, refreshed by HTMX every 3 s; error text verbatim in a collapsible; *Retry* / *Cancel* post to the web routes, which call the same functions as the JSON API and return the refreshed table. |
 
 Optional: tag subscribed series in Sonarr with an `outriggarr` tag so they are visible from Sonarr's side. Cheap, but not required — later.
 
@@ -140,7 +140,8 @@ PUT/DELETE           /api/subscriptions/{id}/overrides/{video_id}
 POST                 /api/resolve  {url}  → list of videos (flat)
 POST                 /api/jobs     [{connection_id, target:{kind, series_id, episode_ids | movie_id}, video:{url, id, title}}]  (all-or-nothing; 409 lists duplicates)
 GET                  /api/jobs?status=     GET /api/jobs/{id}
-POST                 /api/jobs/{id}/retry   /cancel
+POST                 /api/jobs/{id}/retry   (failed|cancelled → queued)   /cancel  (queued|downloading|failed → cancelled; a running download aborts within ~2 s and the worker removes its staging folder; importing cannot be cancelled)
+GET                  /api/connections/{id}/series?q=&limit=   /series/{sid}/episodes   /movies?q=&limit=   (live; series/movies listings cached 60 s per connection)
 GET/PUT              /api/settings
 ```
 
@@ -204,7 +205,7 @@ Python 3.12, FastAPI, SQLAlchemy 2.x + Alembic, `yt-dlp` (library), `httpx`, Jin
 1. ~~Name.~~ Outriggarr.
 2. ~~Actual host path for staging, and how it is mounted into Sonarr and Radarr.~~ Half answered: both Sonarr and Radarr already share a `/data` mount and see the staging root as `/data/outriggarr` (`staging_path_remote`). The host path behind `/data`, which Outriggarr must mount as `/staging`, is still to be supplied at deployment.
 3. Are the target series already on TVDB with full episode lists? If not, that is the first blocker, not code.
-4. HTMX vs React — accept the recommendation, or is there a preference?
+4. ~~HTMX vs React — accept the recommendation, or is there a preference?~~ HTMX (decided before M3). Pico CSS, htmx and Alpine.js are vendored under `web/static/` (see NOTICE there); no CDN, no build step.
 5. Sonarr tag on subscribed series — wanted in v1 or later?
 6. SponsorBlock segment removal as a default (`extra_opts`), given iSponsorBlockTV already runs on the playback side?
 
@@ -217,7 +218,7 @@ Each milestone is independently useful and ends with a confirmation step. The in
 | M0 | Skeleton | Repo layout per CLAUDE.md; FastAPI boots; DB + first Alembic migration (`connection`, `setting`, `job`); `/health`; Dockerfile builds and runs. |
 | M1 | Connections | `ArrClient` protocol; Sonarr and Radarr `status()`, `quality_definitions()`, `wanted()`; connections CRUD + *Test* over the JSON API against the real instances. |
 | M2 | Job pipeline, headless | Runner: download → manual import → cleanup, with retry/backoff. Proven by posting one job for a real wanted Sonarr episode via the JSON API and seeing the file land in the library, renamed by Sonarr, with the staging folder empty. Same for one Radarr movie. **Proven 2026-09-01 on the real stack**: Sonarr (Hot Ones S30E09) and Radarr (Big Buck Bunny, 2008) both moved + renamed into their library folders by ManualImport, `hasFile` true, staging folder empty. |
-| M3 | Grab + Activity screens | Paste URL/playlist → resolve → target picker (series/season/episode, movie search) → bulk-fill → queue. Activity with progress, retry, cancel. |
+| M3 | Grab + Activity screens | Paste URL/playlist → resolve → target picker (series/season/episode, movie search) → bulk-fill → queue. Activity with progress, retry, cancel. Done when a job queued from the Grab page on the deployed container imports, and Cancel on a running download stops it and leaves no staging folder. |
 | M4 | Subscriptions | `matcher.py` (pure, tested); scheduler; overrides; Series screen with match preview and unmatched list; `Scan now`. |
 | M5 | Operational polish | PUID/PGID; cookies file; yt-dlp extra opts; opt-in yt-dlp self-update; optional Sonarr tag; README. |
 

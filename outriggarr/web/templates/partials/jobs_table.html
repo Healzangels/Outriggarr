@@ -1,0 +1,37 @@
+{% if not jobs %}
+<p class="muted">No jobs{% if view != "all" %} in "{{ view }}"{% endif %}. Queue one from <a href="/grab">Grab</a>.</p>
+{% else %}
+<table>
+  <thead><tr><th>#</th><th>Status</th><th>Target</th><th>Video</th><th>Progress</th><th>Attempts</th><th></th></tr></thead>
+  <tbody>
+  {% for job in jobs %}
+    <tr id="job-{{ job.id }}">
+      <td>{{ job.id }}</td>
+      <td><span class="status status-{{ job.status.value }}">{{ job.status.value }}</span>
+        {% if job.next_retry_at %}<br><span class="muted">retry {{ job.next_retry_at.strftime("%Y-%m-%d %H:%M") }}Z</span>{% endif %}
+      </td>
+      <td>
+        {% if job.target_label %}{{ job.target_label }}{% else %}
+          {% if job.target_kind.value == "episode" %}series {{ job.series_id }} · episodes {{ job.episode_ids }}{% else %}movie {{ job.movie_id }}{% endif %}
+        {% endif %}
+        <br><span class="muted">{{ job.connection.name }}</span>
+      </td>
+      <td><a href="{{ job.video_url }}" target="_blank" rel="noopener">{{ job.video_title or job.video_id }}</a>
+        {% if job.error %}<details class="error"><summary class="warn">error</summary><pre>{{ job.error }}</pre></details>{% endif %}
+      </td>
+      <td>
+        {% if job.status.value == "downloading" %}<progress value="{{ job.progress_pct }}" max="100"></progress> {{ job.progress_pct }}%
+        {% elif job.status.value == "importing" %}<progress></progress> importing
+        {% elif job.status.value == "done" %}100%
+        {% else %}<span class="muted">{{ job.progress_pct }}%</span>{% endif %}
+      </td>
+      <td>{{ job.attempts }}</td>
+      <td class="actions">
+        {% if job.status in RETRYABLE %}<button hx-post="/activity/jobs/{{ job.id }}/retry?view={{ view }}" hx-target="#jobs">Retry</button>{% endif %}
+        {% if job.status in CANCELLABLE %}<button class="secondary" hx-post="/activity/jobs/{{ job.id }}/cancel?view={{ view }}" hx-target="#jobs" hx-confirm="Cancel job {{ job.id }}?">Cancel</button>{% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}

@@ -9,17 +9,20 @@ from pathlib import Path
 from outriggarr.arr.base import (
     ArrError,
     CommandStatus,
+    EpisodeRef,
     ImportCandidate,
     ImportFile,
     Language,
+    MovieRef,
     QualityDefinition,
+    SeriesRef,
     SystemStatus,
     Target,
     TargetInfo,
     Wanted,
 )
 from outriggarr.db.models import Connection, ConnectionKind
-from outriggarr.source import DownloadAborted, DownloadResult
+from outriggarr.source import DownloadAborted, DownloadResult, SourceError, VideoRef
 
 DEFAULT_QUALITIES = [
     QualityDefinition(id=i, quality_id=i, name=n, title=n, weight=i)
@@ -65,6 +68,11 @@ class FakeArrClient:
     command_statuses: list[str] = field(default_factory=lambda: ["queued", "started", "completed"])
     import_sets_has_file: bool = True
     has_file: dict[Target, bool] = field(default_factory=dict)  # per-target override
+    # library
+    series_list: list[SeriesRef] = field(default_factory=list)
+    episodes_by_series: dict[int, list[EpisodeRef]] = field(default_factory=dict)
+    movies_list: list[MovieRef] = field(default_factory=list)
+    library_loads: int = 0
     # recording
     calls: list[tuple[str, object]] = field(default_factory=list)
     imports: list[list[ImportFile]] = field(default_factory=list)
@@ -98,6 +106,26 @@ class FakeArrClient:
         if self.path_error is not None:
             raise self.path_error
         return path.rstrip("/") in self.visible_paths
+
+    async def series(self) -> list[SeriesRef]:
+        self.calls.append(("series", None))
+        if self.kind is not ConnectionKind.sonarr:
+            raise ArrError("Radarr has no series")
+        self.library_loads += 1
+        return list(self.series_list)
+
+    async def episodes(self, series_id: int) -> list[EpisodeRef]:
+        self.calls.append(("episodes", series_id))
+        if self.kind is not ConnectionKind.sonarr:
+            raise ArrError("Radarr has no episodes")
+        return list(self.episodes_by_series.get(series_id, []))
+
+    async def movies(self) -> list[MovieRef]:
+        self.calls.append(("movies", None))
+        if self.kind is not ConnectionKind.radarr:
+            raise ArrError("Sonarr has no movies")
+        self.library_loads += 1
+        return list(self.movies_list)
 
     async def target_info(self, target: Target) -> TargetInfo:
         self.calls.append(("target_info", target))
@@ -172,6 +200,15 @@ class FakeVideoSource:
     error: Exception | None = None
     payload: bytes = b"\x00" * 16
     calls: list[dict[str, object]] = field(default_factory=list)
+    videos: list[VideoRef] = field(default_factory=list)
+    resolve_error: Exception | None = None
+    resolved: list[str] = field(default_factory=list)
+
+    def resolve(self, url: str) -> list[VideoRef]:
+        self.resolved.append(url)
+        if self.resolve_error is not None:
+            raise self.resolve_error
+        return list(self.videos)
 
     def download(self, url, dest_dir: Path, *, fmt, merge_container, progress, should_abort):
         self.calls.append({"url": url, "dest": dest_dir, "fmt": fmt, "container": merge_container})
@@ -191,4 +228,4 @@ class FakeVideoSource:
         )
 
 
-__all__ = ["ArrError", "FakeArrClient", "FakeArrFactory", "FakeVideoSource"]
+__all__ = ["ArrError", "FakeArrClient", "FakeArrFactory", "FakeVideoSource", "SourceError"]
