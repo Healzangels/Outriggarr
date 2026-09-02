@@ -34,6 +34,7 @@ services:
       TZ: "Etc/UTC"
       OUTRIGGARR_YTDLP_UPDATE: "0"   # "1" upgrades yt-dlp on every start
       OUTRIGGARR_STAGING_DIR: /data/outriggarr
+    stop_grace_period: 60s            # lets an in-flight download abort cleanly (Docker's default 10 s kills it)
     volumes:
       - ./config:/config             # SQLite DB, cookies file, deno cache
       - /path/to/data:/data          # the same data share Sonarr/Radarr mount

@@ -7,7 +7,7 @@ RUN apt-get update \
     && unzip -q /tmp/deno.zip -d /usr/local/bin && rm /tmp/deno.zip && chmod +x /usr/local/bin/deno \
     && apt-get purge -y curl unzip && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
 
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.12 /uv /usr/local/bin/uv
 
 WORKDIR /app
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PROJECT_ENVIRONMENT=/app/.venv
@@ -31,4 +31,4 @@ ENV PATH="/app/.venv/bin:$PATH" \
 VOLUME ["/config"]
 
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["sh", "-c", "uvicorn outriggarr.main:app --host 0.0.0.0 --port ${OUTRIGGARR_PORT}"]
+CMD ["sh", "-c", "exec uvicorn outriggarr.main:app --host 0.0.0.0 --port ${OUTRIGGARR_PORT}"]

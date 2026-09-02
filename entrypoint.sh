@@ -10,13 +10,18 @@ set -e
 umask "${UMASK:-022}"
 
 if [ "${OUTRIGGARR_YTDLP_UPDATE:-0}" = "1" ]; then
-    echo "entrypoint: upgrading yt-dlp (OUTRIGGARR_YTDLP_UPDATE=1)"
-    uv pip install --python /app/.venv/bin/python --upgrade yt-dlp || echo "entrypoint: yt-dlp upgrade failed; continuing with the bundled version"
+    echo "entrypoint: upgrading yt-dlp + yt-dlp-ejs (OUTRIGGARR_YTDLP_UPDATE=1)"
+    # ejs is pinned by yt-dlp per release: upgrade them together or the JS challenge
+    # solver stops loading. Cache under /tmp so nothing root-owned lands in /config.
+    UV_CACHE_DIR=/tmp/uv-cache uv pip install --python /app/.venv/bin/python --upgrade yt-dlp yt-dlp-ejs \
+        || echo "entrypoint: yt-dlp upgrade failed; continuing with the bundled version"
+    /app/.venv/bin/python -c "import yt_dlp, importlib.metadata as m; print('entrypoint: yt-dlp', yt_dlp.version.__version__, 'yt-dlp-ejs', m.version('yt-dlp-ejs'))" || true
 fi
 
 if [ "$(id -u)" = "0" ] && [ -n "${PUID:-}" ]; then
     PGID="${PGID:-$PUID}"
-    chown "$PUID:$PGID" /config 2>/dev/null || true
+    # Recursive: a container first run as root (no PUID) leaves app.db/.deno root-owned.
+    chown -R "$PUID:$PGID" /config 2>/dev/null || true
     # A bind-mount source that did not exist gets created by Docker as root:root 755,
     # which the unprivileged app cannot write into. Create/take ownership of the staging
     # directory only (never its parent share, never its contents — Sonarr/Radarr may own

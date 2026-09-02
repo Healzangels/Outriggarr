@@ -18,7 +18,18 @@ FALLBACK_QUALITY = "WEBDL-480p"
 _UNSAFE = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 _WS = re.compile(r"\s+")
 _QUALITY_TAG = re.compile(r"\[(WEBDL-\d{3,4}p)\]")
-MAX_STEM = 180
+MAX_STEM = 180  # characters, but see MAX_STEM_BYTES: Linux limits a NAME to 255 bytes
+MAX_STEM_BYTES = 200  # leaves room for " [WEBDL-2160p]" + ".ext" and a ".xx.srt" sidecar
+
+
+def _fit(stem: str) -> str:
+    """Trim a stem to MAX_STEM characters and MAX_STEM_BYTES of UTF-8, never splitting
+    a character; CJK/emoji titles exceed NAME_MAX long before 180 characters."""
+    stem = stem[:MAX_STEM]
+    encoded = stem.encode("utf-8")
+    if len(encoded) > MAX_STEM_BYTES:
+        stem = encoded[:MAX_STEM_BYTES].decode("utf-8", errors="ignore")
+    return stem.rstrip(" .")
 
 
 def quality_for_height(height: int | None) -> str:
@@ -61,11 +72,11 @@ def episode_filename(
     stem = f"{sanitize(series_title)} - {episode_code(season, episode_numbers)}"
     if episode_title:
         stem += f" - {sanitize(episode_title)}"
-    return f"{stem[:MAX_STEM].rstrip(' .')} [{quality}].{ext.lstrip('.')}"
+    return f"{_fit(stem)} [{quality}].{ext.lstrip('.')}"
 
 
 def movie_filename(title: str, year: int | None, quality: str, ext: str) -> str:
     stem = sanitize(title)
     if year:
         stem += f" ({year})"
-    return f"{stem[:MAX_STEM].rstrip(' .')} [{quality}].{ext.lstrip('.')}"
+    return f"{_fit(stem)} [{quality}].{ext.lstrip('.')}"

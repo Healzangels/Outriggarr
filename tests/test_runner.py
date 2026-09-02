@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -9,7 +10,7 @@ import pytest
 from outriggarr.arr.base import ArrError, ImportCandidate, Language, Target
 from outriggarr.db.models import Connection, ConnectionKind, Job, JobStatus, TargetKind
 from outriggarr.settings import DEFAULTS, set_setting
-from outriggarr.source import SourceError
+from outriggarr.source import DownloadAborted, SourceError
 from outriggarr.worker.runner import (
     BACKOFF,
     MAX_ATTEMPTS,
@@ -216,6 +217,7 @@ async def test_already_has_file_cancels_without_import(deps, session_factory) ->
     assert job.status is JobStatus.cancelled
     assert "already has a file" in job.error
     assert fake.imports == []
+    assert deps.source.calls == [], "a satisfied target is detected BEFORE the download"
     assert not (deps.staging_dir / str(job_id)).exists()
 
 
@@ -223,7 +225,7 @@ async def test_no_candidate_lists_what_server_saw(deps, session_factory) -> None
     conn_id = add_connection(session_factory)
     job_id = add_job(session_factory, conn_id)
     fake = fake_for(deps, conn_id)
-    fake.candidates_override = [ImportCandidate("/x/other.mkv", "other.mkv", "other", 1, (), ())]
+    fake.candidates_override = [ImportCandidate(9, "/x/other.mkv", "other.mkv", "other", 1, (), ())]
 
     await process_job(deps, job_id)
 
@@ -377,7 +379,8 @@ def test_claim_next_jobs_picks_due_in_order(session_factory) -> None:
         assert claim_next_jobs(s, 5, NOW) == [queued]
         assert claim_next_jobs(s, 5, NOW) == []
         assert claim_next_jobs(s, 0, NOW) == []
-        assert claim_next_jobs(s, 5, NOW + timedelta(hours=3)) == [later] or True
+        # at NOW+3h both the once-failed "c" (retry at +1h) and "later" (+2h) are due
+        assert claim_next_jobs(s, 5, NOW + timedelta(hours=3)) == [3, later]
     with session_factory() as s:
         assert s.get(Job, due_failed).status is JobStatus.downloading
         assert s.get(Job, due_failed).next_retry_at is None
@@ -762,3 +765,268 @@ async def test_failed_notification_can_be_switched_off(deps, session_factory) ->
     await process_job(deps, job_id)
     assert get_job(deps, job_id).status is JobStatus.failed
     assert deps.notifier.sent == []
+
+
+# ---- audit fixes ----------------------------------------------------------------
+
+
+def test_claim_excludes_jobs_a_running_task_still_owns(session_factory) -> None:
+    conn_id = add_connection(session_factory)
+    a = add_job(session_factory, conn_id, video_id="a")
+    b = add_job(session_factory, conn_id, video_id="b", episode_id=43)
+    with session_factory() as s:
+        assert claim_next_jobs(s, 5, NOW, exclude={a}) == [b]
+        assert claim_next_jobs(s, 5, NOW, exclude={a}) == []
+        assert claim_next_jobs(s, 5, NOW) == [a]
+
+
+async def test_cancel_outranks_a_failure_that_lands_later(deps, session_factory) -> None:
+    conn_id = add_connection(session_factory)
+    job_id = add_job(session_factory, conn_id)
+    fake_for(deps, conn_id)
+
+    def cancel_then_fail(url, dest_dir, **kw):
+        with session_factory() as s:  # the user cancels during extraction…
+            j = s.get(Job, job_id)
+            j.status = JobStatus.cancelled
+            j.error = "cancelled"
+            j.finished_at = NOW
+            s.commit()
+        raise SourceError("ERROR: HTTP Error 403")  # …then yt-dlp fails
+
+    deps.source.download = cancel_then_fail
+    await process_job(deps, job_id)
+    job = get_job(deps, job_id)
+    assert job.status is JobStatus.cancelled and job.next_retry_at is None
+    assert job.error == "cancelled", "the API's row wins; no retry scheduled"
+    assert deps.notifier.sent == []
+
+
+async def test_cancel_before_start_leaves_the_row_alone(deps, session_factory) -> None:
+    conn_id = add_connection(session_factory)
+    job_id = add_job(
+        session_factory, conn_id, status=JobStatus.cancelled, error="cancelled", attempts=0
+    )
+    fake_for(deps, conn_id)
+    await process_job(deps, job_id)
+    job = get_job(deps, job_id)
+    assert job.status is JobStatus.cancelled and job.error == "cancelled" and job.attempts == 0
+    assert deps.source.calls == []
+
+
+async def test_cancel_racing_the_importing_transition_wins(deps, session_factory) -> None:
+    import outriggarr.worker.runner as runner
+
+    conn_id = add_connection(session_factory)
+    job_id = add_job(session_factory, conn_id)
+    fake = fake_for(deps, conn_id)
+    real = runner._enter_importing
+
+    def cancel_just_before(session, job):
+        with session_factory() as s:
+            s.get(Job, job_id).status = JobStatus.cancelled
+            s.commit()
+        return real(session, job)
+
+    deps.source.download  # noqa: B018 (keep the fake)
+    import unittest.mock as um
+
+    with um.patch.object(runner, "_enter_importing", cancel_just_before):
+        await process_job(deps, job_id)
+    job = get_job(deps, job_id)
+    assert job.status is JobStatus.cancelled and fake.imports == []
+    assert not (deps.staging_dir / str(job_id)).exists()
+
+
+async def test_satisfied_target_is_detected_before_download(deps, session_factory) -> None:
+    conn_id = add_connection(session_factory)
+    job_id = add_job(session_factory, conn_id)
+    fake = fake_for(deps, conn_id)
+    fake.has_file[Target(series_id=5, episode_ids=(42,))] = True
+    await process_job(deps, job_id)
+    job = get_job(deps, job_id)
+    assert job.status is JobStatus.cancelled and "already has a file" in job.error
+    assert deps.source.calls == [] and fake.imports == []
+
+
+async def test_parse_only_rejection_is_reprocessed_with_ids(deps, session_factory) -> None:
+    conn_id = add_connection(session_factory)
+    job_id = add_job(session_factory, conn_id)
+    fake = fake_for(deps, conn_id)
+    fake.candidate_rejections = ("Unknown Series",)
+    fake.reprocessed_rejections = ()  # with explicit ids Sonarr is happy
+    await process_job(deps, job_id)
+    job = get_job(deps, job_id)
+    assert job.status is JobStatus.done, job.error
+    (rp,) = [c for n, c in fake.calls if n == "reprocess"]
+    assert rp[1] == Target(series_id=5, episode_ids=(42,)) and rp[2] == "WEBDL-1080p" and rp[3] == 2
+
+
+async def test_real_rejection_survives_reprocess_and_is_terminal(deps, session_factory) -> None:
+    conn_id = add_connection(session_factory)
+    job_id = add_job(session_factory, conn_id)
+    fake = fake_for(deps, conn_id)
+    fake.candidate_rejections = ("Unknown Series", "Not an upgrade for existing episode file(s)")
+    fake.reprocessed_rejections = ("Not an upgrade for existing episode file(s)",)
+    await process_job(deps, job_id)
+    job = get_job(deps, job_id)
+    assert job.status is JobStatus.failed and job.next_retry_at is None
+    assert job.error == "import rejected: Not an upgrade for existing episode file(s)"
+
+
+async def test_reprocess_unavailable_falls_back_to_dropping_parse_only_rejections(
+    deps, session_factory
+) -> None:
+    conn_id = add_connection(session_factory)
+    job_id = add_job(session_factory, conn_id)
+    fake = fake_for(deps, conn_id)
+    fake.candidate_rejections = ("Unknown Series",)
+    fake.reprocess_error = ArrError("POST manualimport -> HTTP 404: no", retryable=False)
+    await process_job(deps, job_id)
+    assert get_job(deps, job_id).status is JobStatus.done
+
+
+async def test_deterministic_arr_error_is_terminal_transport_error_retries(
+    deps, session_factory
+) -> None:
+    conn_id = add_connection(session_factory)
+    job_id = add_job(session_factory, conn_id)
+    fake = fake_for(deps, conn_id)
+    fake.info_error = ArrError("GET episode/42 -> HTTP 404: not found", retryable=False)
+    await process_job(deps, job_id)
+    job = get_job(deps, job_id)
+    assert job.status is JobStatus.failed and job.next_retry_at is None
+    assert deps.notifier.sent and "job failed" in deps.notifier.sent[-1][0]
+    job2 = add_job(session_factory, conn_id, video_id="v2", episode_id=43)
+    fake.info_error = ArrError("GET episode/43: connection refused", retryable=True)
+    await process_job(deps, job2)
+    assert get_job(deps, job2).next_retry_at == NOW + BACKOFF[0]
+
+
+def test_sweep_removes_orphan_folder_without_staged_path(session_factory, staging: Path) -> None:
+    from outriggarr.worker.runner import sweep_cancelled
+
+    conn_id = add_connection(session_factory)
+    orphan = add_job(
+        session_factory, conn_id, video_id="a", status=JobStatus.cancelled, staged_path=None
+    )
+    (staging / str(orphan)).mkdir()
+    (staging / str(orphan) / "big.mkv").write_bytes(b"x" * 10)
+    with session_factory() as s:
+        assert sweep_cancelled(s, staging) == 1
+    assert not (staging / str(orphan)).exists()
+
+
+async def test_internal_error_after_download_does_not_leave_the_folder(
+    deps, session_factory
+) -> None:
+    conn_id = add_connection(session_factory)
+    job_id = add_job(session_factory, conn_id)
+    fake = fake_for(deps, conn_id)
+    fake.info_error = None
+    real = deps.source.download
+
+    def then_crash(url, dest_dir, **kw):
+        real(url, dest_dir, **kw)
+        raise RuntimeError("boom after download")  # not a SourceError: a bug
+
+    deps.source.download = then_crash
+    stop = asyncio.Event()
+    task = asyncio.create_task(run_worker(deps, stop))
+    for _ in range(200):
+        await asyncio.sleep(0.01)
+        if get_job(deps, job_id).status is JobStatus.failed:
+            break
+    stop.set()
+    await asyncio.wait_for(task, 2)
+    assert "internal error" in get_job(deps, job_id).error
+    assert not (deps.staging_dir / str(job_id)).exists()
+
+
+async def test_rename_error_is_a_retryable_staging_error(
+    deps, session_factory, monkeypatch
+) -> None:
+    conn_id = add_connection(session_factory)
+    job_id = add_job(session_factory, conn_id)
+    fake_for(deps, conn_id)
+    real_rename = Path.rename
+
+    def enametoolong(self, target):
+        raise OSError(63, "File name too long", str(target))
+
+    monkeypatch.setattr(Path, "rename", enametoolong)
+    await process_job(deps, job_id)
+    monkeypatch.setattr(Path, "rename", real_rename)
+    job = get_job(deps, job_id)
+    assert job.status is JobStatus.failed and job.error.startswith("staging error: [Errno 63]")
+    assert job.next_retry_at == NOW + BACKOFF[0]
+    assert not (deps.staging_dir / str(job_id)).exists()
+
+
+async def test_concurrency_limit_is_enforced(deps, session_factory) -> None:
+    import threading
+
+    conn_id = add_connection(session_factory)
+    ids = [add_job(session_factory, conn_id, video_id=f"v{i}", episode_id=42 + i) for i in range(4)]
+    fake_for(deps, conn_id)
+    with session_factory() as s:
+        set_setting(s, "concurrency", "2")
+        s.commit()
+    gate = threading.Event()
+    in_flight, peak = [0], [0]
+    lock = threading.Lock()
+    real = deps.source.download
+
+    def slow(url, dest_dir, **kw):
+        with lock:
+            in_flight[0] += 1
+            peak[0] = max(peak[0], in_flight[0])
+        gate.wait(2)
+        try:
+            return real(url, dest_dir, **kw)
+        finally:
+            with lock:
+                in_flight[0] -= 1
+
+    deps.source.download = slow
+    stop = asyncio.Event()
+    task = asyncio.create_task(run_worker(deps, stop))
+    await asyncio.sleep(0.3)
+    assert peak[0] == 2 and in_flight[0] == 2
+    gate.set()
+    for _ in range(300):
+        await asyncio.sleep(0.01)
+        if all(get_job(deps, i).status is JobStatus.done for i in ids):
+            break
+    stop.set()
+    await asyncio.wait_for(task, 3)
+    assert peak[0] == 2
+
+
+async def test_shutdown_aborts_a_running_download_and_requeues(deps, session_factory) -> None:
+    import threading
+
+    conn_id = add_connection(session_factory)
+    job_id = add_job(session_factory, conn_id)
+    fake_for(deps, conn_id)
+    started = threading.Event()
+    real = deps.source.download
+
+    def slow(url, dest_dir, *, progress, should_abort, **kw):
+        started.set()
+        for _ in range(200):
+            if should_abort():
+                raise DownloadAborted("stop")
+            time.sleep(0.01)
+        return real(url, dest_dir, progress=progress, should_abort=should_abort, **kw)
+
+    deps.source.download = slow
+    stop = asyncio.Event()
+    task = asyncio.create_task(run_worker(deps, stop))
+    await asyncio.to_thread(started.wait, 2)
+    stop.set()
+    await asyncio.wait_for(task, 3)
+    job = get_job(deps, job_id)
+    assert job.status is JobStatus.queued and job.attempts == 0
+    assert "interrupted" in job.error
+    assert not (deps.staging_dir / str(job_id)).exists()

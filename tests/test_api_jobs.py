@@ -186,3 +186,47 @@ def test_video_url_must_be_http(client: TestClient) -> None:
     bad = episode_job(conn_id)
     bad["video"]["url"] = "javascript:alert(1)"
     assert client.post("/api/jobs", json=[bad]).status_code == 422
+
+
+def test_delete_job_terminal_only_and_removes_staging(client: TestClient, settings) -> None:
+    from outriggarr.db.models import Job, JobStatus
+
+    conn_id = client.post("/api/connections", json=SONARR).json()["id"]
+    job_id = client.post("/api/jobs", json=[episode_job(conn_id)]).json()[0]["id"]
+    assert client.delete(f"/api/jobs/{job_id}").status_code == 409  # queued
+    with client.app.state.session_factory() as s:
+        j = s.get(Job, job_id)
+        j.status = JobStatus.failed
+        j.next_retry_at = None
+        s.commit()
+    folder = settings.staging_dir / str(job_id)
+    folder.mkdir(parents=True)
+    (folder / "x.mkv").write_bytes(b"x")
+    assert client.delete(f"/api/jobs/{job_id}").status_code == 204
+    assert not folder.exists() and client.get(f"/api/jobs/{job_id}").status_code == 404
+    assert client.delete("/api/jobs/999").status_code == 404
+
+
+def test_retry_resets_attempts_and_ids_are_deduped(client: TestClient) -> None:
+    from outriggarr.db.models import Job, JobStatus
+
+    conn_id = client.post("/api/connections", json=SONARR).json()["id"]
+    body = episode_job(conn_id)
+    body["target"]["episode_ids"] = [42, 42]
+    assert client.post("/api/jobs", json=[body]).status_code == 422
+    job_id = client.post("/api/jobs", json=[episode_job(conn_id)]).json()[0]["id"]
+    with client.app.state.session_factory() as s:
+        j = s.get(Job, job_id)
+        j.status = JobStatus.failed
+        j.attempts = 4
+        s.commit()
+    r = client.post(f"/api/jobs/{job_id}/retry")
+    assert r.status_code == 200 and r.json()["attempts"] == 0
+    assert (
+        Job.make_target_key(
+            __import__("outriggarr.db.models", fromlist=["TargetKind"]).TargetKind.episode,
+            series_id=5,
+            episode_ids=[42, 42],
+        )
+        == "episode:5:42"
+    )

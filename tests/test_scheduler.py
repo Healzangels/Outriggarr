@@ -360,3 +360,149 @@ async def test_scan_error_notified_once_per_new_error(deps, session_factory) -> 
     deps.source.recent_error = SourceError("ERROR: muted")
     await scan_subscription(deps, sub_id)
     assert len(deps.notifier.sent) == 2
+
+
+# ---- audit fixes ----------------------------------------------------------------
+
+
+async def test_live_job_videos_leave_the_pool(deps, session_factory) -> None:
+    sub_id, conn_id = make_sub(session_factory, strategies=["title", "date"], date_tolerance_days=3)
+    fake_client(deps, conn_id)
+    await scan_subscription(deps, sub_id)  # v6→S30E06, v7→S30E07 queued
+    # v7 now also looks like a date candidate for S30E09; it must not be re-matched
+    deps.source.recent = [
+        VideoRef(
+            "v7",
+            "Seven Spicy Wings | Show",
+            "https://y/v7",
+            100,
+            1,
+            (NOW - timedelta(days=1)).strftime("%Y%m%d"),
+        )
+    ]
+    report = await scan_subscription(deps, sub_id)
+    assert report.matches == [] and [u["code"] for u in report.unmatched] == ["S30E09"]
+    assert report.unmatched[0]["candidates"]["date"] == []
+
+
+async def test_upload_dates_are_cached_and_the_fetch_window_moves(deps, session_factory) -> None:
+    from outriggarr.db.models import VideoMeta
+    from outriggarr.worker import scheduler
+
+    sub_id, conn_id = make_sub(session_factory, strategies=["date"], date_tolerance_days=1)
+    fake_client(deps, conn_id)
+    deps.source.recent = [
+        VideoRef(f"u{i}", f"Unrelated {i}", f"https://y/u{i}", 1, i, None) for i in range(25)
+    ]
+    for i in range(25):
+        deps.source.infos[f"https://y/u{i}"] = VideoRef(
+            f"u{i}", f"Unrelated {i}", f"https://y/u{i}", 1, i, "20200101"
+        )
+    deps.source.infos["https://y/u24"] = VideoRef(
+        "u24", "Unrelated 24", "https://y/u24", 1, 24, (NOW - timedelta(days=10)).strftime("%Y%m%d")
+    )
+    # a fetch that yields no date at all must be remembered too (not re-fetched every scan)
+    deps.source.infos["https://y/u3"] = VideoRef("u3", "Unrelated 3", "https://y/u3", 1, 3, None)
+    deps_limit = scheduler.DATE_FETCH_LIMIT
+    r1 = await scan_subscription(deps, sub_id)
+    assert len(deps.source.fetched) == deps_limit and r1.matches == []
+    r2 = await scan_subscription(deps, sub_id)  # the next 5, never the first 20 again
+    assert len(deps.source.fetched) == 25
+    assert [m["video_id"] for m in r2.matches] == ["u24"]
+    with session_factory() as s:
+        assert s.query(VideoMeta).count() == 25
+    r3 = await scan_subscription(deps, sub_id, dry_run=True)
+    assert len(deps.source.fetched) == 25, "dry runs use the cache too"
+    assert r3.dry_run
+    assert deps.source.fetched.count("https://y/u3") == 1, (
+        "a fetch that yielded no date is remembered too"
+    )
+
+
+async def test_no_date_fetch_when_no_unmatched_episode_has_an_air_date(
+    deps, session_factory
+) -> None:
+    sub_id, conn_id = make_sub(session_factory, strategies=["date"])
+    client = fake_client(deps, conn_id)
+    client.episodes_by_series[5] = [_ep(99, 30, 1, "Undated", None)]  # never wanted anyway
+    with session_factory() as s:
+        s.add(Override(subscription_id=sub_id, video_id="vx", season=30, episode=1))
+        s.commit()
+    deps.source.recent = [VideoRef("u1", "Unrelated", "https://y/u1", 1, 1, None)]
+    report = await scan_subscription(deps, sub_id, dry_run=True)
+    assert deps.source.fetched == [] and [u["code"] for u in report.unmatched] == ["S30E01"]
+
+
+async def test_pinned_undated_episode_becomes_wanted(deps, session_factory) -> None:
+    sub_id, conn_id = make_sub(session_factory)
+    client = fake_client(deps, conn_id)
+    client.episodes_by_series[5] = [_ep(99, 30, 50, "No Date Yet", None)]
+    deps.source.recent = [VideoRef("vx", "whatever", "https://y/vx", 1, 1, None)]
+    assert (await scan_subscription(deps, sub_id, dry_run=True)).unmatched == []
+    with session_factory() as s:
+        s.add(Override(subscription_id=sub_id, video_id="vx", season=30, episode=50))
+        s.commit()
+    report = await scan_subscription(deps, sub_id)
+    assert [(m["code"], m["strategy"]) for m in report.matches] == [("S30E50", "override")]
+
+
+async def test_pin_to_another_video_uncovers_a_cancelled_wrong_job(deps, session_factory) -> None:
+    sub_id, conn_id = make_sub(session_factory)
+    fake_client(deps, conn_id)
+    await scan_subscription(deps, sub_id)  # v6 → S30E06 queued
+    with session_factory() as s:
+        wrong = s.query(Job).filter(Job.video_id == "v6").one()
+        wrong.status = JobStatus.cancelled  # the user saw it was the wrong video
+        s.add(Override(subscription_id=sub_id, video_id="vx", season=30, episode=6))
+        s.commit()
+    report = await scan_subscription(deps, sub_id)
+    (m,) = [m for m in report.matches if m["code"] == "S30E06"]
+    assert m["video_id"] == "vx" and m["strategy"] == "override" and m["job_id"]
+    with session_factory() as s:
+        assert s.query(Job).filter(Job.video_id == "vx").count() == 1
+
+
+async def test_scheduler_survives_a_failing_crash_stamp(deps, session_factory, monkeypatch) -> None:
+    from outriggarr.worker import scheduler
+
+    sub_id, conn_id = make_sub(session_factory)
+    fake_client(deps, conn_id)
+    deps.source.list_recent = lambda url, limit: (_ for _ in ()).throw(RuntimeError("bug"))
+    calls = {"n": 0}
+    real = deps.session_factory
+
+    def flaky_factory():
+        calls["n"] += 1
+        if calls["n"] == 3:  # the session used to stamp the crash
+            raise RuntimeError("database is locked")
+        return real()
+
+    monkeypatch.setattr(deps, "session_factory", flaky_factory)
+    stop = asyncio.Event()
+    task = asyncio.create_task(scheduler.run_scheduler(deps, stop))
+    await asyncio.sleep(0.15)
+    assert not task.done(), "the loop must survive"
+    stop.set()
+    await asyncio.wait_for(task, 2)
+
+
+async def test_internal_scan_error_is_notified_once(deps, session_factory) -> None:
+    from tests.fakes import FakeNotifier
+
+    deps.notifier = FakeNotifier()
+    sub_id, conn_id = make_sub(session_factory)
+    fake_client(deps, conn_id)
+    deps.source.list_recent = lambda url, limit: (_ for _ in ()).throw(RuntimeError("bug"))
+    stop = asyncio.Event()
+    task = asyncio.create_task(run_scheduler(deps, stop))
+    for _ in range(100):
+        await asyncio.sleep(0.01)
+        if len(deps.notifier.sent) >= 1:
+            break
+    with session_factory() as s:
+        s.get(Subscription, sub_id).last_scan_at = None  # make it due again, same error
+        s.commit()
+    await asyncio.sleep(0.1)
+    stop.set()
+    await asyncio.wait_for(task, 2)
+    assert [t for t, _ in deps.notifier.sent] == ["Outriggarr: scan error"]

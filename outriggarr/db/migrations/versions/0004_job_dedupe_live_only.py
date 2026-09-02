@@ -30,8 +30,11 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("ux_job_live_target_video", table_name="job")
+    # Re-create the full constraint BEFORE dropping the partial index, so a done+live
+    # twin (allowed at 0004) fails the downgrade with the index still in place instead
+    # of leaving no dedupe at all.
     with op.batch_alter_table("job") as batch:
         batch.create_unique_constraint(
             "uq_job_target_video", ["connection_id", "target_key", "video_id"]
         )
+    op.drop_index("ux_job_live_target_video", table_name="job")

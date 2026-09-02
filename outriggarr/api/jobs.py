@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import shutil
 from datetime import datetime
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query, status
@@ -9,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from outriggarr.api.deps import DbSession
+from outriggarr.api.deps import DbSession, RunnerDepsDep
 from outriggarr.db.models import Connection, ConnectionKind, Job, JobStatus, TargetKind, utcnow
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
@@ -29,6 +31,8 @@ class TargetIn(BaseModel):
                 raise ValueError("an episode target needs series_id and a non-empty episode_ids")
             if self.movie_id is not None:
                 raise ValueError("an episode target must not carry movie_id")
+            if len(set(self.episode_ids)) != len(self.episode_ids):
+                raise ValueError("episode_ids must not repeat")
         else:
             if self.movie_id is None:
                 raise ValueError("a movie target needs movie_id")
@@ -208,8 +212,29 @@ def retry_job(session: Session, job_id: int) -> Job:
     job.error = None
     job.finished_at = None
     job.progress_pct = 0
+    job.attempts = 0  # a manual retry starts the backoff ladder afresh
     session.commit()
     return job
+
+
+DELETABLE = (JobStatus.done, JobStatus.failed, JobStatus.cancelled)
+
+
+def delete_job(session: Session, job_id: int, staging_dir: Path | None = None) -> None:
+    """Remove a finished job (done, terminally failed, cancelled) and its staging folder."""
+    job = _get_or_404(session, job_id)
+    if job.status not in DELETABLE or (
+        job.status is JobStatus.failed and job.next_retry_at is not None
+    ):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"job {job_id} is {job.status.value}; only done, cancelled or terminally failed "
+            "jobs can be deleted",
+        )
+    if staging_dir is not None:
+        shutil.rmtree(staging_dir / str(job.id), ignore_errors=True)
+    session.delete(job)
+    session.commit()
 
 
 def cancel_job(session: Session, job_id: int, now: datetime | None = None) -> Job:
@@ -238,3 +263,8 @@ def retry(job_id: int, session: DbSession) -> Job:
 @router.post("/{job_id}/cancel", response_model=JobOut)
 def cancel(job_id: int, session: DbSession) -> Job:
     return cancel_job(session, job_id)
+
+
+@router.delete("/{job_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete(job_id: int, session: DbSession, deps: RunnerDepsDep) -> None:
+    delete_job(session, job_id, deps.staging_dir)

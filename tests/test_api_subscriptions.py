@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 
 from outriggarr.arr.base import EpisodeRef, SeriesRef
 from outriggarr.db.models import Job
-from outriggarr.source import SourceError, VideoRef
+from outriggarr.source import VideoRef
 from tests.fakes import FakeArrClient, FakeArrFactory, FakeVideoSource
 
 SONARR = {
@@ -193,12 +193,12 @@ from outriggarr.arr.base import ArrError  # noqa: E402
 def test_override_by_url(client, arr, source) -> None:
     conn_id = seed(client, arr, source)
     sub_id = client.post("/api/subscriptions", json=body(conn_id)).json()["id"]
-    source.videos = [
-        VideoRef("old1", "Two Long Title (older upload)", "https://y/old1", 1, None, None)
-    ]
+    source.infos["https://y/old1?list=PLx"] = VideoRef(
+        "old1", "Two Long Title (older upload)", "https://y/old1", 1, None, None
+    )
     r = client.post(
         f"/api/subscriptions/{sub_id}/overrides",
-        json={"url": "https://y/old1", "season": 1, "episode": 2},
+        json={"url": "https://y/old1?list=PLx", "season": 1, "episode": 2},
     )
     assert r.status_code == 200, r.text
     assert r.json() == {
@@ -208,29 +208,22 @@ def test_override_by_url(client, arr, source) -> None:
         "video_url": "https://y/old1",
         "video_title": "Two Long Title (older upload)",
     }
-    assert source.resolved == ["https://y/old1"]
-    # the scan now uses it even though the listing (a, b) does not contain it
+    assert source.fetched == ["https://y/old1?list=PLx"], "single-video fetch; playlist ignored"
     s = client.post(f"/api/subscriptions/{sub_id}/scan").json()
     assert {(m["code"], m["video_id"], m["strategy"]) for m in s["matches"]} == {
         ("S01E01", "a", "title"),
         ("S01E02", "old1", "override"),
     }
-    # a playlist URL is refused; a resolve failure is a 502 with yt-dlp's text
-    source.videos = [
-        VideoRef("p1", "x", "https://y/p1", 1, 1, None),
-        VideoRef("p2", "y", "https://y/p2", 1, 2, None),
-    ]
-    r = client.post(
-        f"/api/subscriptions/{sub_id}/overrides",
-        json={"url": "https://y/list", "season": 1, "episode": 3},
-    )
-    assert r.status_code == 422 and "2 videos" in r.json()["detail"]
-    source.resolve_error = SourceError("ERROR: [youtube] nope: Video unavailable")
     r = client.post(
         f"/api/subscriptions/{sub_id}/overrides",
         json={"url": "https://y/bad", "season": 1, "episode": 3},
     )
     assert r.status_code == 502 and r.json()["detail"].endswith("Video unavailable")
+    r = client.post(
+        f"/api/subscriptions/{sub_id}/overrides",
+        json={"url": "javascript:x", "season": 1, "episode": 3},
+    )
+    assert r.status_code == 422
     assert (
         client.post(
             "/api/subscriptions/999/overrides",

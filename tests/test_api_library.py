@@ -176,3 +176,21 @@ def test_ttlcache_unit() -> None:
     assert asyncio.run(c.get("k", load)) == 2
     c.clear()
     assert asyncio.run(c.get("k", load)) == 3
+
+
+def test_ttlcache_coalesces_concurrent_loads() -> None:
+    import asyncio
+
+    c = TTLCache(60)
+    loads = [0]
+
+    async def slow():
+        loads[0] += 1
+        await asyncio.sleep(0.05)
+        return "listing"
+
+    async def run():
+        return await asyncio.gather(*(c.get("k", slow) for _ in range(5)))
+
+    assert asyncio.run(run()) == ["listing"] * 5
+    assert loads[0] == 1, "five cold gets, one load"

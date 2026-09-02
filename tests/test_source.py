@@ -180,3 +180,103 @@ def test_download_result_collects_sidecars(tmp_path) -> None:
     r = _result_from_info(info, tmp_path)
     assert r.subtitles == (tmp_path / "v1.en.srt",)
     assert _result_from_info(info).subtitles == ()
+
+
+def test_list_recent_caps_channels_but_lists_playlists_whole(monkeypatch) -> None:
+    import yt_dlp
+
+    from outriggarr.source import YtDlpSource
+
+    seen: list[tuple[str, dict]] = []
+
+    class StubYDL:
+        def __init__(self, opts):
+            self.opts = opts
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def extract_info(self, url, download=False):
+            seen.append((url, self.opts))
+            return {
+                "_type": "playlist",
+                "id": "x",
+                "entries": [{"id": f"v{i}", "title": str(i)} for i in range(5)],
+            }
+
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", StubYDL)
+    src = YtDlpSource()
+    assert len(src.list_recent("https://www.youtube.com/@c", 3)) == 3
+    assert seen[-1][0].endswith("/videos") and seen[-1][1]["playlistend"] == 3
+    assert len(src.list_recent("https://www.youtube.com/playlist?list=PL1", 3)) == 5, (
+        "playlists are not truncated"
+    )
+    assert "playlistend" not in seen[-1][1]
+    src.resolve("https://www.youtube.com/watch?v=abc&list=PL1")
+    assert seen[-1][1]["noplaylist"] is True
+    src.resolve("https://www.youtube.com/@c")
+    assert seen[-1][0].endswith("/videos")
+
+
+def test_bad_option_values_become_source_errors(monkeypatch) -> None:
+    from pathlib import Path
+
+    import yt_dlp
+
+    from outriggarr.source import SourceError, YtDlpSource
+
+    class Boom:
+        def __init__(self, opts):
+            raise SyntaxError("Invalid format specification")
+
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", Boom)
+    with pytest.raises(SourceError, match="could not run"):
+        YtDlpSource().resolve("https://youtu.be/x")
+    with pytest.raises(SourceError, match="could not run"):
+        YtDlpSource().download(
+            "https://youtu.be/x",
+            Path("/tmp/x"),
+            fmt="bad[",
+            merge_container="mkv",
+            progress=lambda p: None,
+            should_abort=lambda: False,
+        )
+
+
+def test_cookie_save_failure_after_download_keeps_the_result(monkeypatch, tmp_path) -> None:
+    import yt_dlp
+
+    from outriggarr.source import YtDlpSource
+
+    class SavesCookiesBadly:
+        def __init__(self, opts):
+            self.opts = opts
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            raise PermissionError(13, "Permission denied", "/config/cookies.txt")
+
+        def extract_info(self, url, download=True):
+            (tmp_path / "x.mkv").write_bytes(b"v")
+            return {
+                "id": "x",
+                "title": "T",
+                "height": 720,
+                "requested_downloads": [{"filepath": str(tmp_path / "x.mkv")}],
+            }
+
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", SavesCookiesBadly)
+    r = YtDlpSource().download(
+        "https://youtu.be/x",
+        tmp_path,
+        fmt="best",
+        merge_container="mkv",
+        progress=lambda p: None,
+        should_abort=lambda: False,
+    )
+    assert r.path.name == "x.mkv"

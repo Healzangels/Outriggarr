@@ -42,9 +42,11 @@ class ArrHttp:
         try:
             r = await self._http.request(method, url, headers=self._headers, **kw)
         except httpx.HTTPError as exc:
-            raise ArrError(f"{method} {url}: {exc}") from exc
+            raise ArrError(f"{method} {url}: {exc}", retryable=True) from exc
         if r.status_code >= 400:
-            raise ArrError(f"{method} {url} -> HTTP {r.status_code}: {r.text}")
+            raise ArrError(
+                f"{method} {url} -> HTTP {r.status_code}: {r.text}", retryable=r.status_code >= 500
+            )
         try:
             return r.json()
         except ValueError as exc:
@@ -134,23 +136,48 @@ class ArrHttp:
         data = await self.get("manualimport", {"folder": folder, "filterExistingFiles": "true"})
         return [_candidate(d) for d in data]
 
+    async def _quality_model(self, quality_name: str) -> dict[str, Any]:
+        by_name = {q.name: q for q in await self.quality_definitions()}
+        q = by_name.get(quality_name)
+        if q is None:
+            raise ArrError(
+                f"quality {quality_name!r} is not defined on this server "
+                f"(known: {sorted(by_name)})",
+                retryable=False,
+            )
+        return {
+            "quality": {"id": q.quality_id, "name": q.name},
+            "revision": {"version": 1, "real": 0, "isRepack": False},
+        }
+
+    async def reprocess(
+        self,
+        candidate: ImportCandidate,
+        target: Target,
+        quality_name: str,
+        languages: tuple[Language, ...],
+        season: int | None,
+    ) -> tuple[str, ...]:
+        body: dict[str, Any] = {
+            "id": candidate.id,
+            "path": candidate.path,
+            "quality": await self._quality_model(quality_name),
+            "languages": [{"id": lang.id, "name": lang.name} for lang in languages],
+            "indexerFlags": 0,
+            **self._import_ids(target),
+            **self._reprocess_extra(target, season),
+        }
+        data = await self.post("manualimport", [body])
+        if not isinstance(data, list) or not data:
+            raise ArrError("reprocess returned no items", retryable=False)
+        return tuple(str(r.get("reason", "")) for r in data[0].get("rejections", []) or [])
+
     async def manual_import(self, files: list[ImportFile]) -> int:
-        definitions = await self.quality_definitions()
-        by_name = {q.name: q for q in definitions}
         payload = []
         for f in files:
-            q = by_name.get(f.quality_name)
-            if q is None:
-                raise ArrError(
-                    f"quality {f.quality_name!r} is not defined on this server "
-                    f"(known: {sorted(by_name)})"
-                )
             entry: dict[str, Any] = {
                 "path": f.path,
-                "quality": {
-                    "quality": {"id": q.quality_id, "name": q.name},
-                    "revision": {"version": 1, "real": 0, "isRepack": False},
-                },
+                "quality": await self._quality_model(f.quality_name),
                 "languages": [{"id": lang.id, "name": lang.name} for lang in f.languages],
             }
             entry.update(self._import_ids(f.target))
@@ -165,9 +192,13 @@ class ArrHttp:
     def _import_ids(self, target: Target) -> dict[str, Any]:  # pragma: no cover
         raise NotImplementedError
 
+    def _reprocess_extra(self, target: Target, season: int | None) -> dict[str, Any]:
+        return {}
+
 
 def _candidate(d: dict[str, Any]) -> ImportCandidate:
     return ImportCandidate(
+        id=int(d["id"]) if d.get("id") is not None else 0,
         path=str(d.get("path", "")),
         relative_path=str(d.get("relativePath", "")),
         name=str(d.get("name", "")),

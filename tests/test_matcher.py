@@ -35,6 +35,7 @@ def vid(i: str, title: str, upload: date | None = None) -> Video:
         ("Episode 12: Rain", "rain"),
         ("#7 | Storm", "storm"),
         ("3. Third", "third"),
+        ("3.5 Things", "3 5 things"),
         ("Café Olé", "café olé"),
         ("Title (Part 2)", "title part 2"),
     ],
@@ -81,13 +82,47 @@ def test_short_titles_never_match_by_containment() -> None:
     assert [u.candidates["title"] for u in r.unmatched] == [(), ()]
 
 
-def test_each_video_used_once_in_episode_order() -> None:
-    eps = [ep(1, 1, 1, "Same"), ep(2, 1, 2, "Same")]
-    videos = [vid("a", "Same")]
+def test_two_episodes_claiming_one_video_is_ambiguous_for_both() -> None:
+    eps = [ep(1, 1, 1, "Same Title"), ep(2, 1, 2, "Same Title")]
+    videos = [vid("a", "Same Title")]
     r = match(eps, videos, [], MatchConfig(("title",)))
-    assert r.matches == (Match(eps[0], videos[0], "title"),)
+    assert r.matches == (), "no guessing: neither episode gets it"
+    assert [u.candidates["title"] for u in r.unmatched] == [("a",), ("a",)]
+
+
+def test_exact_claim_beats_containment_claim_for_the_same_video() -> None:
+    eps = [ep(3, 1, 3, "The Return"), ep(5, 1, 5, "The Return of the King")]
+    videos = [vid("king", "The Return of the King | Show")]
+    r = match(eps, videos, [], MatchConfig(("title",)))
+    assert r.matches == (), "two containment claims: ambiguous, nobody takes it"
+    videos = [vid("king", "The Return of the King")]
+    r = match(eps, videos, [], MatchConfig(("title",)))
+    assert [(m.episode.id, m.video.id) for m in r.matches] == [(5, "king")], "exact wins"
+
+
+def test_pinned_video_is_never_a_candidate_for_other_episodes() -> None:
+    # S2E5 is already imported (not wanted), but its pin is still on file; the pinned
+    # video must not be offered to S2E6 by title or date.
+    eps = [ep(6, 2, 6, "Alpha Beta", date(2026, 1, 8))]
+    videos = [vid("p", "Alpha Beta", date(2026, 1, 8))]
+    r = match(eps, videos, [Override("p", 2, 5)], MatchConfig(("title", "date")))
+    assert r.matches == ()
     (u,) = r.unmatched
-    assert u.episode.id == 2 and u.candidates["title"] == ()
+    assert u.candidates["title"] == () and u.candidates["date"] == ()
+
+
+def test_containment_is_word_bounded_needs_two_words_and_skips_promos() -> None:
+    eps = [ep(1, 1, 1, "The Thing"), ep(2, 1, 2, "Torture Chamber Special"), ep(3, 1, 3, "Finale")]
+    videos = [
+        vid("a", "Breathe Things Out | Show"),  # substring, not a word match
+        vid("b", "Season 5 Episode 2 Trailer - Torture Chamber Special"),  # promo
+        vid("c", "Torture Chamber Special | Show"),
+        vid("d", "Season 3 Finale"),
+    ]
+    r = match(eps, videos, [], MatchConfig(("title",)))
+    assert [(m.episode.id, m.video.id) for m in r.matches] == [(2, "c")]
+    seen = {u.episode.id: u.candidates["title"] for u in r.unmatched}
+    assert seen[1] == () and seen[3] == (), "one-word titles never contain-match"
 
 
 def test_regex_with_and_without_season_group() -> None:

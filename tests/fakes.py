@@ -65,6 +65,9 @@ class FakeArrClient:
     candidate_languages: tuple[Language, ...] = (Language(0, "Unknown"),)
     candidates_override: list[ImportCandidate] | None = None
     candidates_error: Exception | None = None
+    # rejections after reprocessing with explicit ids; None = same as the candidate's
+    reprocessed_rejections: tuple[str, ...] | None = None
+    reprocess_error: Exception | None = None
     import_error: Exception | None = None
     command_statuses: list[str] = field(default_factory=lambda: ["queued", "started", "completed"])
     import_sets_has_file: bool = True
@@ -164,6 +167,7 @@ class FakeArrClient:
         names = sorted(p.name for p in local.iterdir()) if local and local.exists() else []
         return [
             ImportCandidate(
+                id=i + 1,
                 path=f"{folder}/{n}",
                 relative_path=n,
                 name=n.rsplit(".", 1)[0],
@@ -171,10 +175,18 @@ class FakeArrClient:
                 rejections=self.candidate_rejections,
                 languages=self.candidate_languages,
             )
-            for n in names
+            for i, n in enumerate(names)
         ]
 
     local_folder_for: Callable[[str], Path] | None = None
+
+    async def reprocess(self, candidate, target, quality_name, languages, season):
+        self.calls.append(("reprocess", (candidate.id, target, quality_name, season)))
+        if self.reprocess_error is not None:
+            raise self.reprocess_error
+        if self.reprocessed_rejections is not None:
+            return tuple(self.reprocessed_rejections)
+        return tuple(candidate.rejections)
 
     async def manual_import(self, files: list[ImportFile]) -> int:
         self.calls.append(("manual_import", files))

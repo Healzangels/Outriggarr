@@ -28,14 +28,28 @@ class TTLCache:
         self.ttl = ttl_seconds
         self.now = now
         self._items: dict[Any, tuple[float, Any]] = {}
+        self._pending: dict[Any, asyncio.Future[Any]] = {}
 
     async def get(self, key: Any, loader: Callable[[], Awaitable[Any]]) -> Any:
         hit = self._items.get(key)
         if hit is not None and self.now() - hit[0] < self.ttl:
             return hit[1]
-        value = await loader()
-        self._items[key] = (self.now(), value)
-        return value
+        pending = self._pending.get(key)
+        if pending is not None:  # someone is already loading it: share the result
+            return await asyncio.shield(pending)
+        fut: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+        self._pending[key] = fut
+        try:
+            value = await loader()
+        except BaseException as exc:
+            fut.set_exception(exc)
+            raise
+        else:
+            self._items[key] = (self.now(), value)
+            fut.set_result(value)
+            return value
+        finally:
+            self._pending.pop(key, None)
 
     def clear(self) -> None:
         self._items.clear()

@@ -1,7 +1,7 @@
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import engine_from_config, event, pool
 
 from outriggarr.db.models import Base
 from outriggarr.settings import Settings
@@ -37,10 +37,28 @@ def run_migrations_online() -> None:
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )
+    if connectable.dialect.name == "sqlite":
+        # pysqlite silently COMMITs before any DDL unless it is told not to manage
+        # transactions; with that off and an explicit BEGIN, DDL really rolls back.
+        @event.listens_for(connectable, "connect")
+        def _no_implicit_commits(dbapi_connection, _record):  # noqa: ANN001
+            dbapi_connection.isolation_level = None
+
+        @event.listens_for(connectable, "begin")
+        def _explicit_begin(conn):  # noqa: ANN001
+            conn.exec_driver_sql("BEGIN")
+
     with connectable.connect() as connection:
         # render_as_batch: SQLite cannot ALTER most things; batch mode rebuilds the table.
+        # SQLite DDL is transactional; alembic just defaults it off. With it on, an
+        # interrupted migration rolls back instead of leaving _alembic_tmp_* tables
+        # that crash-loop the next start.
         context.configure(
-            connection=connection, target_metadata=target_metadata, render_as_batch=True
+            connection=connection,
+            target_metadata=target_metadata,
+            render_as_batch=True,
+            transactional_ddl=True,
+            transaction_per_migration=True,
         )
         with context.begin_transaction():
             context.run_migrations()

@@ -77,7 +77,7 @@ Job status: `queued → downloading → importing → done | failed | cancelled`
 1. **Download**: yt-dlp (library, not subprocess) into `/staging/<job-id>/<parseable name>.<ext>`, video+audio merged by ffmpeg. Progress hook writes `progress_pct` to the job row. Caption tracks in `subtitles_langs` (uploader captions; auto-generated only if `subtitles_auto`) are fetched and converted to `.srt` sidecars named after the staged video, which the *arr imports as extra files (the connection Test warns when Import Extra Files is off). Then one ffmpeg stream-copy remux stamps the `audio_language` setting (default `eng`) on the audio streams — YouTube tracks are untagged and Plex showed them as *Unknown* (found after M4 on the first Hot Ones imports). A failure there is noted on the job but does not stop the import.
 2. **Import** via `ArrClient` (one interface, two implementations):
    - `GET /api/v3/manualimport?folder=<staging_path_remote>/<job-id>&filterExistingFiles=true`
-   - Take the returned entry; set `seriesId` + `episodeIds` (Sonarr) or `movieId` (Radarr), `quality`, `languages`.
+   - Take the returned entry. Its rejections were computed without our ids, so if there are any, `POST /api/v3/manualimport` (the reprocess call the *arr UI uses) re-evaluates the entry with `seriesId` + `episodeIds` (+ `seasonNumber`) or `movieId`; only rejections that survive that block the import ("Unknown Series" alone never does). Then set `seriesId` + `episodeIds` (Sonarr) or `movieId` (Radarr), `quality`, `languages`.
    - `POST /api/v3/command {"name": "ManualImport", "files": [...], "importMode": "move"}`
    - Poll `GET /api/v3/command/{id}` until completed; surface rejection reasons from the GET step verbatim in the job's `error`.
 3. The *arr moves and renames the file into the library and fires its own notifications.
@@ -87,14 +87,14 @@ Job status: `queued → downloading → importing → done | failed | cancelled`
 
 `DownloadedEpisodesScan` / `DownloadedMoviesScan` (single call, path + importMode) still exist on `/api/v3/command` but depend on the filename parser — keep as a fallback switch only. The un-versioned `/api/command` path is gone in Sonarr v4; everything is `/api/v3/`.
 
-Runner: one download at a time by default (YouTube throttling), configurable. yt-dlp is blocking, so it runs in a thread pool under the asyncio worker.
+Runner: one download at a time by default (YouTube throttling), configurable. yt-dlp is blocking, so it runs in a thread pool under the asyncio worker. The worker never claims a job a running task still owns (a Cancel followed by Retry mid-run re-queues the row; it is claimed only once the first run has ended), a Cancel outranks any failure that lands after it, the `downloading → importing` step is an atomic conditional update, and a target that already has a file is detected before the download, not after.
 
 ## Scheduler (subscriptions)
 
 Every `scan_interval` for each enabled subscription:
 
 1. The subscription's episodes from Sonarr (`GET /api/v3/episode?seriesId=`), reduced to monitored, no file, aired. One call per series beats paging the whole `wanted/missing` list (28 pages on the current library). Episodes that already have a live or done job are skipped before matching.
-2. Flat-list the newest N videos from `source_url` (IDs + titles, no per-video fetch; N = the `scan_video_limit` setting, default 50). A bare YouTube channel URL is rewritten to its `/videos` tab.
+2. Flat-list the source: a channel's newest N uploads (N = the `scan_video_limit` setting, default 50; a bare channel URL is rewritten to its `/videos` tab), or a playlist in full — playlists are in whatever order their owner chose, so truncating them would hide newest-last entries.
 3. Match (below). Create a job per match (carrying the subscription's format override and a display label); a duplicate (same episode and video, job not done) is reported, not created. The scan summary lands in `subscription.last_scan_result`.
 
 **Re-acquisition.** Whether an episode needs a file is Sonarr's `hasFile`, never our job history: only jobs that are not `done` count as covering an episode. Delete the file in Sonarr and the next scan queues it again (the same video if it still matches). Failed and cancelled jobs keep covering their episode until the user retries or the job is deleted, so a deterministic failure does not pile up a new job every scan.
@@ -196,6 +196,7 @@ Benefit/risk of the GUI vs v0.1's headless daemon: it adds one HTTP port on the 
 ## Deployment
 
 - `python:3.12-slim` + ffmpeg + deno (yt-dlp's JavaScript runtime for YouTube) + the `yt-dlp-ejs` package (the JS challenge solver, bundled at build time so yt-dlp never fetches remote components at runtime). `PUID`/`PGID`/`UMASK` handled by `entrypoint.sh` (chowns `/config`, drops privileges with `setpriv`) so staged files are importable by the *arr user. `OUTRIGGARR_YTDLP_UPDATE=1` upgrades yt-dlp on start.
+- Stop grace: give the container 60 s (`stop_grace_period` / `--stop-timeout`) so an in-flight download can abort and re-queue; Docker's default 10 s kills it and the job is recovered on the next start instead.
 - Volumes: `/config` (DB, cookies) and the staging directory. Two layouts work: the whole data share mounted as `/data` (as Sonarr/Radarr do) with `OUTRIGGARR_STAGING_DIR=/data/outriggarr` — chosen on the reference stack for consistency — or only the staging folder mounted as `/staging` (least access; the default). Either way the *arr must see the same host folder; the move into the library is an atomic rename whenever staging and library share a filesystem on the *arr side. `OUTRIGGARR_CONFIG_DIR` / `OUTRIGGARR_DATABASE_URL` likewise.
 - One published port for the GUI (`OUTRIGGARR_PORT`, default 8080 inside the container). Same bridge as Sonarr/Radarr; reaches them by container name.
 - Migrations run in-process at startup; the `alembic` CLI reads the same env vars.
@@ -213,7 +214,7 @@ Python 3.12, FastAPI, SQLAlchemy 2.x + Alembic, `yt-dlp` (library), `httpx`, Jin
 3. Are the target series already on TVDB with full episode lists? If not, that is the first blocker, not code.
 4. ~~HTMX vs React — accept the recommendation, or is there a preference?~~ HTMX (decided before M3). Pico CSS, htmx and Alpine.js are vendored under `web/static/` (see NOTICE there); no CDN, no build step.
 5. ~~Sonarr tag on subscribed series — wanted in v1 or later?~~ Implemented in M5 as the `sonarr_tag` setting, off by default; applied on subscribe, removed on unsubscribe, never fatal.
-6. SponsorBlock segment removal as a default (`extra_opts`), given iSponsorBlockTV already runs on the playback side? Left off; available through extra options (`{"sponsorblock_remove": ["sponsor"]}`).
+6. SponsorBlock segment removal as a default, given iSponsorBlockTV already runs on the playback side? Left off. It is not reachable through the yt-dlp passthrough either (`sponsorblock_remove` is a CLI-only option and `postprocessors` is a reserved key); it would need a dedicated setting.
 
 ## Build order
 

@@ -88,20 +88,23 @@ def create_app(
         stop = asyncio.Event()
         task = None
         scheduler_task = None
+        settings.staging_dir.mkdir(parents=True, exist_ok=True)
         if start_worker:
-            settings.staging_dir.mkdir(parents=True, exist_ok=True)
             deps = app.state.runner_deps
             task = asyncio.create_task(run_worker(deps, stop))
             scheduler_task = asyncio.create_task(run_scheduler(deps, stop))
+        app.state.background_tasks = {"worker": task, "scheduler": scheduler_task}
         log.info("outriggarr %s ready (db=%s)", __version__, settings.database_url)
         try:
             yield
         finally:
             stop.set()
-            if task is not None:
-                await task
-            if scheduler_task is not None:
-                await scheduler_task
+            pending = [t for t in (task, scheduler_task) if t is not None]
+            if pending:
+                results = await asyncio.gather(*pending, return_exceptions=True)
+                for name, r in zip(("worker", "scheduler"), results, strict=False):
+                    if isinstance(r, BaseException):
+                        log.error("%s task ended with %r", name, r)
             await app.state.http.aclose()
             engine.dispose()
 

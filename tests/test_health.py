@@ -3,7 +3,10 @@ from fastapi.testclient import TestClient
 from outriggarr import __version__
 
 
-def test_health_reports_ok_and_version(client: TestClient) -> None:
+def test_health_reports_ok_and_version(client: TestClient, monkeypatch) -> None:
+    import shutil
+
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")  # ffmpeg + deno present
     r = client.get("/health")
     assert r.status_code == 200
     body = r.json()
@@ -14,3 +17,36 @@ def test_health_reports_ok_and_version(client: TestClient) -> None:
 def test_startup_creates_db_file(client: TestClient) -> None:
     settings = client.app.state.settings
     assert (settings.config_dir / "app.db").exists()
+
+
+def test_health_degrades_when_ffmpeg_or_staging_or_worker_is_gone(
+    client: TestClient, monkeypatch
+) -> None:
+    import asyncio
+    import shutil
+
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    r = client.get("/health")
+    assert r.status_code == 503
+    assert r.json()["status"] == "degraded" and "ffmpeg" in r.json()["problems"]
+
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+    settings = client.app.state.settings
+    shutil.rmtree(settings.staging_dir, ignore_errors=True)
+    r = client.get("/health")
+    assert r.status_code == 503 and r.json()["problems"] == ["staging_writable"]
+    settings.staging_dir.mkdir(parents=True, exist_ok=True)
+
+    async def boom():
+        raise RuntimeError("worker crashed")
+
+    loop = asyncio.new_event_loop()
+    dead = loop.create_task(boom())
+    with __import__("contextlib").suppress(RuntimeError):
+        loop.run_until_complete(dead)
+    client.app.state.background_tasks = {"worker": dead, "scheduler": None}
+    r = client.get("/health")
+    assert r.status_code == 503 and r.json()["problems"] == ["worker"]
+    assert r.json()["worker_alive"] is False and r.json()["scheduler_alive"] is None
+    client.app.state.background_tasks = {}
+    loop.close()

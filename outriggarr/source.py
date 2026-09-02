@@ -143,16 +143,30 @@ class YtDlpSource:
                 info = ydl.extract_info(url, download=False)
         except DownloadError as exc:
             raise SourceError(str(exc)) from exc
+        except Exception as exc:  # a bad format/option string raises inside YoutubeDL()
+            raise SourceError(f"yt-dlp could not run: {exc!r}") from exc
         if info is None:
             raise SourceError(f"yt-dlp returned no info for {url}")
         return info
 
     def resolve(self, url: str) -> list[VideoRef]:
-        return videos_from_info(self._extract(url, _FLAT_OPTS))
+        # A pasted watch URL that also carries &list= is the video, not the playlist;
+        # a bare channel URL lists its uploads tab rather than its shelves.
+        return videos_from_info(
+            self._extract(channel_videos_url(url), {**_FLAT_OPTS, "noplaylist": True})
+        )
 
     def list_recent(self, url: str, limit: int) -> list[VideoRef]:
-        info = self._extract(channel_videos_url(url), {**_FLAT_OPTS, "playlistend": limit})
-        return videos_from_info(info)[:limit]
+        target = channel_videos_url(url)
+        opts = dict(_FLAT_OPTS)
+        if target != url.strip() or "/videos" in target:
+            # Channel uploads are newest-first: the first N are the newest N.
+            opts["playlistend"] = limit
+        # A playlist is in whatever order its owner chose; list it whole (flat listing is
+        # cheap) so a newest-last playlist still surfaces its newest entries.
+        return videos_from_info(self._extract(target, opts))[
+            : limit if "playlistend" in opts else None
+        ]
 
     def fetch_info(self, url: str) -> VideoRef:
         info = self._extract(url, {"skip_download": True, "quiet": True, "noplaylist": True})
@@ -210,6 +224,7 @@ class YtDlpSource:
         }
         if subtitle_langs:
             opts.update(subtitle_opts(subtitle_langs, auto_subtitles))
+        info = None
         try:
             with yt_dlp.YoutubeDL(self._opts(opts)) as ydl:
                 info = ydl.extract_info(url, download=True)
@@ -217,6 +232,14 @@ class YtDlpSource:
             raise DownloadAborted(str(exc)) from exc
         except DownloadError as exc:
             raise SourceError(str(exc)) from exc
+        except OSError as exc:
+            # YoutubeDL.__exit__ saves the cookie jar; a read-only cookies file raises
+            # here AFTER a successful download. Keep the download, report the problem.
+            if info is None:
+                raise SourceError(f"yt-dlp could not run: {exc!r}") from exc
+            log.warning("yt-dlp could not save state after the download: %s", exc)
+        except Exception as exc:  # bad format/option strings raise inside YoutubeDL()
+            raise SourceError(f"yt-dlp could not run: {exc!r}") from exc
         if info is None:
             raise SourceError(f"yt-dlp returned no info for {url}")
         return _result_from_info(info, dest_dir)

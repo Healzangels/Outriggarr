@@ -8,6 +8,7 @@ Everything the GUI can edit lives in the `setting` table and is read through
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from dataclasses import dataclass
@@ -32,11 +33,14 @@ class Settings:
         config_dir = Path(env.get("OUTRIGGARR_CONFIG_DIR", "/config"))
         staging_dir = Path(env.get("OUTRIGGARR_STAGING_DIR", "/staging"))
         database_url = env.get("OUTRIGGARR_DATABASE_URL", f"sqlite:///{config_dir / 'app.db'}")
+        level = env.get("OUTRIGGARR_LOG_LEVEL", "INFO").strip().upper() or "INFO"
+        if level not in logging.getLevelNamesMapping():
+            raise ValueError(f"OUTRIGGARR_LOG_LEVEL={level!r} is not a logging level")
         return cls(
             config_dir=config_dir,
             staging_dir=staging_dir,
             database_url=database_url,
-            log_level=env.get("OUTRIGGARR_LOG_LEVEL", "INFO"),
+            log_level=level,
         )
 
 
@@ -75,7 +79,7 @@ def apprise_urls(session: Session) -> list[str]:
     return [u.strip() for u in get_setting(session, "apprise_urls").splitlines() if u.strip()]
 
 
-MERGE_CONTAINERS = ("mkv", "mp4", "webm")
+MERGE_CONTAINERS = ("mkv", "mp4")  # webm cannot hold the default H.264/AAC streams
 
 # yt-dlp options the app owns; the operator passthrough may not set them (it would
 # redirect output outside staging, drop our progress/abort hooks, or run arbitrary
@@ -127,6 +131,7 @@ def validate_setting(key: str, value: str) -> str:
     if key == "default_format":
         if not value:
             raise ValueError("default_format must not be empty")
+        _probe_ytdlp({"format": value})
         return value
     if key == "merge_container":
         if value not in MERGE_CONTAINERS:
@@ -144,7 +149,16 @@ def validate_setting(key: str, value: str) -> str:
             raise ValueError(
                 f"ytdlp_extra_opts may not set {reserved}: Outriggarr owns those options"
             )
+        _probe_ytdlp(parsed)
         return json.dumps(parsed)
+    if key == "cookies_path":
+        if value:
+            p = Path(value)
+            if not p.is_file():
+                raise ValueError(f"cookies_path {value!r} is not a file inside the container")
+            if not os.access(p, os.R_OK):
+                raise ValueError(f"cookies_path {value!r} is not readable by the app user")
+        return value
     if key == "apprise_urls":
         from outriggarr.notify import validate_apprise_urls
 
@@ -172,6 +186,17 @@ def validate_setting(key: str, value: str) -> str:
             raise ValueError("sonarr_tag must be a short lowercase label without spaces")
         return value
     return value  # cookies_path: free text
+
+
+def _probe_ytdlp(opts: dict[str, Any]) -> None:
+    """yt-dlp validates format strings and many options only when constructing the
+    downloader; do that here so a typo is a 422, not an 'internal error' on every job."""
+    import yt_dlp
+
+    try:
+        yt_dlp.YoutubeDL({**opts, "quiet": True, "no_warnings": True})
+    except Exception as exc:
+        raise ValueError(f"yt-dlp rejected it: {exc}") from None
 
 
 def ytdlp_options(session: Session) -> dict[str, Any]:

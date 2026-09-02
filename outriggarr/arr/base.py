@@ -12,7 +12,13 @@ from typing import Protocol
 
 
 class ArrError(Exception):
-    """Any failed *arr call. `str(err)` carries the request and the verbatim response text."""
+    """Any failed *arr call. `str(err)` carries the request and the verbatim response text.
+    `retryable` is True for transport errors and 5xx (try again later) and False for a
+    4xx/validation answer that will not change on its own."""
+
+    def __init__(self, message: str, *, retryable: bool = True) -> None:
+        super().__init__(message)
+        self.retryable = retryable
 
 
 @dataclass(frozen=True)
@@ -137,6 +143,7 @@ ENGLISH = Language(1, "English")
 
 @dataclass(frozen=True)
 class ImportCandidate:
+    id: int  # the *arr's transient candidate id (needed by its reprocess call)
     path: str  # as the *arr sees it
     relative_path: str
     name: str
@@ -227,3 +234,15 @@ class ArrClient(Protocol):
         ...
 
     async def command(self, command_id: int) -> CommandStatus: ...
+
+    async def reprocess(
+        self,
+        candidate: ImportCandidate,
+        target: Target,
+        quality_name: str,
+        languages: tuple[Language, ...],
+        season: int | None,
+    ) -> tuple[str, ...]:
+        """Re-evaluate one manual-import candidate WITH explicit ids (what the *arr's own
+        UI does after you pick the series/movie) and return the rejections that remain."""
+        ...

@@ -497,11 +497,13 @@ async def test_radarr_target_info() -> None:
 def test_languages_for_import_defaults_to_english() -> None:
     from outriggarr.arr.base import ImportCandidate, languages_for_import
 
-    unknown = ImportCandidate("/p", "p", "p", 1, (), (Language(0, "Unknown"),))
+    unknown = ImportCandidate(1, "/p", "p", "p", 1, (), (Language(0, "Unknown"),))
     assert languages_for_import(unknown) == (Language(1, "English"),)
-    none = ImportCandidate("/p", "p", "p", 1, (), ())
+    none = ImportCandidate(1, "/p", "p", "p", 1, (), ())
     assert languages_for_import(none) == (Language(1, "English"),)
-    known = ImportCandidate("/p", "p", "p", 1, (), (Language(0, "Unknown"), Language(4, "French")))
+    known = ImportCandidate(
+        1, "/p", "p", "p", 1, (), (Language(0, "Unknown"), Language(4, "French"))
+    )
     assert languages_for_import(known) == (Language(4, "French"),)
 
 
@@ -660,3 +662,55 @@ async def test_extra_files_config_parse() -> None:
     assert cfg == ExtraFilesConfig(True, ("srt", "sub", "nfo"))
     assert cfg.imports("SRT") and cfg.imports(".nfo") and not cfg.imports("ass")
     assert not ExtraFilesConfig(False, ("srt",)).imports("srt")
+
+
+async def test_arr_error_retryable_classification() -> None:
+    client, _ = make(SonarrClient, lambda r: httpx.Response(404, text="nope"))
+    with pytest.raises(ArrError) as ei:
+        await client.status()
+    assert ei.value.retryable is False
+    client, _ = make(SonarrClient, lambda r: httpx.Response(503, text="busy"))
+    with pytest.raises(ArrError) as ei:
+        await client.status()
+    assert ei.value.retryable is True
+
+    def boom(r: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused", request=r)
+
+    client, _ = make(SonarrClient, boom)
+    with pytest.raises(ArrError) as ei:
+        await client.status()
+    assert ei.value.retryable is True
+
+
+async def test_sonarr_reprocess_posts_ids_and_returns_remaining_rejections() -> None:
+    from outriggarr.arr.base import ImportCandidate, Language, Target
+
+    posted: list[dict] = []
+
+    def handler(r: httpx.Request) -> httpx.Response:
+        if r.url.path.endswith("/qualitydefinition"):
+            return httpx.Response(200, json=QUALITY_DEFS)
+        assert r.method == "POST" and r.url.path == "/base/api/v3/manualimport"
+        posted.append(json.loads(r.content)[0])
+        return httpx.Response(
+            202, json=[{"id": 7, "rejections": [{"reason": "Not an upgrade", "type": "permanent"}]}]
+        )
+
+    client, _ = make(SonarrClient, handler)
+    cand = ImportCandidate(7, "/data/outriggarr/1/x.mkv", "x.mkv", "x", 1, ("Unknown Series",), ())
+    out = await client.reprocess(
+        cand, Target(series_id=5, episode_ids=(42,)), "WEBDL-1080p", (Language(1, "English"),), 30
+    )
+    assert out == ("Not an upgrade",)
+    body = posted[0]
+    assert body["id"] == 7 and body["path"] == "/data/outriggarr/1/x.mkv"
+    assert body["seriesId"] == 5 and body["episodeIds"] == [42] and body["seasonNumber"] == 30
+    assert body["quality"]["quality"] == {"id": 3, "name": "WEBDL-1080p"} and body["languages"] == [
+        {"id": 1, "name": "English"}
+    ]
+
+    radarr, _ = make(RadarrClient, handler)
+    posted.clear()
+    await radarr.reprocess(cand, Target(movie_id=77), "WEBDL-720p", (), None)
+    assert posted[0]["movieId"] == 77 and "seasonNumber" not in posted[0]

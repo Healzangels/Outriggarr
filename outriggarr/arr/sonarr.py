@@ -59,6 +59,9 @@ class SonarrClient(ArrHttp):
     def _import_ids(self, target: Target) -> dict[str, Any]:
         return {"seriesId": target.series_id, "episodeIds": list(target.episode_ids)}
 
+    def _reprocess_extra(self, target: Target, season: int | None) -> dict[str, Any]:
+        return {"seasonNumber": season} if season is not None else {}
+
     async def series(self) -> list[SeriesRef]:
         data = await self.get("series")
         return [

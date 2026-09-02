@@ -18,7 +18,7 @@ from outriggarr.settings import DEFAULTS, get_setting, set_setting, validate_set
         ("merge_container", "mp4", "mp4"),
         ("ytdlp_extra_opts", '{"ratelimit": 1}', '{"ratelimit": 1}'),
         ("ytdlp_extra_opts", "", "{}"),
-        ("cookies_path", "/config/cookies.txt", "/config/cookies.txt"),
+        ("cookies_path", "", ""),
         ("sonarr_tag", "outriggarr", "outriggarr"),
         ("sonarr_tag", "", ""),
         ("audio_language", "eng", "eng"),
@@ -53,16 +53,17 @@ def test_validate_setting_rejects(key: str, value: str) -> None:
         validate_setting("nope", "x")
 
 
-def test_set_setting_validates_and_ytdlp_options(session_factory) -> None:
+def test_set_setting_validates_and_ytdlp_options(session_factory, tmp_path) -> None:
     with session_factory() as s:
         assert ytdlp_options(s) == {}
         set_setting(s, "ytdlp_extra_opts", '{"sponsorblock_remove": ["sponsor"]}')
-        set_setting(s, "cookies_path", "/config/cookies.txt")
+        cookies = tmp_path / "cookies.txt"
+        cookies.write_text("# Netscape HTTP Cookie File")
+        set_setting(s, "cookies_path", str(cookies))
         s.commit()
-        assert ytdlp_options(s) == {
-            "sponsorblock_remove": ["sponsor"],
-            "cookiefile": "/config/cookies.txt",
-        }
+        assert ytdlp_options(s) == {"sponsorblock_remove": ["sponsor"], "cookiefile": str(cookies)}
+        with pytest.raises(ValueError, match="not a file"):
+            set_setting(s, "cookies_path", str(tmp_path / "missing.txt"))
         with pytest.raises(ValueError):
             set_setting(s, "concurrency", "0")
         assert get_setting(s, "concurrency") == DEFAULTS["concurrency"]
@@ -82,7 +83,10 @@ def test_settings_api(client: TestClient) -> None:
     assert r.status_code == 422 and "unknown setting" in r.json()["detail"]
 
 
-def test_health_reports_tooling(client: TestClient) -> None:
+def test_health_reports_tooling(client: TestClient, monkeypatch) -> None:
+    import shutil
+
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
     body = client.get("/health").json()
     assert body["status"] == "ok"
     assert isinstance(body["yt_dlp"], str) and body["yt_dlp"]
@@ -90,7 +94,10 @@ def test_health_reports_tooling(client: TestClient) -> None:
     assert json.dumps(body)
 
 
-def test_health_reports_staging_writable(client: TestClient, settings) -> None:
+def test_health_reports_staging_writable(client: TestClient, settings, monkeypatch) -> None:
+    import shutil
+
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
     settings.staging_dir.mkdir(parents=True, exist_ok=True)
     assert client.get("/health").json()["staging_writable"] is True
     import shutil as _sh
@@ -213,3 +220,20 @@ def test_source_drops_reserved_extra_keys_even_if_stored(monkeypatch) -> None:
     src.resolve("https://youtu.be/x")
     assert seen[0].get("outtmpl") != "/etc/passwd" and "postprocessors" not in seen[0]
     assert seen[0]["ratelimit"] == 5 and seen[0]["extract_flat"] == "in_playlist"
+
+
+def test_default_format_and_extra_opts_are_probed_by_ytdlp() -> None:
+    with pytest.raises(ValueError, match="yt-dlp rejected"):
+        validate_setting("default_format", "bestvideo[height<=1080")
+    assert validate_setting("default_format", "bestvideo[height<=1080]+bestaudio/best")
+    with pytest.raises(ValueError):
+        validate_setting("merge_container", "webm")
+
+
+def test_log_level_env_is_normalised_and_validated() -> None:
+    from outriggarr.settings import Settings
+
+    assert Settings.from_env({"OUTRIGGARR_LOG_LEVEL": "debug"}).log_level == "DEBUG"
+    assert Settings.from_env({}).log_level == "INFO"
+    with pytest.raises(ValueError, match="not a logging level"):
+        Settings.from_env({"OUTRIGGARR_LOG_LEVEL": "loud"})

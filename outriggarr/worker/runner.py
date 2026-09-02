@@ -12,12 +12,12 @@ import contextlib
 import logging
 import shutil
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, update
 from sqlalchemy.orm import Session
 
 from outriggarr.arr import ArrFactory
@@ -25,8 +25,10 @@ from outriggarr.arr.base import (
     ArrClient,
     ArrError,
     CommandStatus,
+    ImportCandidate,
     ImportFile,
     Target,
+    TargetInfo,
     languages_for_import,
 )
 from outriggarr.db.models import Job, JobStatus, utcnow
@@ -48,6 +50,10 @@ MAX_ATTEMPTS = len(BACKOFF) + 1
 COMMAND_TIMEOUT_SECONDS = 600.0
 PROGRESS_WRITE_INTERVAL = 2.0
 CANCEL_CHECK_INTERVAL = 2.0
+# GET /manualimport evaluates rejections without our ids; these two are the parser's
+# own "I could not tell which series/movie this is" and mean nothing once we reprocess
+# with explicit ids.
+PARSE_ONLY_REJECTIONS = frozenset({"unknown series", "unknown movie"})
 
 
 @dataclass
@@ -72,6 +78,15 @@ class _Retry(Exception):
     """A transient failure; the runner schedules a retry with backoff."""
 
 
+class _Cancelled(Exception):
+    """The API cancelled the job while we were working on it."""
+
+
+def _arr_failure(exc: ArrError) -> Exception:
+    """Transport/5xx → retry with backoff; a 4xx/validation answer is deterministic."""
+    return _Retry(str(exc)) if exc.retryable else _NoRetry(str(exc))
+
+
 def target_of(job: Job) -> Target:
     if job.movie_id is not None:
         return Target(movie_id=job.movie_id)
@@ -79,18 +94,23 @@ def target_of(job: Job) -> Target:
 
 
 def sweep_cancelled(session: Session, staging_dir: Path) -> int:
-    """Remove staging folders of cancelled jobs that still reference one."""
-    rows = list(
-        session.scalars(
-            select(Job).where(Job.status == JobStatus.cancelled, Job.staged_path.is_not(None))
-        )
-    )
+    """Remove the staging folders of cancelled jobs (whatever `staged_path` says: an
+    internal error after download leaves a full video with staged_path unset)."""
+    rows = list(session.scalars(select(Job).where(Job.status == JobStatus.cancelled)))
+    swept = 0
     for job in rows:
-        shutil.rmtree(staging_dir / str(job.id), ignore_errors=True)
-        job.staged_path = None
-    if rows:
+        folder = staging_dir / str(job.id)
+        touched = False
+        if folder.exists():
+            shutil.rmtree(folder, ignore_errors=True)
+            touched = True
+        if job.staged_path is not None:
+            job.staged_path = None
+            touched = True
+        swept += touched
+    if swept:
         session.commit()
-    return len(rows)
+    return swept
 
 
 def abort_check(
@@ -115,8 +135,13 @@ def abort_check(
     return check
 
 
-def claim_next_jobs(session: Session, limit: int, now: datetime) -> list[int]:
-    """Mark up to `limit` due jobs as downloading and return their ids."""
+def claim_next_jobs(
+    session: Session, limit: int, now: datetime, exclude: Iterable[int] = ()
+) -> list[int]:
+    """Mark up to `limit` due jobs as downloading and return their ids. `exclude` is the
+    set a running task still owns (a job cancelled then retried mid-run is `queued`
+    again while its first run is still going; claiming it twice would run two
+    downloads into one folder)."""
     if limit <= 0:
         return []
     due = or_(
@@ -126,9 +151,11 @@ def claim_next_jobs(session: Session, limit: int, now: datetime) -> list[int]:
         & (Job.next_retry_at.is_not(None))
         & (Job.next_retry_at <= now),
     )
-    jobs = list(
-        session.scalars(select(Job).where(due).order_by(Job.created_at, Job.id).limit(limit))
-    )
+    q = select(Job).where(due).order_by(Job.created_at, Job.id).limit(limit)
+    excluded = list(exclude)
+    if excluded:
+        q = q.where(Job.id.not_in(excluded))
+    jobs = list(session.scalars(q))
     for job in jobs:
         job.status = JobStatus.downloading
         job.next_retry_at = None
@@ -158,26 +185,31 @@ def recover_stale_jobs(session: Session) -> int:
 
 async def run_worker(deps: RunnerDeps, stop: asyncio.Event) -> None:
     log.info("worker started")
-    with deps.session_factory() as session:
-        recover_stale_jobs(session)
-    running: set[asyncio.Task[None]] = set()
+    try:
+        with deps.session_factory() as session:
+            recover_stale_jobs(session)
+    except Exception:
+        log.exception("recovering stale jobs failed; continuing")
+    running: dict[int, asyncio.Task[None]] = {}
     while not stop.is_set():
-        running = {t for t in running if not t.done()}
+        running = {jid: t for jid, t in running.items() if not t.done()}
         try:
             with deps.session_factory() as session:
                 sweep_cancelled(session, deps.staging_dir)
                 concurrency = int(get_setting(session, "concurrency"))
-                ids = claim_next_jobs(session, concurrency - len(running), deps.now())
+                ids = claim_next_jobs(
+                    session, concurrency - len(running), deps.now(), exclude=running.keys()
+                )
         except Exception:
             log.exception("claiming jobs failed")
             ids = []
         for job_id in ids:
-            running.add(asyncio.create_task(_guarded(deps, job_id, stop.is_set)))
+            running[job_id] = asyncio.create_task(_guarded(deps, job_id, stop.is_set))
         with contextlib.suppress(TimeoutError):
             await asyncio.wait_for(stop.wait(), timeout=deps.poll_seconds)
     if running:
         log.info("worker stopping; waiting for %d job(s) to abort", len(running))
-        await asyncio.gather(*running, return_exceptions=True)
+        await asyncio.gather(*running.values(), return_exceptions=True)
     log.info("worker stopped")
 
 
@@ -189,7 +221,10 @@ async def _guarded(deps: RunnerDeps, job_id: int, stop_is_set: Callable[[], bool
         with deps.session_factory() as session:
             job = session.get(Job, job_id)
             if job is not None:
-                _fail(job, f"internal error: {exc!r}", retry=False, now=deps.now())
+                if job.staged_path is None:
+                    # nothing usable to keep for a Retry: do not leave a multi-GB orphan
+                    shutil.rmtree(deps.staging_dir / str(job.id), ignore_errors=True)
+                _fail(session, job, f"internal error: {exc!r}", retry=False, now=deps.now())
                 session.commit()
                 await _notify_failed(deps, session, job)
 
@@ -201,6 +236,8 @@ async def process_job(
         job = session.get(Job, job_id)
         if job is None:
             return
+        if job.status is JobStatus.cancelled:
+            return  # cancelled between claim and start: leave the row exactly as the API left it
         if job.status in (JobStatus.queued, JobStatus.failed):
             job.status = JobStatus.downloading
         job.attempts += 1
@@ -215,13 +252,23 @@ async def process_job(
 
         try:
             staged = await _download_stage(deps, session, job, client, target, dest, should_abort)
-            if _cancelled_meanwhile(session, job):
-                raise DownloadAborted("cancelled")
-            job.status = JobStatus.importing
+            if staged is None:  # target already satisfied before we downloaded anything
+                imported = False
+            else:
+                _enter_importing(session, job)
+                imported = await _import_stage(
+                    deps, session, job, client, target, remote_folder, staged
+                )
+        except _Cancelled:
+            shutil.rmtree(dest, ignore_errors=True)
+            session.refresh(job)
+            job.staged_path = None
+            if not job.error or job.error == "cancelled":
+                job.error = "cancelled during download"
+            if job.finished_at is None:
+                job.finished_at = deps.now()
             session.commit()
-            imported = await _import_stage(
-                deps, session, job, client, target, remote_folder, staged
-            )
+            return
         except DownloadAborted:
             shutil.rmtree(dest, ignore_errors=True)
             if _cancelled_meanwhile(session, job):
@@ -235,15 +282,15 @@ async def process_job(
             session.commit()
             return
         except _Retry as exc:
-            _fail(job, str(exc), retry=True, now=deps.now())
-            session.commit()
-            if job.next_retry_at is None:  # attempts exhausted
-                await _notify_failed(deps, session, job)
+            if _fail(session, job, str(exc), retry=True, now=deps.now()):
+                session.commit()
+                if job.next_retry_at is None:  # attempts exhausted
+                    await _notify_failed(deps, session, job)
             return
         except _NoRetry as exc:
-            _fail(job, str(exc), retry=False, now=deps.now())
-            session.commit()
-            await _notify_failed(deps, session, job)
+            if _fail(session, job, str(exc), retry=False, now=deps.now()):
+                session.commit()
+                await _notify_failed(deps, session, job)
             return
 
         shutil.rmtree(dest, ignore_errors=True)
@@ -251,7 +298,7 @@ async def process_job(
         if imported:
             job.status = JobStatus.done
             job.progress_pct = 100
-            log.info("job %d done: %s", job.id, staged.name)
+            log.info("job %d done: %s", job.id, staged.name if staged else "")
             session.commit()
             if get_setting(session, "notify_on_done") == "1":
                 await notify(
@@ -261,9 +308,23 @@ async def process_job(
                 )
         else:
             job.status = JobStatus.cancelled
+            job.staged_path = None
             job.error = "target already has a file; nothing imported"
-            log.info("job %d: target already satisfied, staged file discarded", job.id)
+            log.info("job %d: target already satisfied", job.id)
         session.commit()
+
+
+def _enter_importing(session: Session, job: Job) -> None:
+    """downloading → importing, but only if the API did not cancel meanwhile (atomic)."""
+    res = session.execute(
+        update(Job)
+        .where(Job.id == job.id, Job.status == JobStatus.downloading)
+        .values(status=JobStatus.importing)
+    )
+    session.commit()
+    session.refresh(job)
+    if res.rowcount != 1:
+        raise _Cancelled()
 
 
 async def notify(deps: RunnerDeps, title: str, body: str) -> None:
@@ -298,7 +359,8 @@ async def _download_stage(
     target: Target,
     dest: Path,
     should_abort: Callable[[], bool],
-) -> Path:
+) -> Path | None:
+    """Returns the staged file, or None when the target already has a file (nothing to do)."""
     if job.staged_path and Path(job.staged_path).exists():
         log.info("job %d: staged file already present, skipping download", job.id)
         return Path(job.staged_path)
@@ -306,7 +368,11 @@ async def _download_stage(
     try:
         info = await client.target_info(target)
     except ArrError as exc:
-        raise _Retry(str(exc)) from exc
+        raise _arr_failure(exc) from exc
+    if info.has_file:
+        # Sonarr/Radarr already have it (imported elsewhere, or by a twin job): do not
+        # spend the download; the caller records the job as satisfied.
+        return None
 
     fmt = job.format or get_setting(session, "default_format")
     container = get_setting(session, "merge_container")
@@ -339,37 +405,26 @@ async def _download_stage(
             subtitle_langs=sub_langs,
             auto_subtitles=auto_subs,
         )
+        quality = quality_for_height(result.height)
+        staged = dest / _staging_name(target, info, quality, result.ext)
+        result.path.rename(staged)
+        # Subtitle sidecars keep the video's stem so the *arr imports them as extra files:
+        # <id>.<lang>.srt → <staged stem>.<lang>.srt
+        for sub in result.subtitles:
+            suffix = sub.name[len(result.video_id) :]  # ".en.srt"
+            sub.rename(dest / f"{staged.stem}{suffix}")
     except SourceError as exc:
         shutil.rmtree(dest, ignore_errors=True)
         raise _Retry(str(exc)) from exc
     except OSError as exc:
-        # e.g. PermissionError creating /staging/<id>: an operator problem, retryable
-        # once the mount is fixed. Keep the OS text verbatim.
+        # e.g. PermissionError creating /staging/<id>, ENAMETOOLONG on the rename: an
+        # operator/environment problem, retryable once fixed. Keep the OS text verbatim.
         shutil.rmtree(dest, ignore_errors=True)
         raise _Retry(f"staging error: {exc}") from exc
     except DownloadAborted:
         shutil.rmtree(dest, ignore_errors=True)
         raise
 
-    quality = quality_for_height(result.height)
-    if target.is_movie:
-        name = movie_filename(info.title, info.year, quality, result.ext)
-    else:
-        name = episode_filename(
-            info.title,
-            info.season or 0,
-            list(info.episode_numbers),
-            info.episode_title,
-            quality,
-            result.ext,
-        )
-    staged = dest / name
-    result.path.rename(staged)
-    # Subtitle sidecars keep the video's stem so the *arr imports them as extra files:
-    # <id>.<lang>.srt → <staged stem>.<lang>.srt
-    for sub in result.subtitles:
-        suffix = sub.name[len(result.video_id) :]  # ".en.srt"
-        sub.rename(dest / f"{staged.stem}{suffix}")
     if result.subtitles:
         log.info("job %d: %d subtitle sidecar(s) staged", job.id, len(result.subtitles))
     language = get_setting(session, "audio_language")
@@ -385,6 +440,14 @@ async def _download_stage(
     job.progress_pct = 100
     session.commit()
     return staged
+
+
+def _staging_name(target: Target, info: TargetInfo, quality: str, ext: str) -> str:
+    if target.is_movie:
+        return movie_filename(info.title, info.year, quality, ext)
+    return episode_filename(
+        info.title, info.season or 0, list(info.episode_numbers), info.episode_title, quality, ext
+    )
 
 
 async def _import_stage(
@@ -419,17 +482,12 @@ async def _import_stage(
                 f"no import candidate for {staged.name!r} in {remote_folder!r}; "
                 f"the server listed {seen}"
             )
-        if cand.rejections:
-            raise _NoRetry("import rejected: " + "; ".join(cand.rejections))
+        languages = languages_for_import(cand)
+        rejections = await _real_rejections(client, cand, target, quality, languages, info)
+        if rejections:
+            raise _NoRetry("import rejected: " + "; ".join(rejections))
         command_id = await client.manual_import(
-            [
-                ImportFile(
-                    path=cand.path,
-                    quality_name=quality,
-                    languages=languages_for_import(cand),
-                    target=target,
-                )
-            ]
+            [ImportFile(path=cand.path, quality_name=quality, languages=languages, target=target)]
         )
         status = await _wait_for_command(deps, client, command_id)
         if not status.ok:
@@ -441,8 +499,29 @@ async def _import_stage(
                 "staged file kept"
             )
     except ArrError as exc:
-        raise _Retry(str(exc)) from exc
+        raise _arr_failure(exc) from exc
     return True
+
+
+async def _real_rejections(
+    client: ArrClient,
+    cand: ImportCandidate,
+    target: Target,
+    quality: str,
+    languages,
+    info: TargetInfo,
+) -> list[str]:
+    """The GET's rejections were computed without our ids, so "Unknown Series" only
+    means the parser could not map the filename. Re-evaluate with explicit ids (the
+    *arr's reprocess call, what its own UI does); if that is unavailable, drop just the
+    parse-only rejections — the post-command `hasFile` check remains the safety net."""
+    if not cand.rejections:
+        return []
+    try:
+        return list(await client.reprocess(cand, target, quality, languages, info.season))
+    except ArrError as exc:
+        log.warning("reprocess unavailable (%s); ignoring parse-only rejections", exc)
+        return [r for r in cand.rejections if r.strip().lower() not in PARSE_ONLY_REJECTIONS]
 
 
 async def _wait_for_command(deps: RunnerDeps, client: ArrClient, command_id: int) -> CommandStatus:
@@ -456,7 +535,11 @@ async def _wait_for_command(deps: RunnerDeps, client: ArrClient, command_id: int
         await deps.sleep(deps.command_poll_seconds)
 
 
-def _fail(job: Job, message: str, *, retry: bool, now: datetime) -> None:
+def _fail(session: Session, job: Job, message: str, *, retry: bool, now: datetime) -> bool:
+    """Record a failure. Returns False (and changes nothing) when the API cancelled the
+    job meanwhile: the user's decision outranks a failure that landed later."""
+    if _cancelled_meanwhile(session, job):
+        return False
     job.error = message
     job.status = JobStatus.failed
     if retry and job.attempts < MAX_ATTEMPTS:
@@ -465,3 +548,4 @@ def _fail(job: Job, message: str, *, retry: bool, now: datetime) -> None:
     else:
         job.next_retry_at = None
         job.finished_at = now
+    return True

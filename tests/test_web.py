@@ -381,7 +381,9 @@ def test_override_form_accepts_a_url(client: TestClient) -> None:
         "/api/subscriptions",
         json={"connection_id": 1, "series_id": 5, "source_url": "https://www.youtube.com/@hotones"},
     ).json()["id"]
-    source.videos = [VideoRef("old7", "Seven, older upload", "https://y/old7", 1, None, None)]
+    source.infos["https://y/old7"] = VideoRef(
+        "old7", "Seven, older upload", "https://y/old7", 1, None, None
+    )
     r = client.post(
         f"/subscriptions/{sub_id}/overrides",
         data={"video_url": "https://y/old7", "season": "30", "episode": "7"},

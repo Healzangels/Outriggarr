@@ -97,6 +97,14 @@ class OverrideOut(OverrideIn):
 class OverrideByUrlIn(OverrideIn):
     url: str = Field(min_length=1, max_length=1000)
 
+    @field_validator("url")
+    @classmethod
+    def _http(cls, v: str) -> str:
+        v = v.strip()
+        if not (v.startswith("http://") or v.startswith("https://")):
+            raise ValueError("url must start with http:// or https://")
+        return v
+
 
 def _get_or_404(session: Session, subscription_id: int) -> Subscription:
     sub = session.get(Subscription, subscription_id)
@@ -225,15 +233,11 @@ async def set_override_by_url(
     """Resolve a pasted URL to one video and pin it; works for videos outside the listing."""
     sub = _get_or_404(session, subscription_id)
     try:
-        videos = await asyncio.to_thread(source.resolve, body.url.strip())
+        # fetch_info is a single-video extract (noplaylist), so a watch URL copied from a
+        # playlist view (`watch?v=…&list=…`) resolves to that video, not the playlist.
+        video = await asyncio.to_thread(source.fetch_info, body.url)
     except SourceError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
-    if len(videos) != 1:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_CONTENT,
-            f"the URL resolved to {len(videos)} videos; an override needs exactly one",
-        )
-    (video,) = videos
     row = next((o for o in sub.overrides if o.video_id == video.id), None)
     if row is None:
         row = Override(

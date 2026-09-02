@@ -72,3 +72,13 @@ def test_movie_filename() -> None:
 
 def test_quality_from_filename_absent() -> None:
     assert quality_from_filename("random.mkv") is None
+
+
+def test_stem_is_capped_by_utf8_bytes_for_linux_name_max() -> None:
+    cjk = "日本語のタイトル" * 30  # 3 bytes per character
+    name = episode_filename(cjk, 1, [1], cjk, "WEBDL-2160p", "mkv")
+    assert name.endswith(" [WEBDL-2160p].mkv")
+    assert len(name.encode("utf-8")) + len(".en.srt") <= 255, "video + sidecar fit NAME_MAX"
+    assert "�" not in name, "never split a character"
+    movie = movie_filename("🍿" * 300, 2020, "WEBDL-1080p", "mkv")
+    assert len(movie.encode("utf-8")) <= 240

@@ -171,3 +171,49 @@ def test_dedupe_index_ignores_done_jobs(session_factory) -> None:
             s.commit()  # b is live → second live one refused
         s.rollback()
         assert s.query(Job).count() == 2
+
+
+def test_migrations_are_transactional_and_downgrade_keeps_dedupe(settings) -> None:
+    """An interrupted or failing migration must leave the DB usable, not half-migrated."""
+    from alembic import command
+    from sqlalchemy import text
+    from sqlalchemy.exc import IntegrityError, OperationalError
+
+    from outriggarr.db.session import alembic_config, make_engine, run_migrations
+
+    settings.config_dir.mkdir(parents=True)
+    run_migrations(settings.database_url)
+    engine = make_engine(settings.database_url)
+    insert_job = (
+        "INSERT INTO job (connection_id, target_kind, target_key, video_id, video_url, "
+        "video_title, status, progress_pct, attempts, created_at) "
+        "VALUES (1, 'episode', 'episode:1:1', 'v', 'http://v', 't', :status, 0, 0, "
+        "'2026-01-01 00:00:00')"
+    )
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO connection (kind, name, url, api_key, staging_path_remote, enabled) "
+                "VALUES ('sonarr', 's', 'http://x', 'k', '/s', 1)"
+            )
+        )
+        for st in ("done", "queued"):  # a done+live twin, legal at 0004+
+            conn.execute(text(insert_job), {"status": st})
+    cfg = alembic_config(settings.database_url)
+    with pytest.raises((IntegrityError, OperationalError)):
+        command.downgrade(cfg, "0003")  # the twin makes the full constraint impossible
+    with engine.connect() as conn:
+        names = {
+            r[0] for r in conn.execute(text("SELECT name FROM sqlite_master WHERE type='index'"))
+        }
+        tables = {
+            r[0] for r in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
+        }
+        version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
+    assert "ux_job_live_target_video" in names, "the partial index survives a failed downgrade"
+    assert not [t for t in tables if t.startswith("_alembic_tmp")], "no half-rebuilt table left"
+    assert version == "0004", "0006→0005→0004 applied; the failing 0004→0003 step rolled back"
+    command.upgrade(cfg, "head")  # and the DB is still usable: back to head cleanly
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0006"
+    engine.dispose()

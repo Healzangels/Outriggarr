@@ -147,6 +147,17 @@ class Override(Base):
     subscription: Mapped[Subscription] = relationship(back_populates="overrides")
 
 
+class VideoMeta(Base):
+    """Per-video facts that cost a full yt-dlp extract to learn (upload date). Cached so
+    the date strategy never re-fetches the same video on every scan."""
+
+    __tablename__ = "video_meta"
+
+    video_id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    upload_date: Mapped[str | None] = mapped_column(String(8))  # YYYYMMDD or NULL
+    fetched_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False, default=utcnow)
+
+
 class Job(Base):
     __tablename__ = "job"
     __table_args__ = (
@@ -206,7 +217,7 @@ class Job(Base):
         if kind is TargetKind.episode:
             if series_id is None or not episode_ids:
                 raise ValueError("episode target needs series_id and episode_ids")
-            return f"episode:{series_id}:{','.join(str(i) for i in sorted(episode_ids))}"
+            return f"episode:{series_id}:{','.join(str(i) for i in sorted(set(episode_ids)))}"
         if movie_id is None:
             raise ValueError("movie target needs movie_id")
         return f"movie:{movie_id}"

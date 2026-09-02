@@ -16,6 +16,10 @@ from datetime import date, timedelta
 STRATEGY_ORDER: tuple[str, ...] = ("override", "regex", "title", "date")
 OPTIONAL_STRATEGIES: frozenset[str] = frozenset({"regex", "title", "date"})
 MIN_CONTAINMENT_LEN = 6
+MIN_CONTAINMENT_TOKENS = 2
+# A video whose title carries one of these words while the episode title does not is
+# a promo for the episode, not the episode.
+PROMO_TOKENS = frozenset({"trailer", "teaser", "promo", "preview", "sneak", "recap"})
 
 
 @dataclass(frozen=True)
@@ -76,7 +80,9 @@ class MatchResult:
 
 _PUNCT = re.compile(r"[^\w\s]+", re.UNICODE)
 _WS = re.compile(r"\s+")
-_EP_PREFIX = re.compile(r"^(?:ep(?:isode)?\.?\s*\d+|#\s*\d+|\d+\.)\s*[-:|–—]?\s*", re.IGNORECASE)
+_EP_PREFIX = re.compile(
+    r"^(?:ep(?:isode)?\.?\s*\d+|#\s*\d+|\d+\.(?=\s))\s*[-:|–—]?\s*", re.IGNORECASE
+)
 
 
 def normalise_title(text: str) -> str:
@@ -135,15 +141,7 @@ def _candidates(
                 out.append(v)
         return out
     if strategy == "title":
-        want = normalise_title(ep.title)
-        if not want:
-            return []
-        exact = [v for v in videos if normalise_title(v.title) == want]
-        if exact:
-            return exact
-        if len(want) < MIN_CONTAINMENT_LEN:
-            return []
-        return [v for v in videos if want in normalise_title(v.title)]
+        return _title_candidates(ep, videos)[1]
     if strategy == "date":
         if ep.air_date is None:
             return []
@@ -153,6 +151,29 @@ def _candidates(
             v for v in videos if v.upload_date is not None and abs(v.upload_date - expected) <= tol
         ]
     raise ValueError(f"unknown strategy {strategy!r}")
+
+
+def _title_candidates(ep: Episode, videos: list[Video]) -> tuple[str, list[Video]]:
+    """(tier, candidates): exact normalised equality first; otherwise containment on
+    word boundaries, for episode titles with at least two words, skipping promos."""
+    want = normalise_title(ep.title)
+    if not want:
+        return ("none", [])
+    exact = [v for v in videos if normalise_title(v.title) == want]
+    if exact:
+        return ("exact", exact)
+    want_tokens = want.split()
+    if len(want) < MIN_CONTAINMENT_LEN or len(want_tokens) < MIN_CONTAINMENT_TOKENS:
+        return ("none", [])
+    out = []
+    for v in videos:
+        have = normalise_title(v.title)
+        if f" {want} " not in f" {have} ":
+            continue
+        if PROMO_TOKENS & (set(have.split()) - set(want_tokens)):
+            continue
+        out.append(v)
+    return ("contains", out)
 
 
 def match(
@@ -171,14 +192,35 @@ def match(
     seen: dict[int, dict[str, tuple[str, ...]]] = {ep.id: {} for ep in episodes}
 
     for strategy in enabled:
+        # A pinned video is exactly one episode's; it is never a candidate for another.
+        eligible = pool if strategy == "override" else [v for v in pool if v.id not in by_video]
+        claims: dict[str, list[tuple[Episode, str]]] = {}  # video id → (episode, tier)
         for ep in episodes:
             if ep.id in matched:
                 continue
-            cands = _candidates(strategy, ep, pool, by_video, cfg, rx)
+            if strategy == "title":
+                tier, cands = _title_candidates(ep, eligible)
+            else:
+                tier, cands = strategy, _candidates(strategy, ep, eligible, by_video, cfg, rx)
             seen[ep.id][strategy] = tuple(v.id for v in cands)
             if len(cands) == 1:
-                matched[ep.id] = Match(ep, cands[0], strategy)
-                pool.remove(cands[0])
+                claims.setdefault(cands[0].id, []).append((ep, tier))
+        # Resolve claims per video: one claimant wins; among several, a single exact-title
+        # claim beats containment claims ("The Return" must not take "The Return of the
+        # King"); otherwise the video is ambiguous and nobody gets it this round.
+        for video_id, claimants in claims.items():
+            winner: Episode | None = None
+            if len(claimants) == 1:
+                winner = claimants[0][0]
+            else:
+                exact = [ep for ep, tier in claimants if tier == "exact"]
+                if len(exact) == 1:
+                    winner = exact[0]
+            if winner is None:
+                continue
+            video = next(v for v in pool if v.id == video_id)
+            matched[winner.id] = Match(winner, video, strategy)
+            pool.remove(video)
 
     return MatchResult(
         matches=tuple(matched[ep.id] for ep in episodes if ep.id in matched),
