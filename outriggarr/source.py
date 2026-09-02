@@ -91,6 +91,11 @@ class VideoSource(Protocol):
 
 
 class _YtDlpLogger:
+    def __init__(self, expected_login: bool = False) -> None:
+        # On a first, cookie-less attempt a "sign in" error is expected and answered by
+        # a signed-in retry: log it as debug, not as an alarming ERROR line.
+        self._expected_login = expected_login
+
     def debug(self, msg: str) -> None:
         # yt-dlp routes its normal progress/info lines through debug() too.
         if not msg.startswith("[debug] "):
@@ -108,6 +113,9 @@ class _YtDlpLogger:
         log.warning("%s", msg)
 
     def error(self, msg: str) -> None:
+        if self._expected_login and NEEDS_LOGIN.search(msg):
+            log.debug("%s", msg)
+            return
         log.error("%s", msg)
 
 
@@ -321,7 +329,8 @@ class YtDlpSource:
         if isinstance(theirs, dict):
             for ie, kv in theirs.items():
                 args[ie] = {**args.get(ie, {}), **kv} if isinstance(kv, dict) else kv
-        merged = {**base, **extra, "logger": _YtDlpLogger()}  # operator wins, except reserved
+        logger = _YtDlpLogger(expected_login=bool(configured) and not cookies)
+        merged = {**base, **extra, "logger": logger}  # operator wins, except reserved
         if args:
             merged["extractor_args"] = args
         return merged

@@ -761,3 +761,23 @@ def test_cookies_are_used_only_when_youtube_asks_for_a_sign_in(monkeypatch, tmp_
     with pytest.raises(SourceError, match="Sign in"):
         YtDlpSource(extra_opts=lambda: {}).fetch_info("https://youtu.be/x")
     assert len(calls) == 1
+
+
+def test_expected_sign_in_error_is_not_logged_as_an_error(caplog, tmp_path) -> None:
+    import logging
+
+    from outriggarr.source import YtDlpSource, _YtDlpLogger
+
+    msg = "ERROR: [youtube] x: Sign in to confirm your age."
+    with caplog.at_level(logging.DEBUG, logger="outriggarr.source"):
+        _YtDlpLogger(expected_login=True).error(msg)
+        _YtDlpLogger(expected_login=False).error(msg)
+        _YtDlpLogger(expected_login=True).error("ERROR: [youtube] x: Video unavailable")
+    levels = [r.levelno for r in caplog.records]
+    assert levels == [logging.DEBUG, logging.ERROR, logging.ERROR]
+    jar = tmp_path / "c.txt"
+    jar.write_text("# cookies")
+    src = YtDlpSource(extra_opts=lambda: {"cookiefile": str(jar)})
+    assert src._opts({}, cookies=False)["logger"]._expected_login is True
+    assert src._opts({}, cookies=True)["logger"]._expected_login is False
+    assert YtDlpSource()._opts({}, cookies=False)["logger"]._expected_login is False
