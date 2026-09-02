@@ -121,6 +121,18 @@ class FakeArrClient:
         self.library_loads += 1
         return list(self.series_list)
 
+    series_titles: dict[int, str] = field(default_factory=dict)
+    series_title_error: Exception | None = None
+
+    async def series_title(self, series_id: int) -> str:
+        self.calls.append(("series_title", series_id))
+        if self.series_title_error is not None:
+            raise self.series_title_error
+        if series_id in self.series_titles:
+            return self.series_titles[series_id]
+        hit = next((s for s in self.series_list if s.id == series_id), None)
+        return hit.title if hit else ""
+
     async def episodes(self, series_id: int) -> list[EpisodeRef]:
         self.calls.append(("episodes", series_id))
         if self.kind is not ConnectionKind.sonarr:

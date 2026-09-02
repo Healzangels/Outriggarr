@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 import shutil
 import time
 from collections.abc import Callable, Iterable
@@ -31,7 +32,7 @@ from outriggarr.arr.base import (
     TargetInfo,
     languages_for_import,
 )
-from outriggarr.db.models import Job, JobStatus, utcnow
+from outriggarr.db.models import Connection, Job, JobStatus, utcnow
 from outriggarr.db.session import SessionFactory
 from outriggarr.naming import (
     episode_filename,
@@ -66,6 +67,7 @@ class RunnerDeps:
     command_poll_seconds: float = 2.0
     scheduler_tick_seconds: float = 60.0
     notifier: Notifier = field(default_factory=NullNotifier)
+    lock_dir: Path | None = None  # where the single-instance lock file lives (config dir)
     now: Callable[[], datetime] = utcnow
     sleep: Callable[[float], object] = field(default=asyncio.sleep)
 
@@ -82,6 +84,10 @@ class _Cancelled(Exception):
     """The API cancelled the job while we were working on it."""
 
 
+class _Interrupted(Exception):
+    """The worker is stopping mid-import: keep the staged file, resume after restart."""
+
+
 def _arr_failure(exc: ArrError) -> Exception:
     """Transport/5xx → retry with backoff; a 4xx/validation answer is deterministic."""
     return _Retry(str(exc)) if exc.retryable else _NoRetry(str(exc))
@@ -93,10 +99,14 @@ def target_of(job: Job) -> Target:
     return Target(series_id=job.series_id, episode_ids=tuple(job.episode_ids or ()))
 
 
-def sweep_cancelled(session: Session, staging_dir: Path) -> int:
-    """Remove the staging folders of cancelled jobs (whatever `staged_path` says: an
-    internal error after download leaves a full video with staged_path unset)."""
-    rows = list(session.scalars(select(Job).where(Job.status == JobStatus.cancelled)))
+def sweep_cancelled(session: Session, staging_dir: Path, *, full: bool = False) -> int:
+    """Remove the staging folders of cancelled jobs. Each tick looks only at rows that
+    still point at a staged file; `full=True` (startup) also stats every cancelled
+    job's folder, so an orphan from an internal error is caught once, not every 5 s."""
+    q = select(Job).where(Job.status == JobStatus.cancelled)
+    if not full:
+        q = q.where(Job.staged_path.is_not(None))
+    rows = list(session.scalars(q))
     swept = 0
     for job in rows:
         folder = staging_dir / str(job.id)
@@ -151,7 +161,13 @@ def claim_next_jobs(
         & (Job.next_retry_at.is_not(None))
         & (Job.next_retry_at <= now),
     )
-    q = select(Job).where(due).order_by(Job.created_at, Job.id).limit(limit)
+    q = (
+        select(Job)
+        .join(Connection, Connection.id == Job.connection_id)
+        .where(due, Connection.enabled)
+        .order_by(Job.created_at, Job.id)
+        .limit(limit)
+    )
     excluded = list(exclude)
     if excluded:
         q = q.where(Job.id.not_in(excluded))
@@ -183,11 +199,43 @@ def recover_stale_jobs(session: Session) -> int:
     return len(rows)
 
 
+def acquire_instance_lock(config_dir: Path):
+    """One worker per database. Returns the open lock file (keep it alive) or None when
+    another live instance holds it; on filesystems without flock it warns and proceeds."""
+    import fcntl
+
+    path = config_dir / ".outriggarr.lock"
+    try:
+        fh = open(path, "a+")  # noqa: SIM115 — held for the process lifetime
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return None
+    except OSError as exc:
+        log.warning("instance lock unavailable on this filesystem (%s); continuing", exc)
+        return open(path, "a+")  # noqa: SIM115
+    fh.seek(0)
+    fh.truncate()
+    fh.write(f"{os.getpid()}\n")
+    fh.flush()
+    return fh
+
+
 async def run_worker(deps: RunnerDeps, stop: asyncio.Event) -> None:
+    lock = acquire_instance_lock(
+        deps.staging_dir.parent if deps.lock_dir is None else deps.lock_dir
+    )
+    if lock is None:
+        log.error(
+            "another Outriggarr instance already runs the worker for this database; "
+            "this worker stays idle (two workers would download the same jobs twice)"
+        )
+        await stop.wait()
+        return
     log.info("worker started")
     try:
         with deps.session_factory() as session:
             recover_stale_jobs(session)
+            sweep_cancelled(session, deps.staging_dir, full=True)
     except Exception:
         log.exception("recovering stale jobs failed; continuing")
     running: dict[int, asyncio.Task[None]] = {}
@@ -257,7 +305,7 @@ async def process_job(
             else:
                 _enter_importing(session, job)
                 imported = await _import_stage(
-                    deps, session, job, client, target, remote_folder, staged
+                    deps, session, job, client, target, remote_folder, staged, should_abort
                 )
         except _Cancelled:
             shutil.rmtree(dest, ignore_errors=True)
@@ -267,6 +315,12 @@ async def process_job(
                 job.error = "cancelled during download"
             if job.finished_at is None:
                 job.finished_at = deps.now()
+            session.commit()
+            return
+        except _Interrupted:
+            job.status = JobStatus.queued
+            job.attempts -= 1
+            job.error = "interrupted during import; will resume"
             session.commit()
             return
         except DownloadAborted:
@@ -307,9 +361,13 @@ async def process_job(
                     f"{job.target_label or job.target_key}\n{job.video_title}",
                 )
         else:
-            job.status = JobStatus.cancelled
+            # Nothing left to do: the *arr already has the file (imported by an earlier
+            # attempt of this job, a twin job, or elsewhere). That is a finished job, not a
+            # user cancellation, so it neither covers the episode nor blocks a re-grab.
+            job.status = JobStatus.done
+            job.progress_pct = 100
             job.staged_path = None
-            job.error = "target already has a file; nothing imported"
+            job.error = "target already had a file; nothing imported"
             log.info("job %d: target already satisfied", job.id)
         session.commit()
 
@@ -370,9 +428,15 @@ async def _download_stage(
     except ArrError as exc:
         raise _arr_failure(exc) from exc
     if info.has_file:
-        # Sonarr/Radarr already have it (imported elsewhere, or by a twin job): do not
-        # spend the download; the caller records the job as satisfied.
+        # Sonarr/Radarr already have it — often OUR earlier attempt's import, whose
+        # staged file the *arr has since moved (a blip on the command poll, a hard stop
+        # while importing). Do not spend a download; the caller records the job as done.
         return None
+    if info.partially_satisfied:
+        raise _NoRetry(
+            "some of the target episodes already have a file; importing this multi-episode "
+            "file would replace them — split the target or delete those files first"
+        )
 
     fmt = job.format or get_setting(session, "default_format")
     container = get_setting(session, "merge_container")
@@ -458,6 +522,7 @@ async def _import_stage(
     target: Target,
     remote_folder: str,
     staged: Path,
+    should_abort: Callable[[], bool] = lambda: False,
 ) -> bool:
     """True if the file was imported; False if the target already had a file."""
     quality = quality_from_filename(staged.name)
@@ -489,7 +554,7 @@ async def _import_stage(
         command_id = await client.manual_import(
             [ImportFile(path=cand.path, quality_name=quality, languages=languages, target=target)]
         )
-        status = await _wait_for_command(deps, client, command_id)
+        status = await _wait_for_command(deps, client, command_id, should_abort)
         if not status.ok:
             raise _NoRetry(f"ManualImport {status.status}: {status.message or ''}".rstrip(": "))
         after = await client.target_info(target)
@@ -524,14 +589,22 @@ async def _real_rejections(
         return [r for r in cand.rejections if r.strip().lower() not in PARSE_ONLY_REJECTIONS]
 
 
-async def _wait_for_command(deps: RunnerDeps, client: ArrClient, command_id: int) -> CommandStatus:
+async def _wait_for_command(
+    deps: RunnerDeps,
+    client: ArrClient,
+    command_id: int,
+    should_abort: Callable[[], bool] = lambda: False,
+) -> CommandStatus:
     deadline = time.monotonic() + COMMAND_TIMEOUT_SECONDS
     while True:
         status = await client.command(command_id)
         if status.finished:
             return status
+        if should_abort():
+            raise _Interrupted()
         if time.monotonic() > deadline:
-            raise _NoRetry(f"ManualImport command {command_id} still {status.status} after timeout")
+            # the *arr may still be moving a large file: try again later, do not fail
+            raise _Retry(f"ManualImport command {command_id} still {status.status} after timeout")
         await deps.sleep(deps.command_poll_seconds)
 
 

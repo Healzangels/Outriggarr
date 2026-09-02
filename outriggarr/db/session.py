@@ -19,7 +19,9 @@ SessionFactory = sessionmaker[Session]
 
 
 def make_engine(database_url: str) -> Engine:
-    engine = create_engine(database_url, connect_args={"check_same_thread": False})
+    # timeout: how long a writer waits for the single SQLite write lock instead of
+    # failing with "database is locked" (the progress hook writes every 2 s).
+    engine = create_engine(database_url, connect_args={"check_same_thread": False, "timeout": 30})
 
     @event.listens_for(engine, "connect")
     def _sqlite_pragmas(dbapi_conn, _record) -> None:  # noqa: ANN001

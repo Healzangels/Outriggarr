@@ -12,7 +12,7 @@ from outriggarr.arr.base import (
     Wanted,
     WantedEpisode,
 )
-from outriggarr.arr.common import ArrHttp, parse_datetime
+from outriggarr.arr.common import ArrHttp, parse_date, parse_datetime
 
 
 class SonarrClient(ArrHttp):
@@ -54,6 +54,10 @@ class SonarrClient(ArrHttp):
             episode_title=" + ".join(str(e.get("title") or "") for e in ordered).strip(" +"),
             has_file=all(bool(e.get("hasFile")) for e in episodes),
             monitored=all(bool(e.get("monitored")) for e in episodes),
+            partially_satisfied=(
+                any(bool(e.get("hasFile")) for e in episodes)
+                and not all(bool(e.get("hasFile")) for e in episodes)
+            ),
         )
 
     def _import_ids(self, target: Target) -> dict[str, Any]:
@@ -89,6 +93,7 @@ class SonarrClient(ArrHttp):
                     has_file=bool(e.get("hasFile")),
                     monitored=bool(e.get("monitored")),
                     air_date_utc=parse_datetime(e.get("airDateUtc")),
+                    air_date=parse_date(e.get("airDate")),
                 )
                 for e in data
             ),
@@ -97,6 +102,9 @@ class SonarrClient(ArrHttp):
 
     async def movies(self) -> list[MovieRef]:
         raise ArrError("Sonarr has no movies")
+
+    async def series_title(self, series_id: int) -> str:
+        return str((await self.get(f"series/{series_id}")).get("title") or "")
 
     async def set_series_tag(self, series_id: int, tag_id: int, present: bool) -> None:
         # Sonarr's PUT wants the whole series resource back; only `tags` changes.

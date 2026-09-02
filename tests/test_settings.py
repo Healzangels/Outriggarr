@@ -237,3 +237,9 @@ def test_log_level_env_is_normalised_and_validated() -> None:
     assert Settings.from_env({}).log_level == "INFO"
     with pytest.raises(ValueError, match="not a logging level"):
         Settings.from_env({"OUTRIGGARR_LOG_LEVEL": "loud"})
+
+
+def test_ytdlp_stop_condition_keys_are_reserved() -> None:
+    for key in ("download_archive", "break_on_existing", "max_downloads"):
+        with pytest.raises(ValueError, match="owns those options"):
+            validate_setting("ytdlp_extra_opts", json.dumps({key: 1}))

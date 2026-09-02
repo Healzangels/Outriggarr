@@ -103,6 +103,11 @@ def create_jobs(body: list[JobIn], session: DbSession) -> list[Job]:
             raise HTTPException(
                 status.HTTP_404_NOT_FOUND, f"jobs[{i}]: connection {item.connection_id} not found"
             )
+        if not conn.enabled:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                f"jobs[{i}]: connection {conn.name!r} is disabled",
+            )
         if _KIND_FOR_CONNECTION[conn.kind] is not item.target.kind:
             raise HTTPException(
                 status.HTTP_422_UNPROCESSABLE_CONTENT,

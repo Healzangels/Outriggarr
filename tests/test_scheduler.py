@@ -506,3 +506,86 @@ async def test_internal_scan_error_is_notified_once(deps, session_factory) -> No
     stop.set()
     await asyncio.wait_for(task, 2)
     assert [t for t, _ in deps.notifier.sent] == ["Outriggarr: scan error"]
+
+
+# ---- discovery fixes -------------------------------------------------------------
+
+
+async def test_date_fetches_do_not_hold_the_write_lock(deps, session_factory) -> None:
+    """No VideoMeta row may be written while a fetch is still outstanding."""
+    from outriggarr.db.models import VideoMeta
+
+    sub_id, conn_id = make_sub(session_factory, strategies=["date"])
+    fake_client(deps, conn_id)
+    deps.source.recent = [
+        VideoRef(f"u{i}", f"Unrelated {i}", f"https://y/u{i}", 1, i, None) for i in range(3)
+    ]
+    for i in range(3):
+        deps.source.infos[f"https://y/u{i}"] = VideoRef(
+            f"u{i}", f"Unrelated {i}", f"https://y/u{i}", 1, i, "20200101"
+        )
+    rows_seen: list[int] = []
+    real = deps.source.fetch_info
+
+    def spy(url):
+        with session_factory() as s:  # an independent writer must not be blocked
+            rows_seen.append(s.query(VideoMeta).count())
+            s.execute(__import__("sqlalchemy").text("UPDATE setting SET value=value WHERE key='x'"))
+            s.commit()
+        return real(url)
+
+    deps.source.fetch_info = spy
+    await scan_subscription(deps, sub_id)
+    assert rows_seen == [0, 0, 0], "dates are written after the network calls, in one go"
+    with session_factory() as s:
+        assert s.query(VideoMeta).count() == 3
+
+
+async def test_disabled_connection_subscriptions_are_not_due(session_factory) -> None:
+    sub_id, conn_id = make_sub(session_factory)
+    with session_factory() as s:
+        assert due_subscription_ids(s, NOW, timedelta(minutes=30)) == [sub_id]
+        s.get(Connection, conn_id).enabled = False
+        s.commit()
+        assert due_subscription_ids(s, NOW, timedelta(minutes=30)) == []
+
+
+async def test_deleted_series_is_a_visible_scan_error_and_title_refreshes(
+    deps, session_factory
+) -> None:
+    sub_id, conn_id = make_sub(session_factory)
+    client = fake_client(deps, conn_id)
+    client.series_titles[5] = "Show (Renamed)"
+    report = await scan_subscription(deps, sub_id)
+    assert report.error is None
+    with session_factory() as s:
+        assert s.get(Subscription, sub_id).title == "Show (Renamed)"
+    client.series_title_error = ArrError("GET series/5 -> HTTP 404: not found", retryable=False)
+    client.episodes_by_series[5] = []
+    report = await scan_subscription(deps, sub_id)
+    assert report.error and "404" in report.error
+    with session_factory() as s:
+        assert s.get(Subscription, sub_id).last_scan_result["error"] == report.error
+
+
+async def test_local_air_date_is_preferred_for_date_matching(deps, session_factory) -> None:
+    from datetime import date
+
+    sub_id, conn_id = make_sub(session_factory, strategies=["date"], date_tolerance_days=0)
+    client = fake_client(deps, conn_id)
+    # aired 2026-08-20 local, which is 2026-08-21 in UTC (an evening US show)
+    client.episodes_by_series[5] = [
+        EpisodeRef(
+            11,
+            30,
+            6,
+            "Six Spicy Wings",
+            False,
+            True,
+            datetime(2026, 8, 21, 2, 0, tzinfo=UTC),
+            date(2026, 8, 20),
+        )
+    ]
+    deps.source.recent = [VideoRef("v", "Anything", "https://y/v", 1, 1, "20260820")]
+    report = await scan_subscription(deps, sub_id, dry_run=True)
+    assert [(m["code"], m["strategy"]) for m in report.matches] == [("S30E06", "date")]

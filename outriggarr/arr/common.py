@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 import httpx
@@ -47,10 +47,20 @@ class ArrHttp:
             raise ArrError(
                 f"{method} {url} -> HTTP {r.status_code}: {r.text}", retryable=r.status_code >= 500
             )
+        if 300 <= r.status_code < 400:
+            # a redirect (http:// behind an https proxy, or a login page) is a config
+            # problem, not a blip: do not burn the retry ladder on it
+            raise ArrError(
+                f"{method} {url} -> HTTP {r.status_code} redirect to "
+                f"{r.headers.get('location', '?')}; use the *arr's real URL",
+                retryable=False,
+            )
         try:
             return r.json()
         except ValueError as exc:
-            raise ArrError(f"{method} {url}: non-JSON response: {r.text[:500]}") from exc
+            raise ArrError(
+                f"{method} {url}: non-JSON response: {r.text[:500]}", retryable=False
+            ) from exc
 
     async def get(self, path: str, params: dict[str, Any] | None = None) -> Any:
         return await self._request("GET", path, params=params)
@@ -209,6 +219,15 @@ def _candidate(d: dict[str, Any]) -> ImportCandidate:
             for lang in d.get("languages", []) or []
         ),
     )
+
+
+def parse_date(value: Any) -> date | None:
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except ValueError:
+        return None
 
 
 def parse_datetime(value: Any) -> datetime | None:

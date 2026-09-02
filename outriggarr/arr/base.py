@@ -7,7 +7,7 @@ specifics live in sonarr.py / radarr.py only.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from typing import Protocol
 
 
@@ -78,6 +78,7 @@ class EpisodeRef:
     has_file: bool
     monitored: bool
     air_date_utc: datetime | None
+    air_date: date | None = None  # Sonarr's local calendar day (`airDate`), for date matching
 
 
 @dataclass(frozen=True)
@@ -121,6 +122,9 @@ class TargetInfo:
     episode_title: str
     has_file: bool
     monitored: bool
+    # a multi-episode target where SOME episodes already have a file: importing would
+    # replace those, so the runner refuses instead of guessing
+    partially_satisfied: bool = False
 
 
 @dataclass(frozen=True)
@@ -202,6 +206,11 @@ class ArrClient(Protocol):
 
     async def series(self) -> list[SeriesRef]:
         """All series (Sonarr). Radarr raises ArrError."""
+        ...
+
+    async def series_title(self, series_id: int) -> str:
+        """Current title of one series (Sonarr); a 404 (deleted/re-added) raises a
+        non-retryable ArrError. Radarr raises ArrError."""
         ...
 
     async def episodes(self, series_id: int) -> list[EpisodeRef]:

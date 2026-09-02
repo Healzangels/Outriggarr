@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import subprocess
 from collections.abc import Callable
@@ -132,6 +133,11 @@ class YtDlpSource:
         from outriggarr.settings import RESERVED_YTDLP_KEYS
 
         extra = {k: v for k, v in self._extra().items() if k not in RESERVED_YTDLP_KEYS}
+        cookies = extra.get("cookiefile")
+        if cookies and not os.access(cookies, os.R_OK):
+            # yt-dlp would silently run without cookies and fail with an unrelated
+            # bot-check/age-gate message; say what actually went wrong.
+            raise SourceError(f"cookies file {cookies!r} is not readable by the app user")
         return {**base, **extra, "logger": _YtDlpLogger()}  # operator wins, except reserved
 
     def _extract(self, url: str, opts: dict[str, Any]) -> dict[str, Any]:
@@ -229,7 +235,11 @@ class YtDlpSource:
             with yt_dlp.YoutubeDL(self._opts(opts)) as ydl:
                 info = ydl.extract_info(url, download=True)
         except DownloadCancelled as exc:
-            raise DownloadAborted(str(exc)) from exc
+            # yt-dlp reuses DownloadCancelled for its own stop conditions (download
+            # archive hits, max-downloads); only OUR hook's abort is an abort.
+            if "aborted by outriggarr" in str(exc):
+                raise DownloadAborted(str(exc)) from exc
+            raise SourceError(f"yt-dlp stopped: {exc}") from exc
         except DownloadError as exc:
             raise SourceError(str(exc)) from exc
         except OSError as exc:
@@ -296,13 +306,19 @@ def videos_from_info(info: dict[str, Any]) -> list[VideoRef]:
     return [_ref(info, None)]
 
 
+_UNAVAILABLE_TITLES = re.compile(r"^\[(private|deleted|unavailable) video\]$", re.IGNORECASE)
+
+
 def _ref(e: dict[str, Any], index: int | None) -> VideoRef:
     vid = str(e["id"])
     url = e.get("webpage_url") or e.get("url") or f"https://www.youtube.com/watch?v={vid}"
+    title = str(e.get("title") or vid)
+    if _UNAVAILABLE_TITLES.match(title):
+        title = vid  # the app's convention for a dead entry: title == id
     duration = e.get("duration")
     return VideoRef(
         id=vid,
-        title=str(e.get("title") or vid),
+        title=title,
         url=str(url),
         duration=int(duration) if duration else None,
         playlist_index=int(index) if index is not None else None,

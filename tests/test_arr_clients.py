@@ -714,3 +714,49 @@ async def test_sonarr_reprocess_posts_ids_and_returns_remaining_rejections() -> 
     posted.clear()
     await radarr.reprocess(cand, Target(movie_id=77), "WEBDL-720p", (), None)
     assert posted[0]["movieId"] == 77 and "seasonNumber" not in posted[0]
+
+
+async def test_redirects_and_non_json_are_not_retryable() -> None:
+    client, _ = make(
+        SonarrClient, lambda r: httpx.Response(301, headers={"location": "https://x/"})
+    )
+    with pytest.raises(ArrError) as ei:
+        await client.status()
+    assert ei.value.retryable is False and "redirect" in str(ei.value)
+    client, _ = make(SonarrClient, lambda r: httpx.Response(200, text="<html>login</html>"))
+    with pytest.raises(ArrError) as ei:
+        await client.status()
+    assert ei.value.retryable is False
+
+
+async def test_sonarr_series_title_and_partial_satisfaction() -> None:
+    from outriggarr.arr.base import Target
+
+    def handler(r: httpx.Request) -> httpx.Response:
+        if r.url.path == "/base/api/v3/series/5":
+            return httpx.Response(200, json={"id": 5, "title": "Renamed Show"})
+        if r.url.path == "/base/api/v3/series/9":
+            return httpx.Response(404, json={"message": "NotFound"})
+        eid = r.url.path.rsplit("/", 1)[1]
+        return httpx.Response(
+            200,
+            json={
+                "id": int(eid),
+                "seriesId": 5,
+                "seasonNumber": 1,
+                "episodeNumber": int(eid),
+                "hasFile": eid == "1",
+                "monitored": True,
+                "series": {"title": "S"},
+            },
+        )
+
+    client, _ = make(SonarrClient, handler)
+    assert await client.series_title(5) == "Renamed Show"
+    with pytest.raises(ArrError) as ei:
+        await client.series_title(9)
+    assert ei.value.retryable is False
+    info = await client.target_info(Target(series_id=5, episode_ids=(1, 2)))
+    assert info.has_file is False and info.partially_satisfied is True
+    info = await client.target_info(Target(series_id=5, episode_ids=(2, 3)))
+    assert info.partially_satisfied is False

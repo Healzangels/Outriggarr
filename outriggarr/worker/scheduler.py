@@ -15,7 +15,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from outriggarr.arr.base import ArrError, EpisodeRef
-from outriggarr.db.models import Job, JobStatus, Subscription, TargetKind, VideoMeta
+from outriggarr.db.models import Connection, Job, JobStatus, Subscription, TargetKind, VideoMeta
 from outriggarr.matcher import (
     Episode,
     MatchConfig,
@@ -75,7 +75,7 @@ def _episode(e: EpisodeRef) -> Episode:
         season=e.season_number,
         number=e.episode_number,
         title=e.title,
-        air_date=e.air_date_utc.date() if e.air_date_utc else None,
+        air_date=e.air_date or (e.air_date_utc.date() if e.air_date_utc else None),
     )
 
 
@@ -198,6 +198,12 @@ async def _scan(
 ) -> None:
     conn = sub.connection
     client = deps.arr_factory(conn)
+    # A deleted/re-added series answers episodes() with [] and would scan as healthy;
+    # ask for the series itself (404 → a visible, non-retryable scan error) and keep
+    # the display title current.
+    title = await client.series_title(sub.series_id)
+    if title and title != sub.title:
+        sub.title = title
     all_episodes = await client.episodes(sub.series_id)
     pinned = {(o.season, o.episode) for o in sub.overrides}
     wanted = [
@@ -249,16 +255,20 @@ async def _scan(
     need = [v for v in need if not _date_known(session, v.id)][:DATE_FETCH_LIMIT]
     if need:
         by_id = {v.id: v for v in videos}
-        for v in need:
+        learned: dict[str, str | None] = {}
+        for v in need:  # network calls: NO writes here (SQLite has one write lock)
             try:
                 info = await asyncio.to_thread(deps.source.fetch_info, v.url)
             except SourceError as exc:
                 log.warning("subscription %d: fetch_info(%s) failed: %s", sub.id, v.id, exc)
-                _remember_date(session, v.id, None)
+                learned[v.id] = None
                 continue
             by_id[v.id] = _video(info)
-            _remember_date(session, v.id, info.upload_date)
-        session.commit()
+            learned[v.id] = info.upload_date
+        with session.no_autoflush:
+            for vid, upload_date in learned.items():
+                _remember_date(session, vid, upload_date)
+        session.commit()  # one short write transaction
         videos = list(by_id.values())
         result = match(todo, videos, overrides, cfg)
 
@@ -381,7 +391,8 @@ def due_subscription_ids(session: Session, now: datetime, interval: timedelta) -
     cutoff = now - interval
     rows = session.scalars(
         select(Subscription.id)
-        .where(Subscription.enabled)
+        .join(Connection, Connection.id == Subscription.connection_id)
+        .where(Subscription.enabled, Connection.enabled)
         .where(or_(Subscription.last_scan_at.is_(None), Subscription.last_scan_at <= cutoff))
         .order_by(Subscription.last_scan_at.nulls_first(), Subscription.id)
     )

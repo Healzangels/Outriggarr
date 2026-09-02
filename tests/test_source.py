@@ -117,7 +117,7 @@ def test_tag_audio_language_replaces_file_in_place(tmp_path, monkeypatch) -> Non
     assert not (tmp_path / "a.lang.mkv").exists(), "temp output removed on failure"
 
 
-def test_ytdlp_source_merges_extra_opts_last(monkeypatch) -> None:
+def test_ytdlp_source_merges_extra_opts_last(monkeypatch, tmp_path) -> None:
     import yt_dlp
 
     from outriggarr.source import YtDlpSource
@@ -138,14 +138,16 @@ def test_ytdlp_source_merges_extra_opts_last(monkeypatch) -> None:
             return {"id": "x", "title": "t", "webpage_url": url}
 
     monkeypatch.setattr(yt_dlp, "YoutubeDL", StubYDL)
-    src = YtDlpSource(extra_opts=lambda: {"cookiefile": "/config/c.txt", "quiet": False})
+    cookies = tmp_path / "c.txt"
+    cookies.write_text("# cookies")
+    src = YtDlpSource(extra_opts=lambda: {"cookiefile": str(cookies), "quiet": False})
     (v,) = src.resolve("https://youtu.be/x")
     assert v.id == "x"
-    assert seen[0]["cookiefile"] == "/config/c.txt"
+    assert seen[0]["cookiefile"] == str(cookies)
     assert seen[0]["quiet"] is False, "operator options win over ours"
     assert seen[0]["extract_flat"] == "in_playlist" and "logger" in seen[0]
     src.list_recent("https://www.youtube.com/@c", 7)
-    assert seen[1]["playlistend"] == 7 and seen[1]["cookiefile"] == "/config/c.txt"
+    assert seen[1]["playlistend"] == 7 and seen[1]["cookiefile"] == str(cookies)
 
 
 def test_subtitle_opts_and_sidecars(tmp_path) -> None:
@@ -280,3 +282,66 @@ def test_cookie_save_failure_after_download_keeps_the_result(monkeypatch, tmp_pa
         should_abort=lambda: False,
     )
     assert r.path.name == "x.mkv"
+
+
+def test_ytdlp_stop_conditions_are_errors_not_our_abort(monkeypatch, tmp_path) -> None:
+    import yt_dlp
+    from yt_dlp.utils import DownloadCancelled
+
+    from outriggarr.source import DownloadAborted, SourceError, YtDlpSource
+
+    class Stops:
+        def __init__(self, opts):
+            self.opts = opts
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def extract_info(self, url, download=True):
+            raise DownloadCancelled(self.opts["_msg"])
+
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", Stops)
+    src = YtDlpSource(extra_opts=lambda: {"_msg": "Already downloaded (in the archive)"})
+    with pytest.raises(SourceError, match="yt-dlp stopped"):
+        src.download(
+            "https://youtu.be/x",
+            tmp_path,
+            fmt="best",
+            merge_container="mkv",
+            progress=lambda p: None,
+            should_abort=lambda: False,
+        )
+    src = YtDlpSource(extra_opts=lambda: {"_msg": "aborted by outriggarr"})
+    with pytest.raises(DownloadAborted):
+        src.download(
+            "https://youtu.be/x",
+            tmp_path,
+            fmt="best",
+            merge_container="mkv",
+            progress=lambda p: None,
+            should_abort=lambda: False,
+        )
+
+
+def test_private_and_deleted_entries_are_unavailable() -> None:
+    info = {
+        "_type": "playlist",
+        "id": "p",
+        "entries": [
+            {"id": "a1", "title": "[Private video]"},
+            {"id": "b2", "title": "[Deleted video]"},
+            {"id": "c3", "title": "Real"},
+        ],
+    }
+    assert [v.title for v in videos_from_info(info)] == ["a1", "b2", "Real"]
+
+
+def test_unreadable_cookies_file_is_a_clear_error(monkeypatch, tmp_path) -> None:
+    from outriggarr.source import SourceError, YtDlpSource
+
+    src = YtDlpSource(extra_opts=lambda: {"cookiefile": str(tmp_path / "missing.txt")})
+    with pytest.raises(SourceError, match="cookies file"):
+        src.resolve("https://youtu.be/x")

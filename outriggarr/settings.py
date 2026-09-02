@@ -106,6 +106,11 @@ RESERVED_YTDLP_KEYS = frozenset(
         "extract_flat",
         "skip_download",
         "playlistend",
+        # yt-dlp stop conditions raise DownloadCancelled, which would look like our abort
+        "download_archive",
+        "break_on_existing",
+        "break_on_reject",
+        "max_downloads",
     }
 )
 

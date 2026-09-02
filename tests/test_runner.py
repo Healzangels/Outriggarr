@@ -214,8 +214,8 @@ async def test_already_has_file_cancels_without_import(deps, session_factory) ->
     await process_job(deps, job_id)
 
     job = get_job(deps, job_id)
-    assert job.status is JobStatus.cancelled
-    assert "already has a file" in job.error
+    assert job.status is JobStatus.done, "satisfied target = finished, not a user cancel"
+    assert "already had a file" in job.error
     assert fake.imports == []
     assert deps.source.calls == [], "a satisfied target is detected BEFORE the download"
     assert not (deps.staging_dir / str(job_id)).exists()
@@ -434,7 +434,7 @@ async def test_second_job_for_same_target_is_cancelled_after_first_imports(deps,
     await process_job(deps, first)
     await process_job(deps, second)
     assert get_job(deps, first).status is JobStatus.done
-    assert get_job(deps, second).status is JobStatus.cancelled
+    assert get_job(deps, second).status is JobStatus.done  # nothing to import: finished
     assert len(deps.arr_factory.by_url["http://sonarr-host:1"].imports) == 1
 
 
@@ -679,9 +679,9 @@ async def test_subtitle_sidecar_names_before_import(deps, session_factory, monke
     seen: list[str] = []
     real = runner._import_stage
 
-    async def spy(deps_, session, job, client, target, remote_folder, staged):
+    async def spy(deps_, session, job, client, target, remote_folder, staged, *rest):
         seen.extend(sorted(p.name for p in staged.parent.iterdir()))
-        return await real(deps_, session, job, client, target, remote_folder, staged)
+        return await real(deps_, session, job, client, target, remote_folder, staged, *rest)
 
     monkeypatch.setattr(runner, "_import_stage", spy)
     await process_job(deps, job_id)
@@ -845,7 +845,7 @@ async def test_satisfied_target_is_detected_before_download(deps, session_factor
     fake.has_file[Target(series_id=5, episode_ids=(42,))] = True
     await process_job(deps, job_id)
     job = get_job(deps, job_id)
-    assert job.status is JobStatus.cancelled and "already has a file" in job.error
+    assert job.status is JobStatus.done and "already had a file" in job.error
     assert deps.source.calls == [] and fake.imports == []
 
 
@@ -913,7 +913,8 @@ def test_sweep_removes_orphan_folder_without_staged_path(session_factory, stagin
     (staging / str(orphan)).mkdir()
     (staging / str(orphan) / "big.mkv").write_bytes(b"x" * 10)
     with session_factory() as s:
-        assert sweep_cancelled(s, staging) == 1
+        assert sweep_cancelled(s, staging) == 0, "ticks only look at rows with a staged_path"
+        assert sweep_cancelled(s, staging, full=True) == 1
     assert not (staging / str(orphan)).exists()
 
 
@@ -1030,3 +1031,116 @@ async def test_shutdown_aborts_a_running_download_and_requeues(deps, session_fac
     assert job.status is JobStatus.queued and job.attempts == 0
     assert "interrupted" in job.error
     assert not (deps.staging_dir / str(job_id)).exists()
+
+
+# ---- discovery fixes -------------------------------------------------------------
+
+
+async def test_our_own_earlier_import_is_recorded_as_done(deps, session_factory) -> None:
+    """A blip on the command poll left the job failed with a staged file; the *arr then
+    moved that file. The retry must end `done`, never `cancelled`."""
+    conn_id = add_connection(session_factory)
+    job_id = add_job(
+        session_factory,
+        conn_id,
+        status=JobStatus.failed,
+        staged_path=str(deps.staging_dir / "1" / "gone.mkv"),
+        attempts=1,
+    )
+    fake = fake_for(deps, conn_id)
+    fake.has_file[Target(series_id=5, episode_ids=(42,))] = True
+    await process_job(deps, job_id)
+    job = get_job(deps, job_id)
+    assert job.status is JobStatus.done and job.staged_path is None
+    assert deps.source.calls == [] and fake.imports == []
+
+
+async def test_command_poll_timeout_is_retryable(deps, session_factory, monkeypatch) -> None:
+    import outriggarr.worker.runner as runner
+
+    monkeypatch.setattr(runner, "COMMAND_TIMEOUT_SECONDS", 0.0)
+    conn_id = add_connection(session_factory)
+    job_id = add_job(session_factory, conn_id)
+    fake = fake_for(deps, conn_id)
+    fake.command_statuses = ["started"]  # never finishes
+    await process_job(deps, job_id)
+    job = get_job(deps, job_id)
+    assert job.status is JobStatus.failed and job.next_retry_at == NOW + BACKOFF[0]
+    assert Path(job.staged_path).exists(), "the *arr may still be moving it: keep the file"
+
+
+async def test_shutdown_during_import_poll_keeps_the_file_and_requeues(
+    deps, session_factory
+) -> None:
+    conn_id = add_connection(session_factory)
+    job_id = add_job(session_factory, conn_id)
+    fake = fake_for(deps, conn_id)
+    fake.command_statuses = ["started"]
+    calls = {"n": 0}
+
+    def stop_after_first_poll() -> bool:
+        calls["n"] += 1
+        return calls["n"] > 2  # the download hook calls first; abort once we are polling
+
+    await process_job(deps, job_id, stop_after_first_poll)
+    job = get_job(deps, job_id)
+    assert job.status is JobStatus.queued and job.attempts == 0
+    assert "interrupted during import" in job.error
+    assert Path(job.staged_path).exists(), "no re-download needed after the restart"
+
+
+async def test_partially_satisfied_multi_episode_target_is_refused(deps, session_factory) -> None:
+    from outriggarr.arr.base import TargetInfo
+    from tests.fakes import EPISODE_INFO
+
+    conn_id = add_connection(session_factory)
+    job_id = add_job(session_factory, conn_id)
+    fake = fake_for(deps, conn_id)
+    fake.info = TargetInfo(**{**EPISODE_INFO.__dict__, "partially_satisfied": True})
+    await process_job(deps, job_id)
+    job = get_job(deps, job_id)
+    assert job.status is JobStatus.failed and job.next_retry_at is None
+    assert "already have a file" in job.error and deps.source.calls == []
+
+
+def test_disabled_connection_jobs_are_not_claimed(session_factory) -> None:
+    conn_id = add_connection(session_factory)
+    job_id = add_job(session_factory, conn_id)
+    with session_factory() as s:
+        s.get(Connection, conn_id).enabled = False
+        s.commit()
+        assert claim_next_jobs(s, 5, NOW) == []
+        s.get(Connection, conn_id).enabled = True
+        s.commit()
+        assert claim_next_jobs(s, 5, NOW) == [job_id]
+
+
+def test_instance_lock_is_exclusive(tmp_path: Path) -> None:
+    from outriggarr.worker.runner import acquire_instance_lock
+
+    first = acquire_instance_lock(tmp_path)
+    assert first is not None and (tmp_path / ".outriggarr.lock").exists()
+    assert acquire_instance_lock(tmp_path) is None, "a second instance must not run the worker"
+    first.close()
+    second = acquire_instance_lock(tmp_path)
+    assert second is not None
+    second.close()
+
+
+async def test_second_worker_stays_idle_when_locked(deps, session_factory, tmp_path: Path) -> None:
+    from outriggarr.worker.runner import acquire_instance_lock
+
+    deps.lock_dir = tmp_path
+    holder = acquire_instance_lock(tmp_path)
+    conn_id = add_connection(session_factory)
+    job_id = add_job(session_factory, conn_id)
+    fake_for(deps, conn_id)
+    stop = asyncio.Event()
+    task = asyncio.create_task(run_worker(deps, stop))
+    await asyncio.sleep(0.1)
+    assert get_job(deps, job_id).status is JobStatus.queued, (
+        "nothing claimed while another instance holds the lock"
+    )
+    stop.set()
+    await asyncio.wait_for(task, 2)
+    holder.close()

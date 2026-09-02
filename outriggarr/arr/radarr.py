@@ -46,6 +46,9 @@ class RadarrClient(ArrHttp):
     async def episodes(self, series_id: int) -> list[EpisodeRef]:
         raise ArrError("Radarr has no episodes")
 
+    async def series_title(self, series_id: int) -> str:
+        raise ArrError("Radarr has no series")
+
     async def set_series_tag(self, series_id: int, tag_id: int, present: bool) -> None:
         raise ArrError("Radarr has no series")
 

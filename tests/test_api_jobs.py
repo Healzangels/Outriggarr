@@ -230,3 +230,9 @@ def test_retry_resets_attempts_and_ids_are_deduped(client: TestClient) -> None:
         )
         == "episode:5:42"
     )
+
+
+def test_jobs_refused_for_a_disabled_connection(client: TestClient) -> None:
+    conn_id = client.post("/api/connections", json={**SONARR, "enabled": False}).json()["id"]
+    r = client.post("/api/jobs", json=[episode_job(conn_id)])
+    assert r.status_code == 422 and "disabled" in r.json()["detail"]
