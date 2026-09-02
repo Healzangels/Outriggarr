@@ -494,7 +494,10 @@ def subtitle_sidecars(dest_dir: Path, video_id: str) -> tuple[Path, ...]:
 
 
 def ffmpeg_language_command(src: Path, dst: Path, language: str) -> list[str]:
-    """Remux `src` to `dst` copying every stream, tagging all audio streams."""
+    """Remux `src` to `dst` copying the video, every audio stream and any subtitles,
+    tagging all audio streams. Not `-map 0`: 2008-era archive.org mp4s carry RTP hint
+    tracks (data) and an mjpeg cover track, which an mp4 output refuses to write, and
+    the file then went into the library untagged."""
     return [
         "ffmpeg",
         "-nostdin",
@@ -504,7 +507,12 @@ def ffmpeg_language_command(src: Path, dst: Path, language: str) -> list[str]:
         "-i",
         str(src),
         "-map",
-        "0",
+        "0:v:0",
+        "-map",
+        "0:a",
+        "-map",
+        "0:s?",
+        "-dn",
         "-c",
         "copy",
         "-metadata:s:a",

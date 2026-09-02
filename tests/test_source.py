@@ -81,7 +81,10 @@ def test_ffmpeg_language_command_copies_streams_and_tags_audio(tmp_path) -> None
     cmd = ffmpeg_language_command(Path("/s/in.mkv"), Path("/s/in.lang.mkv"), "eng")
     assert cmd[0] == "ffmpeg" and cmd[-1] == "/s/in.lang.mkv"
     assert "-c" in cmd and cmd[cmd.index("-c") + 1] == "copy"
-    assert cmd[cmd.index("-map") + 1] == "0"
+    maps = [cmd[i + 1] for i, a in enumerate(cmd) if a == "-map"]
+    # the first video, every audio stream, subtitles if any; never "0": archive.org's
+    # 2008-era mp4s carry RTP hint tracks and an mjpeg cover that mp4 output refuses
+    assert maps == ["0:v:0", "0:a", "0:s?"] and "-dn" in cmd
     assert cmd[cmd.index("-metadata:s:a") + 1] == "language=eng"
     assert "-y" in cmd and "-nostdin" in cmd
 
