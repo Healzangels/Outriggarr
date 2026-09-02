@@ -4,12 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Outriggarr{% endblock %}</title>
-  <link rel="icon" href="/static/favicon.ico" sizes="16x16 32x32">
-  <link rel="icon" type="image/svg+xml" href="/static/outriggarr.svg">
-  <link rel="apple-touch-icon" href="/static/outriggarr.png">
-  <link rel="stylesheet" href="/static/pico.min.css">
-  <link rel="stylesheet" href="/static/app.css">
-  <script src="/static/htmx.min.js"></script>
+  <link rel="icon" href="{{ static('favicon.ico') }}" sizes="16x16 32x32">
+  <link rel="icon" type="image/svg+xml" href="{{ static('outriggarr.svg') }}">
+  <link rel="apple-touch-icon" href="{{ static('outriggarr.png') }}">
+  <link rel="stylesheet" href="{{ static('pico.min.css') }}">
+  <link rel="stylesheet" href="{{ static('app.css') }}">
+  <script src="{{ static('htmx.min.js') }}"></script>
   <script>
     // Any 4xx/5xx from an HTMX action shows up instead of silently doing nothing.
     document.addEventListener('htmx:responseError', (e) => {
@@ -20,11 +20,11 @@
       bar.setAttribute('role', 'alert');
     });
   </script>
-  <script defer src="/static/alpine.min.js"></script>
+  <script defer src="{{ static('alpine.min.js') }}"></script>
 </head>
 <body>
   <nav class="container">
-    <ul><li><a href="/activity" class="brand"><img src="/static/outriggarr.svg" alt="" width="28" height="28"><strong>Outriggarr</strong></a></li></ul>
+    <ul><li><a href="/activity" class="brand">{% include "partials/logo.svg" %}<strong>Outriggarr</strong></a></li></ul>
     <ul>
       {% for href, label in (("/activity", "Activity"), ("/matches", "Matches"), ("/series", "Series"), ("/grab", "Grab"), ("/settings", "Settings")) %}
       <li><a href="{{ href }}" class="{% if request.url.path.startswith(href) or (href == '/series' and request.url.path.startswith('/subscriptions')) %}active{% endif %}">{{ label }}</a></li>

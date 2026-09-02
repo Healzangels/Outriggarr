@@ -1,14 +1,14 @@
-<div id="matches-content">
+<div id="matches-content"{% if progress.running %} hx-get="/matches/content?view={{ view }}" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
 <div class="tabs" role="tablist" aria-label="views">
   {% for f in ("review", "all") %}
     <a href="/matches?view={{ f }}" role="tab" aria-selected="{{ 'true' if f == view else 'false' }}" {% if f == view %}aria-current="page"{% endif %}>{{ "needs a look" if f == "review" else f }}<span class="count">{{ counts[f] }}</span></a>
   {% endfor %}
 </div>
 <div class="form-actions">
-  <button class="secondary" hx-post="/matches/recheck?view={{ view }}" hx-target="#matches-content" hx-swap="outerHTML" hx-indicator="#recheck-busy" title="Fetch each unchecked video's length and Sonarr's runtime for the episode; a pairing whose length agrees leaves the list by itself">Recheck lengths</button>
+  <button class="secondary" hx-post="/matches/recheck?view={{ view }}" hx-target="#matches-content" hx-swap="outerHTML" {% if progress.running %}disabled{% endif %} title="Fetch each unchecked video's length and Sonarr's runtime for the episode; a pairing whose length agrees leaves the list by itself. Runs in the background; you can leave the page.">Recheck lengths</button>
   {% if view == "review" and entries %}<button class="secondary outline" hx-post="/matches/confirm-all?view={{ view }}" hx-target="#matches-content" hx-swap="outerHTML" hx-confirm="Mark all {{ entries | length }} listed pairings as looked at and right?">Looks right, all {{ entries | length }}</button>{% endif %}
-  <span id="recheck-busy" class="htmx-indicator muted" aria-busy="true">checking… one fetch per unchecked video</span>
 </div>
+{% if progress_text %}<p class="notice {{ 'bad' if progress.failure else '' }}" role="status" aria-live="polite" {% if progress.running %}aria-busy="true"{% endif %}>{{ progress_text }}</p>{% endif %}
 {% if notice %}<p class="notice" role="status" aria-live="polite">{{ notice }}</p>{% endif %}
 {% if not entries %}
 <p class="empty">{% if view == "review" %}Nothing needs a look: every pairing is vouched for by an exact title, a pin, a matching length, or you.{% else %}No subscription has matched anything yet.{% endif %}</p>

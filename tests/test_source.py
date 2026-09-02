@@ -501,3 +501,19 @@ def test_a_jar_that_lost_the_sign_in_is_never_written_back(monkeypatch, tmp_path
         src.fetch_info("https://youtu.be/x")
     assert jar.read_text() == JAR_SIGNED_IN, "the operator's signed-in export is kept"
     assert any("signed the cookie session out" in r.getMessage() for r in caplog.records)
+
+
+def test_ytdlp_logger_demotes_the_known_sabr_notice(caplog) -> None:
+    import logging
+
+    from outriggarr.source import _YtDlpLogger
+
+    with caplog.at_level(logging.DEBUG, logger="outriggarr.source"):
+        _YtDlpLogger().warning(
+            "[youtube] x: Some web_embedded client https formats have been skipped as they "
+            "are missing a URL. YouTube may have enabled the SABR-only streaming experiment"
+        )
+        _YtDlpLogger().warning("[youtube] x: something that matters")
+    levels = {r.getMessage()[:20]: r.levelno for r in caplog.records}
+    assert levels["[youtube] x: Some we"] == logging.DEBUG
+    assert levels["[youtube] x: somethi"] == logging.WARNING

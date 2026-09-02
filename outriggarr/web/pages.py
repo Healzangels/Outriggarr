@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import shutil
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated
 
@@ -33,7 +33,7 @@ from outriggarr.api.jobs import (
     retry_job,
 )
 from outriggarr.api.library import library_cache
-from outriggarr.api.matches import recheck_evidence
+from outriggarr.api.matches import RecheckProgress, progress_of, start_recheck
 from outriggarr.api.settings import update_settings
 from outriggarr.api.subscriptions import (
     OverrideByUrlIn,
@@ -64,7 +64,19 @@ router = APIRouter(include_in_schema=False)
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+# Changes whenever a shipped static file does (mtimes are set when the image is built),
+# so versioned asset URLs can be cached as immutable.
+STATIC_TOKEN = format(
+    max(f.stat().st_mtime_ns for f in STATIC_DIR.iterdir() if f.is_file()) % 10**12, "x"
+)
+
+
+def static_url(name: str) -> str:
+    return f"/static/{name}?v={STATIC_TOKEN}"
+
+
 templates.env.globals.update(
+    static=static_url,
     RETRYABLE=RETRYABLE,
     CANCELLABLE=CANCELLABLE,
     DELETABLE=DELETABLE,
@@ -248,8 +260,14 @@ def review_entry(job: Job) -> dict:
     }
 
 
-def _matches_context(session: Session, view: str, notice: str | None = None) -> dict:
+def _matches_context(
+    session: Session, view: str, notice: str | None = None, progress: RecheckProgress | None = None
+) -> dict:
     view = view if view in ("review", "all") else "review"
+    progress = progress or RecheckProgress()
+    recent = progress.finished_at is not None and (utcnow() - progress.finished_at) < timedelta(
+        minutes=15
+    )
     jobs = session.scalars(
         select(Job)
         .where(Job.subscription_id.is_not(None))
@@ -268,6 +286,8 @@ def _matches_context(session: Session, view: str, notice: str | None = None) -> 
         "counts": counts,
         "total": counts[view],
         "notice": notice,
+        "progress": progress,
+        "progress_text": progress.summary() if (progress.running or recent) else "",
     }
 
 
@@ -275,32 +295,29 @@ def _matches_context(session: Session, view: str, notice: str | None = None) -> 
 def matches_page(
     request: Request, session: DbSession, view: Annotated[str, Query()] = "review"
 ) -> HTMLResponse:
-    return templates.TemplateResponse(request, "matches.html", _matches_context(session, view))
+    ctx = _matches_context(session, view, progress=progress_of(request.app))
+    return templates.TemplateResponse(request, "matches.html", ctx)
 
 
 def _matches_partial(request: Request, session: DbSession, view: str, notice: str | None):
-    return templates.TemplateResponse(
-        request, "partials/matches_content.html", _matches_context(session, view, notice)
-    )
+    ctx = _matches_context(session, view, notice, progress=progress_of(request.app))
+    return templates.TemplateResponse(request, "partials/matches_content.html", ctx)
+
+
+@router.get("/matches/content")
+def matches_content(
+    request: Request, session: DbSession, view: Annotated[str, Query()] = "review"
+) -> HTMLResponse:
+    """The table plus the recheck status; polled while a recheck runs."""
+    return _matches_partial(request, session, view, None)
 
 
 @router.post("/matches/recheck")
 async def matches_recheck(
-    request: Request,
-    session: DbSession,
-    deps: RunnerDepsDep,
-    view: Annotated[str, Query()] = "review",
+    request: Request, session: DbSession, view: Annotated[str, Query()] = "review"
 ) -> HTMLResponse:
-    r = await recheck_evidence(session, deps)
-    notice = (
-        f"Checked {r['checked']} pairings: {r['durations_filled']} video lengths and "
-        f"{r['runtimes_filled']} runtimes fetched; {r['flagged']} contradict their runtime."
-    )
-    if r["error_count"]:
-        notice += f" {r['error_count']} could not be fetched (first: {r['errors'][0]})."
-    if r["checked"] == 0:
-        notice = "Nothing left to check: every pairing already has its length evidence."
-    return _matches_partial(request, session, view, notice)
+    start_recheck(request.app)
+    return _matches_partial(request, session, view, None)
 
 
 @router.post("/matches/{job_id}/confirm")

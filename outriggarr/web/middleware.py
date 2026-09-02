@@ -37,6 +37,23 @@ def cross_site(request: Request) -> str | None:
     return None
 
 
+class StaticCacheHeaders(BaseHTTPMiddleware):
+    """Static assets are cacheable: without a Cache-Control the browser revalidated the
+    logo on every server-rendered navigation and it flickered. A versioned URL
+    (`?v=<token>`, the token changes with the image) is immutable; a bare one is fresh
+    for an hour."""
+
+    async def dispatch(self, request: Request, call_next) -> Response:
+        response = await call_next(request)
+        if request.url.path.startswith("/static/") and response.status_code == 200:
+            response.headers["Cache-Control"] = (
+                "public, max-age=31536000, immutable"
+                if "v" in request.query_params
+                else "public, max-age=3600"
+            )
+        return response
+
+
 class SameOriginGuard(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next) -> Response:
         reason = cross_site(request)

@@ -404,8 +404,8 @@ def test_branding_assets_and_favicon(client: TestClient) -> None:
     assert client.get("/static/outriggarr.svg").status_code == 200
     assert client.get("/static/outriggarr.png").status_code == 200
     page = client.get("/activity").text
-    assert '<link rel="icon" href="/static/favicon.ico"' in page
-    assert '<img src="/static/outriggarr.svg"' in page and 'class="brand"' in page
+    assert '<link rel="icon" href="/static/favicon.ico?v=' in page
+    assert 'class="brand"><svg' in page, "the logo is inline; no request, no flicker"
 
 
 def test_settings_page_has_subtitle_fields(client: TestClient) -> None:
@@ -766,8 +766,20 @@ def test_matches_recheck_and_confirm_clear_the_review_list(client: TestClient) -
     page = client.get("/matches").text
     assert 'needs a look<span class="count">4</span>' in page and page.count("not checked") == 4
 
+    import time
+
     r = client.post("/matches/recheck")
     assert r.status_code == 200, r.text
+    assert 'hx-get="/matches/content?view=review" hx-trigger="every 2s"' in r.text, "polls itself"
+    for _ in range(100):  # the recheck is a background task on the app; wait for it
+        status = client.get("/api/matches/recheck").json()
+        if not status["running"]:
+            break
+        time.sleep(0.05)
+    assert status["running"] is False and status["failure"] is None, status
+    assert status["total"] == 4 and status["done"] == 4, status
+    r = client.get("/matches/content?view=review")
+    assert 'hx-trigger="every 2s"' not in r.text, "polling stops when the run is over"
     assert (
         "Checked 4 pairings: 3 video lengths and 3 runtimes fetched; 1 contradict their runtime."
         in r.text
@@ -780,7 +792,13 @@ def test_matches_recheck_and_confirm_clear_the_review_list(client: TestClient) -
     assert "2m00s vs 25 min ✗" in r.text
     assert "25m00s vs 25 min ✓" in client.get("/matches?view=all").text
     assert (jobs["ok"]["video_duration"], jobs["ok"]["target_runtime"]) == (1500, 25)
-    assert client.post("/api/matches/recheck").json()["checked"] == 2, "unfetched + half-known"
+    assert client.post("/api/matches/recheck").json()["running"] is True
+    for _ in range(100):
+        status = client.get("/api/matches/recheck").json()
+        if not status["running"]:
+            break
+        time.sleep(0.05)
+    assert status["checked"] == 2, "unfetched + half-known"
 
     short_id = jobs["short"]["id"]
     r = client.post(f"/matches/{short_id}/confirm")
@@ -795,3 +813,14 @@ def test_matches_recheck_and_confirm_clear_the_review_list(client: TestClient) -
     )
     assert client.get("/matches?view=all").text.count(">confirmed</span>") == 3
     assert client.delete(f"/api/jobs/{short_id}/confirm").json()["reviewed_at"] is None
+
+
+def test_static_assets_are_cacheable_and_the_logo_is_inline(client: TestClient) -> None:
+    page = client.get("/activity").text
+    assert "/static/app.css?v=" in page and 'src="/static/outriggarr.svg"' not in page
+    assert '<a href="/activity" class="brand"><svg' in page, "no fetch, no flicker"
+    r = client.get("/static/app.css")
+    assert r.headers["cache-control"] == "public, max-age=3600"
+    r = client.get("/static/app.css?v=abc")
+    assert r.headers["cache-control"] == "public, max-age=31536000, immutable"
+    assert "cache-control" not in client.get("/activity").headers

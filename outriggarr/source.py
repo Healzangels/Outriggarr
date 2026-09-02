@@ -97,6 +97,11 @@ class _YtDlpLogger:
         log.info("%s", msg)
 
     def warning(self, msg: str) -> None:
+        # A known, harmless notice on signed-in sessions: some web_embedded formats lack
+        # a URL; other clients still provide them. One line per video would drown the log.
+        if "SABR-only streaming experiment" in msg:
+            log.debug("%s", msg)
+            return
         log.warning("%s", msg)
 
     def error(self, msg: str) -> None:
@@ -230,7 +235,8 @@ class YtDlpSource:
                     Path(private).read_text(errors="replace")
                 )
                 if not unchanged:
-                    log.info("cookies file %s changed while yt-dlp ran; keeping it", original)
+                    # normal with parallel runs: a sibling wrote its rotation first
+                    log.debug("cookies file %s changed while yt-dlp ran; keeping it", original)
                 elif signed_out:
                     # YouTube cleared the sign-in during this run (it invalidates a session
                     # a browser is also using). Keep the operator's export as it was, so
