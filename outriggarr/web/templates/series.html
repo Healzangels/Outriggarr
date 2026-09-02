@@ -22,7 +22,7 @@
     <tr>
       <td><a href="/subscriptions/{{ s.id }}">{{ s.title or ("series " ~ s.series_id) }}</a></td>
       <td><a href="{{ s.source_url }}" target="_blank" rel="noopener">{{ s.source_url | truncate(60) }}</a></td>
-      <td>override{% for st in s.strategies %}, {{ st }}{% endfor %}</td>
+      <td>pins{% for st in s.strategies %} → {{ st }}{% endfor %}</td>
       <td>{{ "yes" if s.enabled else "no" }}</td>
       <td>{% if s.last_scan_at %}{{ s.last_scan_at.strftime("%Y-%m-%d %H:%M") }}Z
         {% if s.last_scan_result %}<br><span class="muted">{% if s.last_scan_result.error %}<span class="warn">{{ s.last_scan_result.error | truncate(80) }}</span>{% else %}matched {{ s.last_scan_result.matched }} · queued {{ s.last_scan_result.created }} · unmatched {{ s.last_scan_result.unmatched }}{% endif %}</span>{% endif %}

@@ -749,3 +749,16 @@ async def test_notifier_crash_never_touches_the_job(deps, session_factory) -> No
     await process_job(deps, job_id)
     job = get_job(deps, job_id)
     assert job.status is JobStatus.failed and job.error == "import rejected: Sample"
+
+
+async def test_failed_notification_can_be_switched_off(deps, session_factory) -> None:
+    conn_id = add_connection(session_factory)
+    job_id = add_job(session_factory, conn_id)
+    fake = fake_for(deps, conn_id)
+    fake.candidate_rejections = ("Sample",)
+    with session_factory() as s:
+        set_setting(s, "notify_on_failed", "0")
+        s.commit()
+    await process_job(deps, job_id)
+    assert get_job(deps, job_id).status is JobStatus.failed
+    assert deps.notifier.sent == []

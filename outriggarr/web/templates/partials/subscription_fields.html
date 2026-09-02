@@ -2,7 +2,7 @@
   <input type="url" name="source_url" required value="{{ sub.source_url if sub else '' }}" placeholder="https://www.youtube.com/@channel">
 </label>
 <fieldset>
-  <legend>Strategies (override always applies first)</legend>
+  <legend>Automatic matching strategies <span class="muted">(videos you pin to an episode by hand always win, before any of these)</span></legend>
   {% for st in strategies %}
     <label><input type="checkbox" name="strategies" value="{{ st }}" {% if st in chosen %}checked{% endif %}> {{ st }}
       <span class="muted">{% if st == "title" %}normalised title equality, then containment{% elif st == "date" %}upload date near air date (per-video fetch for unmatched only){% else %}named groups season/episode in the regex below{% endif %}</span></label>

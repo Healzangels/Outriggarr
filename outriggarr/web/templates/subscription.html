@@ -4,7 +4,7 @@
 <h2>{{ sub.title or ("series " ~ sub.series_id) }} <span class="muted" style="font-size:.6em">subscription {{ sub.id }}{% if not sub.enabled %} · disabled{% endif %}</span></h2>
 {% if error %}<p class="warn">{{ error }}</p>{% endif %}
 <p><a href="{{ sub.source_url }}" target="_blank" rel="noopener">{{ sub.source_url }}</a>
-  · strategies: override{% for st in sub.strategies %}, {{ st }}{% endfor %}
+  · matching: <span title="Videos you pin to an episode on this page always win">your pins</span>{% for st in sub.strategies %} → {{ st }}{% endfor %}
   {% if sub.last_scan_at %} · last scan {{ sub.last_scan_at.strftime("%Y-%m-%d %H:%M") }}Z{% endif %}</p>
 
 <div id="preview" hx-get="/subscriptions/{{ sub.id }}/preview" hx-trigger="load" hx-swap="innerHTML">
