@@ -600,3 +600,38 @@ async def test_staging_permission_error_is_a_retryable_failure(deps, session_fac
     assert job.error.startswith("staging error: [Errno 13] Permission denied")
     assert job.next_retry_at == NOW + BACKOFF[0], "retryable: fix the mount, it resumes"
     assert not (deps.staging_dir / str(job_id)).exists()
+
+
+def test_recover_stale_jobs_requeues_interrupted_work(session_factory) -> None:
+    from outriggarr.worker.runner import recover_stale_jobs
+
+    conn_id = add_connection(session_factory)
+    dl = add_job(session_factory, conn_id, video_id="a", status=JobStatus.downloading, attempts=1)
+    imp = add_job(session_factory, conn_id, video_id="b", status=JobStatus.importing, attempts=2)
+    done = add_job(session_factory, conn_id, video_id="c", status=JobStatus.done, attempts=1)
+    queued = add_job(session_factory, conn_id, video_id="d")
+    with session_factory() as s:
+        assert recover_stale_jobs(s) == 2
+        assert recover_stale_jobs(s) == 0
+        for jid, attempts in ((dl, 0), (imp, 1)):
+            j = s.get(Job, jid)
+            assert j.status is JobStatus.queued and j.attempts == attempts
+            assert "recovered" in j.error
+        assert s.get(Job, done).status is JobStatus.done
+        assert s.get(Job, queued).status is JobStatus.queued and s.get(Job, queued).error is None
+
+
+async def test_worker_recovers_on_start(deps, session_factory) -> None:
+    conn_id = add_connection(session_factory)
+    job_id = add_job(session_factory, conn_id, status=JobStatus.downloading, attempts=1)
+    fake_for(deps, conn_id)
+    stop = asyncio.Event()
+    task = asyncio.create_task(run_worker(deps, stop))
+    for _ in range(200):
+        await asyncio.sleep(0.01)
+        if get_job(deps, job_id).status is JobStatus.done:
+            break
+    stop.set()
+    await asyncio.wait_for(task, 2)
+    job = get_job(deps, job_id)
+    assert job.status is JobStatus.done and job.attempts == 1

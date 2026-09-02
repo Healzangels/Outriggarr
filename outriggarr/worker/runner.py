@@ -134,8 +134,30 @@ def claim_next_jobs(session: Session, limit: int, now: datetime) -> list[int]:
     return [job.id for job in jobs]
 
 
+def recover_stale_jobs(session: Session) -> int:
+    """Jobs left in downloading/importing by a crash or a hard kill go back to queued.
+    A staged file that survived is reused (the download stage skips it)."""
+    rows = list(
+        session.scalars(
+            select(Job).where(Job.status.in_((JobStatus.downloading, JobStatus.importing)))
+        )
+    )
+    for job in rows:
+        job.status = JobStatus.queued
+        job.next_retry_at = None
+        job.error = "recovered after a restart; will resume"
+        if job.attempts > 0:
+            job.attempts -= 1  # the interrupted run does not count
+    if rows:
+        session.commit()
+        log.warning("recovered %d job(s) interrupted by a restart", len(rows))
+    return len(rows)
+
+
 async def run_worker(deps: RunnerDeps, stop: asyncio.Event) -> None:
     log.info("worker started")
+    with deps.session_factory() as session:
+        recover_stale_jobs(session)
     running: set[asyncio.Task[None]] = set()
     while not stop.is_set():
         running = {t for t in running if not t.done()}
