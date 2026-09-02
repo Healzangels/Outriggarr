@@ -128,6 +128,15 @@ _WS = re.compile(r"\s+")
 _EP_PREFIX = re.compile(
     r"^(?:ep(?:isode)?\.?\s*\d+|#\s*\d+|\d+\.(?=\s))\s*[-:|–—]?\s*", re.IGNORECASE
 )
+_HASH_NUMBER = re.compile(r"#\s*(\d+)")
+
+
+def show_number(title: str) -> int | None:
+    """A show's own episode count in a title: "#751 - JOE ROGAN" / "KT #751 - …" → 751.
+    Not Sonarr's numbering (that is S2026E01), so it never drives the regex strategy; it
+    is a guard: two titles that both carry a number can only pair when the numbers agree."""
+    m = _HASH_NUMBER.search(title)
+    return int(m.group(1)) if m else None
 
 
 def normalise_title(text: str) -> str:
@@ -210,6 +219,13 @@ def _title_candidates(ep: Episode, videos: list[Video]) -> tuple[str, list[Video
     want = normalise_title(ep.title)
     if not want:
         return ("none", [])
+    want_no = show_number(ep.title)
+
+    def numbers_clash(v: Video) -> bool:
+        have_no = show_number(v.title)
+        return want_no is not None and have_no is not None and have_no != want_no
+
+    videos = [v for v in videos if not numbers_clash(v)]
     exact = [v for v in videos if normalise_title(v.title) == want]
     if exact:
         return ("exact", exact)
@@ -217,6 +233,7 @@ def _title_candidates(ep: Episode, videos: list[Video]) -> tuple[str, list[Video
     if len(want) < MIN_CONTAINMENT_LEN or len(want_tokens) < MIN_CONTAINMENT_TOKENS:
         return ("none", [])
     out = []
+    numbered = []  # containment plus the show's own number agreeing: as good as exact
     for v in videos:
         have = normalise_title(v.title)
         if f" {want} " not in f" {have} ":
@@ -224,6 +241,10 @@ def _title_candidates(ep: Episode, videos: list[Video]) -> tuple[str, list[Video
         if PROMO_TOKENS & (set(have.split()) - set(want_tokens)):
             continue
         out.append(v)
+        if want_no is not None and show_number(v.title) == want_no:
+            numbered.append(v)
+    if numbered:
+        return ("exact", numbered)
     return ("contains", out)
 
 

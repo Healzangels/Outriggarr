@@ -315,3 +315,32 @@ def test_held_episodes_still_get_date_fetches() -> None:
     r = match(eps, videos, [], MatchConfig(("title", "date")))
     assert r.held and not r.unmatched
     assert [v.id for v in videos_needing_dates(r, videos, MatchConfig(("title", "date")))] == ["u"]
+
+
+def test_show_number_in_titles_is_a_guard_and_a_vouch() -> None:
+    # Kill Tony: Sonarr titles carry the show's own count, so do the uploads; a guest
+    # who appears in several episodes must not make every one of them a candidate
+    from outriggarr.matcher import show_number
+
+    assert show_number("#751 - JOE ROGAN + SHANE GILLIS") == 751
+    assert show_number("KT#778 - JIMMY CARR") == 778 and show_number("Plain title") is None
+    eps = [ep(1, 2026, 1, "#751 - JOE ROGAN + SHANE GILLIS"), ep(2, 2026, 2, "#752 - TIM DILLON")]
+    videos = [
+        vid("a", "KT #751 - JOE ROGAN + SHANE GILLIS"),
+        vid("b", "KT #680 - MADISON SQUARE GARDEN (NIGHT ONE) - JOE ROGAN + SHANE GILLIS + ..."),
+        vid("c", "KILL TONY #574 - JOE ROGAN + SHANE GILLIS + ARI SHAFFIR"),
+        vid("d", "TIM DILLON"),  # no number on the upload: the guard does not apply
+    ]
+    r = match(eps, videos, [], MatchConfig(("title",)))
+    assert {(m.episode.id, m.video.id, m.tier) for m in r.matches} == {
+        (1, "a", "exact"),
+        (2, "d", "exact"),
+    }
+    # the same number with no shared name is still not a candidate
+    r2 = match(
+        [ep(3, 2026, 3, "#753 - MARK NORMAND")],
+        [vid("e", "KT #753 - LIVE FROM AUSTIN")],
+        [],
+        MatchConfig(("title",)),
+    )
+    assert r2.matches == () and r2.unmatched[0].candidates["title"] == ()
