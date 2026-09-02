@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Form, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
 
@@ -71,6 +71,11 @@ def _rows(request: Request, session: DbSession, view: str) -> HTMLResponse:
 @router.get("/")
 def home() -> RedirectResponse:
     return RedirectResponse("/activity", status_code=302)
+
+
+@router.get("/favicon.ico")
+def favicon() -> FileResponse:
+    return FileResponse(STATIC_DIR / "favicon.ico", media_type="image/x-icon")
 
 
 @router.get("/activity")

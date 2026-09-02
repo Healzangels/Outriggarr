@@ -379,3 +379,13 @@ def test_override_form_accepts_a_url(client: TestClient) -> None:
     assert "Pick a video or paste a URL" in r.text
     prev = client.get(f"/subscriptions/{sub_id}/preview").text
     assert 'name="video_url"' in prev or "Unmatched" not in prev
+
+
+def test_branding_assets_and_favicon(client: TestClient) -> None:
+    assert client.get("/favicon.ico").status_code == 200
+    assert client.get("/favicon.ico").headers["content-type"].startswith("image/")
+    assert client.get("/static/outriggarr.svg").status_code == 200
+    assert client.get("/static/outriggarr.png").status_code == 200
+    page = client.get("/activity").text
+    assert '<link rel="icon" href="/static/favicon.ico"' in page
+    assert '<img src="/static/outriggarr.svg"' in page and 'class="brand"' in page

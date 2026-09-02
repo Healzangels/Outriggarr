@@ -1,3 +1,5 @@
+<p align="center"><img src="outriggarr/web/static/outriggarr.svg" alt="Outriggarr" width="128" height="128"></p>
+
 # Outriggarr
 
 Fills Sonarr and Radarr wanted lists from YouTube (or any yt-dlp site) and hands the files back through their own manual-import APIs. Sonarr and Radarr stay in charge of what is wanted, quality, naming, folders and notifications; Outriggarr rides alongside and never writes into a library folder.

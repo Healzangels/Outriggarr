@@ -1,3 +1,5 @@
+Project icon: outriggarr.svg / outriggarr.png / favicon.ico — Outriggarr's own artwork (MIT, like the code).
+
 Vendored front-end assets (no build step; served from /static):
 
 - pico.min.css   Pico CSS 2.1.1      MIT          https://picocss.com

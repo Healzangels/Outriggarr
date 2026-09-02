@@ -4,11 +4,16 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Outriggarr{% endblock %}</title>
+  <link rel="icon" href="/static/favicon.ico" sizes="16x16 32x32">
+  <link rel="icon" type="image/svg+xml" href="/static/outriggarr.svg">
+  <link rel="apple-touch-icon" href="/static/outriggarr.png">
   <link rel="stylesheet" href="/static/pico.min.css">
   <script src="/static/htmx.min.js"></script>
   <script defer src="/static/alpine.min.js"></script>
   <style>
     main.container { max-width: 1200px; }
+    a.brand { display: inline-flex; align-items: center; gap: .5em; text-decoration: none; color: inherit; }
+    a.brand img { border-radius: 6px; }
     nav a.active { text-decoration: underline; }
     .status { font-size: .8em; padding: .1em .5em; border-radius: .4em; white-space: nowrap; }
     .status-queued, .status-downloading, .status-importing { background: #2a4a7a; }
@@ -35,7 +40,7 @@
 </head>
 <body>
   <nav class="container">
-    <ul><li><strong>Outriggarr</strong></li></ul>
+    <ul><li><a href="/activity" class="brand"><img src="/static/outriggarr.svg" alt="" width="28" height="28"><strong>Outriggarr</strong></a></li></ul>
     <ul>
       <li><a href="/activity" class="{% if request.url.path.startswith('/activity') %}active{% endif %}">Activity</a></li>
       <li><a href="/series" class="{% if request.url.path.startswith('/series') or request.url.path.startswith('/subscriptions') %}active{% endif %}">Series</a></li>

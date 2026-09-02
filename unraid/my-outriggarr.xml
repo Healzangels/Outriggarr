@@ -14,7 +14,7 @@
   <Category>Downloaders: MediaApp:Video</Category>
   <WebUI>http://[IP]:[PORT:8080]</WebUI>
   <TemplateURL/>
-  <Icon/>
+  <Icon>https://raw.githubusercontent.com/Healzangels/Outriggarr/main/outriggarr/web/static/outriggarr.png</Icon>
   <ExtraParams/>
   <PostArgs/>
   <CPUset/>
