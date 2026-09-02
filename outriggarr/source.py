@@ -14,6 +14,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
+import httpx
+
 log = logging.getLogger(__name__)
 
 
@@ -128,6 +130,34 @@ def channel_videos_url(url: str) -> str:
 
 
 OptsProvider = Callable[[], dict[str, Any]]
+HttpGet = Callable[..., Any]  # httpx.get's shape; injectable for tests
+
+# archive.org: yt-dlp downloads any item, but it cannot list a *collection* (a set of
+# items such as archive.org/details/scam_school). The site's search API can, with each
+# item's title and date — and the date there is the original air date, which makes date
+# matching strong. Every item is then a normal yt-dlp download.
+ARCHIVE_DETAILS = re.compile(
+    r"^https?://(?:www\.)?archive\.org/details/([A-Za-z0-9._@-]+)/?(?:[?#].*)?$"
+)
+ARCHIVE_ROWS = 1000  # search API page size
+ARCHIVE_MAX_ITEMS = 5000  # a collection is listed whole, like a playlist, up to this
+ARCHIVE_MEDIATYPES = frozenset({"movies"})
+
+
+def archive_identifier(url: str) -> str | None:
+    m = ARCHIVE_DETAILS.match(url.strip())
+    return m.group(1) if m else None
+
+
+def strip_collection_prefix(title: str, collection_title: str | None) -> str:
+    """Collections number their items after the collection's own name: "Scam School
+    194: The Amazing iCard". Without that prefix the item title equals the episode
+    title and matches exactly, which vouches for the pairing."""
+    if not collection_title or not collection_title.strip():
+        return title
+    pattern = rf"^\s*{re.escape(collection_title.strip())}\s*(?:[-–:#]?\s*\d+)?\s*[:\-–|]\s*"
+    stripped = re.sub(pattern, "", title, count=1, flags=re.IGNORECASE).strip()
+    return stripped or title
 
 
 YOUTUBE_SIGNIN_COOKIE = "LOGIN_INFO"  # present on .youtube.com only for a signed-in account
@@ -173,10 +203,72 @@ class YtDlpSource:
     operator's passthrough (cookies, SponsorBlock, rate limits…) always wins."""
 
     def __init__(
-        self, extra_opts: OptsProvider | None = None, pot_server_home: Path | None = None
+        self,
+        extra_opts: OptsProvider | None = None,
+        pot_server_home: Path | None = None,
+        http_get: HttpGet | None = None,
     ) -> None:
         self._extra = extra_opts or (lambda: {})
         self._pot_home = pot_server_home
+        self._http_get = http_get or httpx.get
+
+    # ---- archive.org collections (the only source yt-dlp cannot list itself)
+    def _get_json(self, url: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        try:
+            r = self._http_get(url, params=params, timeout=30, headers={"User-Agent": "Outriggarr"})
+            r.raise_for_status()
+            data = r.json()
+        except httpx.HTTPError as exc:
+            raise SourceError(f"archive.org: {exc}") from exc
+        except ValueError as exc:
+            raise SourceError(f"archive.org: {url} did not return JSON") from exc
+        return data if isinstance(data, dict) else {}
+
+    def _archive_collection(self, url: str) -> list[VideoRef] | None:
+        """The items of an archive.org collection, newest first; None when the URL is
+        not an archive.org collection (a single item goes through yt-dlp as usual)."""
+        ident = archive_identifier(url)
+        if ident is None:
+            return None
+        meta = self._get_json(f"https://archive.org/metadata/{ident}").get("metadata") or {}
+        if meta.get("mediatype") != "collection":
+            return None
+        collection_title = str(meta.get("title") or "")
+        refs: list[VideoRef] = []
+        page = 1
+        while len(refs) < ARCHIVE_MAX_ITEMS:
+            data = self._get_json(
+                "https://archive.org/advancedsearch.php",
+                {
+                    "q": f"collection:{ident}",
+                    "fl[]": ["identifier", "title", "date", "mediatype"],
+                    "rows": ARCHIVE_ROWS,
+                    "page": page,
+                    "sort[]": "date desc",
+                    "output": "json",
+                },
+            )
+            docs = (data.get("response") or {}).get("docs") or []
+            for d in docs:
+                if d.get("mediatype") not in ARCHIVE_MEDIATYPES or not d.get("identifier"):
+                    continue
+                date = str(d.get("date") or "")[:10].replace("-", "")
+                refs.append(
+                    VideoRef(
+                        id=str(d["identifier"]),
+                        title=strip_collection_prefix(
+                            str(d.get("title") or d["identifier"]), collection_title
+                        ),
+                        url=f"https://archive.org/details/{d['identifier']}",
+                        duration=None,
+                        playlist_index=len(refs) + 1,
+                        upload_date=date if len(date) == 8 and date.isdigit() else None,
+                    )
+                )
+            if len(docs) < ARCHIVE_ROWS:
+                break
+            page += 1
+        return refs[:ARCHIVE_MAX_ITEMS]
 
     def _opts(self, base: dict[str, Any]) -> dict[str, Any]:
         from outriggarr.settings import RESERVED_YTDLP_KEYS
@@ -277,6 +369,9 @@ class YtDlpSource:
         return info
 
     def resolve(self, url: str) -> list[VideoRef]:
+        collection = self._archive_collection(url)
+        if collection is not None:
+            return collection
         # A pasted watch URL that also carries &list= is the video, not the playlist;
         # a bare channel URL lists its uploads tab rather than its shelves.
         return videos_from_info(
@@ -284,6 +379,9 @@ class YtDlpSource:
         )
 
     def list_recent(self, url: str, limit: int) -> list[VideoRef]:
+        collection = self._archive_collection(url)
+        if collection is not None:
+            return collection  # finite and owner-curated, like a playlist: listed whole
         target = channel_videos_url(url)
         opts = dict(_FLAT_OPTS)
         if target != url.strip() or "/videos" in target:

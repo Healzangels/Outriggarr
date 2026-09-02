@@ -517,3 +517,133 @@ def test_ytdlp_logger_demotes_the_known_sabr_notice(caplog) -> None:
     levels = {r.getMessage()[:20]: r.levelno for r in caplog.records}
     assert levels["[youtube] x: Some we"] == logging.DEBUG
     assert levels["[youtube] x: somethi"] == logging.WARNING
+
+
+class _Resp:
+    def __init__(self, data, status=200):
+        self._data, self.status_code = data, status
+
+    def raise_for_status(self):
+        import httpx
+
+        if self.status_code >= 400:
+            raise httpx.HTTPStatusError("boom", request=None, response=None)  # type: ignore[arg-type]
+
+    def json(self):
+        return self._data
+
+
+def _archive_http(pages, collection=True):
+    calls = []
+
+    def get(url, params=None, timeout=None, headers=None):
+        calls.append((url, params))
+        if url.endswith("/metadata/scam_school"):
+            return _Resp(
+                {
+                    "metadata": {
+                        "mediatype": "collection" if collection else "movies",
+                        "title": "Scam School",
+                    }
+                }
+            )
+        if "advancedsearch" in url:
+            return _Resp({"response": {"docs": pages[params["page"] - 1]}})
+        raise AssertionError(url)
+
+    return get, calls
+
+
+def test_archive_collection_is_listed_through_the_search_api(monkeypatch) -> None:
+    from outriggarr import source as src_mod
+    from outriggarr.source import YtDlpSource, strip_collection_prefix
+
+    monkeypatch.setattr(src_mod, "ARCHIVE_ROWS", 2)
+    pages = [
+        [
+            {
+                "identifier": "Scam_School_194",
+                "title": "Scam School 194: The Amazing iCard",
+                "date": "2011-11-30T00:00:00Z",
+                "mediatype": "movies",
+            },
+            {
+                "identifier": "Scam_School_2_audio",
+                "title": "Scam School 2 - audio",
+                "date": "2008-01-01",
+                "mediatype": "audio",
+            },
+        ],
+        [
+            {
+                "identifier": "Scam_School_34",
+                "title": "Scam School 34 - It's In the Bank",
+                "date": None,
+                "mediatype": "movies",
+            }
+        ],
+    ]
+    get, calls = _archive_http(pages)
+    src = YtDlpSource(http_get=get)
+    refs = src.list_recent("https://archive.org/details/scam_school?tab=collection", 50)
+    assert [(r.id, r.title, r.url, r.upload_date, r.playlist_index) for r in refs] == [
+        (
+            "Scam_School_194",
+            "The Amazing iCard",
+            "https://archive.org/details/Scam_School_194",
+            "20111130",
+            1,
+        ),
+        (
+            "Scam_School_34",
+            "It's In the Bank",
+            "https://archive.org/details/Scam_School_34",
+            None,
+            2,
+        ),
+    ], "movies only, prefix stripped, date → YYYYMMDD, two pages"
+    assert [p["page"] for _, p in calls if p] == [1, 2] and calls[0][0].endswith(
+        "/metadata/scam_school"
+    )
+    assert src.resolve("https://archive.org/details/scam_school") == refs, "Grab lists it too"
+    assert strip_collection_prefix("Scam School: Just a colon", "Scam School") == "Just a colon"
+    assert strip_collection_prefix("Unrelated title", "Scam School") == "Unrelated title"
+    assert strip_collection_prefix("Scam School 5:", "Scam School") == "Scam School 5:", (
+        "never empty"
+    )
+
+
+def test_archive_item_and_other_hosts_go_through_ytdlp(monkeypatch) -> None:
+    import yt_dlp
+
+    from outriggarr.source import SourceError, YtDlpSource
+
+    seen = []
+
+    class StubYDL:
+        def __init__(self, opts):
+            seen.append(opts)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def extract_info(self, url, download=False):
+            return {"id": "x", "title": "t", "webpage_url": url}
+
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", StubYDL)
+    get, calls = _archive_http([[]], collection=False)  # a single item, not a collection
+    src = YtDlpSource(http_get=get)
+    assert [v.id for v in src.list_recent("https://archive.org/details/scam_school", 50)] == ["x"]
+    assert len(calls) == 1, "one metadata call, then yt-dlp"
+    src.list_recent("https://vimeo.com/channels/staffpicks", 5)
+    assert len(calls) == 1, "other hosts never touch archive.org"
+
+    # the API failing is a clear, verbatim error, not a silent empty listing
+    def failing(url, params=None, timeout=None, headers=None):
+        return _Resp({}, status=503)
+
+    with pytest.raises(SourceError, match="archive.org"):
+        YtDlpSource(http_get=failing).list_recent("https://archive.org/details/scam_school", 50)
