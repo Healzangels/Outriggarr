@@ -194,7 +194,7 @@ Python 3.12, FastAPI, SQLAlchemy 2.x + Alembic, `yt-dlp` (library), `httpx`, Jin
 ## Open questions
 
 1. ~~Name.~~ Outriggarr.
-2. Actual host path for staging, and how it is mounted into Sonarr and Radarr.
+2. ~~Actual host path for staging, and how it is mounted into Sonarr and Radarr.~~ Half answered: both Sonarr and Radarr already share a `/data` mount and see the staging root as `/data/outriggarr` (`staging_path_remote`). The host path behind `/data`, which Outriggarr must mount as `/staging`, is still to be supplied at deployment.
 3. Are the target series already on TVDB with full episode lists? If not, that is the first blocker, not code.
 4. HTMX vs React — accept the recommendation, or is there a preference?
 5. Sonarr tag on subscribed series — wanted in v1 or later?
