@@ -789,6 +789,7 @@ def test_matches_recheck_and_confirm_clear_the_review_list(client: TestClient) -
     assert 'needs a look<span class="count">3</span>' in r.text, "25 min vs 25 min cleared itself"
     assert "Checked 4 pairings" not in client.get("/matches").text, "the summary shows once"
     assert "2 unchecked" in r.text, "the button says how much is left"
+    assert 'disabled title="Every pairing' not in r.text, "still something to check: enabled"
     jobs = {j["video_id"]: j for j in client.get("/api/jobs").json()}
     assert jobs["double"]["target_runtime"] is None, "a half-known runtime is no evidence"
     assert "50m00s, no runtime in Sonarr" in r.text
@@ -821,6 +822,7 @@ def test_matches_recheck_and_confirm_clear_the_review_list(client: TestClient) -
         'aria-current="page">all<' in landing and 'aria-current="page">needs a look' not in landing
     )
     assert "Every pairing already has its length evidence" in landing
+    assert 'disabled title="Every pairing already has its length evidence"' in landing
     assert "Nothing left to check" not in landing
     assert client.delete(f"/api/jobs/{short_id}/confirm").json()["reviewed_at"] is None
 
