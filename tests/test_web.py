@@ -384,7 +384,7 @@ def test_override_form_accepts_a_url(client: TestClient) -> None:
     )
     assert r.status_code == 200
     assert "Override set for Seven, older upload (from URL)" in r.text
-    assert "(URL)" in r.text and "S30E07" in r.text
+    assert ">URL<" in r.text and "S30E07" in r.text
     assert "would queue" in r.text  # S30E07 now matches via the override
     r = client.post(f"/subscriptions/{sub_id}/overrides", data={"season": "30", "episode": "7"})
     assert "Pick a video or paste a URL" in r.text

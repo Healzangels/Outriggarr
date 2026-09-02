@@ -1,10 +1,13 @@
 {% extends "base.html" %}
 {% block title %}Grab · Outriggarr{% endblock %}
 {% block content %}
-<h2>Grab</h2>
+<div class="page-header">
+  <div><h2>Grab</h2><p class="sub">Queue videos by hand: paste a URL, pick where each one goes, queue.</p></div>
+</div>
 {% if not connections %}
-<p class="warn">No enabled connections. Add Sonarr/Radarr first (JSON API <code>/api/connections</code>; Settings screen arrives in a later milestone).</p>
+<p class="notice warn">No enabled connections. Add Sonarr or Radarr under <a href="/settings">Settings</a> first.</p>
 {% endif %}
+<p class="steps">1 · Paste a video or playlist URL → 2 · choose the target series or movie → 3 · queue.</p>
 <div x-data="grabApp()" x-init="init()">
   <form @submit.prevent="resolve()">
     <fieldset role="group">
@@ -12,7 +15,7 @@
       <button type="submit" :aria-busy="resolving" :disabled="resolving">Resolve</button>
     </fieldset>
   </form>
-  <p class="warn" x-show="error" x-text="error"></p>
+  <p class="notice bad" x-show="error" x-text="error"></p>
 
   <template x-if="videos.length">
     <div>
@@ -49,7 +52,7 @@
       </div>
       <p class="muted" x-show="kind === 'sonarr' && series" x-text="series ? series.title + ' · ' + episodes.length + ' episodes in Sonarr' : ''"></p>
 
-      <table class="grab">
+      <div class="table-wrap"><table class="grab">
         <thead><tr><th></th><th>#</th><th>Video</th><th x-text="kind === 'sonarr' ? 'Episode' : 'Movie'"></th><th>Status</th></tr></thead>
         <tbody>
           <template x-for="(row, i) in rows" :key="row.video.id">
@@ -76,15 +79,18 @@
                   </div>
                 </template>
               </td>
-              <td><span :class="rowStatus(row).warn ? 'warn' : 'muted'" x-text="rowStatus(row).text"></span></td>
+              <td><span :class="rowStatus(row).warn ? 'warn' : (isReady(row) ? 'ok' : 'muted')" x-text="rowStatus(row).text"></span></td>
             </tr>
           </template>
         </tbody>
-      </table>
-      <button type="button" @click="queue()" :disabled="queueing || !readyCount()" :aria-busy="queueing">
-        Queue <span x-text="readyCount()"></span> job(s)
-      </button>
-      <p x-show="result" x-html="result"></p>
+      </table></div>
+      <div class="sticky-bar">
+        <button type="button" @click="queue()" :disabled="queueing || !readyCount()" :aria-busy="queueing">
+          Queue <span x-text="readyCount()"></span> job(s)
+        </button>
+        <span class="muted"><span x-text="rows.filter(r => r.include).length"></span> selected · <span x-text="readyCount()"></span> ready</span>
+        <span class="notice" x-show="result" x-html="result" style="margin:0"></span>
+      </div>
     </div>
   </template>
 </div>

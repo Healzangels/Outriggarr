@@ -8,48 +8,30 @@
   <link rel="icon" type="image/svg+xml" href="/static/outriggarr.svg">
   <link rel="apple-touch-icon" href="/static/outriggarr.png">
   <link rel="stylesheet" href="/static/pico.min.css">
+  <link rel="stylesheet" href="/static/app.css">
   <script src="/static/htmx.min.js"></script>
   <script defer src="/static/alpine.min.js"></script>
-  <style>
-    main.container { max-width: 1200px; }
-    a.brand { display: inline-flex; align-items: center; gap: .5em; text-decoration: none; color: inherit; }
-    a.brand img { border-radius: 6px; }
-    nav a.active { text-decoration: underline; }
-    .status { font-size: .8em; padding: .1em .5em; border-radius: .4em; white-space: nowrap; }
-    .status-queued, .status-downloading, .status-importing { background: #2a4a7a; }
-    .status-done { background: #2f6b3a; }
-    .status-failed { background: #7a2a2a; }
-    .status-cancelled { background: #555; }
-    td.actions { white-space: nowrap; }
-    td.actions button { margin: 0 .2em 0 0; padding: .2em .6em; font-size: .85em; }
-    details.error pre { white-space: pre-wrap; font-size: .8em; max-width: 60ch; }
-    progress { margin: 0; }
-    .muted { opacity: .7; font-size: .85em; }
-    table.grab td, table.grab th { vertical-align: top; }
-    .results { position: absolute; z-index: 10; background: var(--pico-card-background-color); border: 1px solid var(--pico-muted-border-color); max-height: 16em; overflow-y: auto; margin: 0; padding: 0; list-style: none; width: 100%; }
-    .results li { padding: .3em .6em; cursor: pointer; }
-    .results li:hover { background: var(--pico-secondary-background); }
-    .rel { position: relative; }
-    .warn { color: #e8a33d; }
-    .ok { color: #6fbf73; }
-    .strategy { font-size: .75em; padding: .1em .4em; border-radius: .3em; background: #333; }
-    form.inline { display: inline; margin: 0; }
-    form.inline button { padding: .2em .6em; font-size: .85em; margin: 0; }
-    .notice { padding: .5em .8em; background: #1f3b2a; border-radius: .4em; }
-  </style>
 </head>
 <body>
   <nav class="container">
     <ul><li><a href="/activity" class="brand"><img src="/static/outriggarr.svg" alt="" width="28" height="28"><strong>Outriggarr</strong></a></li></ul>
     <ul>
-      <li><a href="/activity" class="{% if request.url.path.startswith('/activity') %}active{% endif %}">Activity</a></li>
-      <li><a href="/series" class="{% if request.url.path.startswith('/series') or request.url.path.startswith('/subscriptions') %}active{% endif %}">Series</a></li>
-      <li><a href="/grab" class="{% if request.url.path.startswith('/grab') %}active{% endif %}">Grab</a></li>
-      <li><a href="/settings" class="{% if request.url.path.startswith('/settings') %}active{% endif %}">Settings</a></li>
+      {% for href, label in (("/activity", "Activity"), ("/series", "Series"), ("/grab", "Grab"), ("/settings", "Settings")) %}
+      <li><a href="{{ href }}" class="{% if request.url.path.startswith(href) or (href == '/series' and request.url.path.startswith('/subscriptions')) %}active{% endif %}">{{ label }}</a></li>
+      {% endfor %}
     </ul>
   </nav>
   <main class="container">
     {% block content %}{% endblock %}
   </main>
+  <footer class="container">
+    <span>Outriggarr {{ app_version }}</span>
+    <span>yt-dlp {{ tooling.yt_dlp }}</span>
+    <span class="{{ 'ok' if tooling.js_runtime else 'warn' }}">JS runtime: {{ tooling.js_runtime or "none" }}</span>
+    <span class="{{ 'ok' if tooling.ffmpeg else 'bad' }}">ffmpeg: {{ "ok" if tooling.ffmpeg else "missing" }}</span>
+    <span class="{{ 'ok' if tooling.staging_writable else 'bad' }}">staging: {{ "writable" if tooling.staging_writable else "NOT writable" }}</span>
+    <a href="/docs" class="muted">API docs</a>
+    <a href="https://github.com/Healzangels/Outriggarr" class="muted" target="_blank" rel="noopener">GitHub</a>
+  </footer>
 </body>
 </html>

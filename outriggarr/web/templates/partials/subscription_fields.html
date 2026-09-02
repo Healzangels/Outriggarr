@@ -1,20 +1,20 @@
-<label>Source URL (channel or playlist)
+<label>Source URL <span class="hint">A channel (its newest uploads are scanned) or a playlist.</span>
   <input type="url" name="source_url" required value="{{ sub.source_url if sub else '' }}" placeholder="https://www.youtube.com/@channel">
 </label>
 <fieldset>
   <legend>Automatic matching strategies <span class="muted">(videos you pin to an episode by hand always win, before any of these)</span></legend>
   {% for st in strategies %}
     <label><input type="checkbox" name="strategies" value="{{ st }}" {% if st in chosen %}checked{% endif %}> {{ st }}
-      <span class="muted">{% if st == "title" %}normalised title equality, then containment{% elif st == "date" %}upload date near air date (per-video fetch for unmatched only){% else %}named groups season/episode in the regex below{% endif %}</span></label>
+      <span class="muted">{% if st == "title" %}normalised title equality, then containment{% elif st == "date" %}upload date near the air date (per-video fetch, unmatched episodes only){% else %}named groups season/episode in the regex below{% endif %}</span></label>
   {% endfor %}
 </fieldset>
 <div class="grid">
   <label>Date tolerance (days)<input type="number" name="date_tolerance_days" min="0" max="60" value="{{ sub.date_tolerance_days if sub else 2 }}"></label>
-  <label>Date offset (days)<input type="number" name="date_offset_days" min="-60" max="60" value="{{ sub.date_offset_days if sub else 0 }}"></label>
+  <label>Date offset (days)<span class="hint">Positive if uploads land after the air date.</span><input type="number" name="date_offset_days" min="-60" max="60" value="{{ sub.date_offset_days if sub else 0 }}"></label>
 </div>
-<label>Title regex <span class="muted">(optional, e.g. <code>S(?P&lt;season&gt;\d+)E(?P&lt;episode&gt;\d+)</code>)</span>
+<label>Title regex <span class="hint">Optional, for channels that number their own uploads, e.g. <code>S(?P&lt;season&gt;\d+)E(?P&lt;episode&gt;\d+)</code> or <code>#(?P&lt;episode&gt;\d+)</code>.</span>
   <input type="text" name="title_regex" value="{{ sub.title_regex or '' if sub else '' }}">
 </label>
-<label>yt-dlp format override <span class="muted">(blank = global default)</span>
+<label>yt-dlp format override <span class="hint">Blank uses the global default from Settings.</span>
   <input type="text" name="format" value="{{ sub.format or '' if sub else '' }}">
 </label>

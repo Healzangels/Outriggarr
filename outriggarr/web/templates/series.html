@@ -1,35 +1,42 @@
 {% extends "base.html" %}
 {% block title %}Series · Outriggarr{% endblock %}
 {% block content %}
-<h2>Series</h2>
+<div class="page-header">
+  <div><h2>Series</h2><p class="sub">Attach a YouTube source to a Sonarr series. Which episodes are wanted still comes from Sonarr.</p></div>
+</div>
 {% if not connection %}
-<p class="warn">No enabled Sonarr connection. Add one via <code>/api/connections</code> first.</p>
+<p class="notice warn">No enabled Sonarr connection. Add one under <a href="/settings">Settings</a> first.</p>
 {% else %}
-<p class="muted">Sonarr: {{ connection.name }} · subscribed series get a source attached here; which episodes are wanted still comes from Sonarr.</p>
-<input type="search" name="q" placeholder="Search Sonarr series…" autocomplete="off"
-       hx-get="/series/rows" hx-trigger="input changed delay:300ms, search" hx-target="#series-rows">
-<div id="series-rows" hx-get="/series/rows" hx-trigger="load" hx-swap="innerHTML"></div>
+<article class="card">
+  <header>Find a series <span class="muted">· Sonarr: {{ connection.name }}</span></header>
+  <input type="search" name="q" placeholder="Search Sonarr series…" autocomplete="off"
+         hx-get="/series/rows" hx-trigger="input changed delay:300ms, search" hx-target="#series-rows">
+  <div id="series-rows" hx-get="/series/rows" hx-trigger="load" hx-swap="innerHTML"></div>
+</article>
 {% endif %}
 
-<h3>Subscriptions</h3>
+<h3 class="section">Subscriptions <span class="muted">{{ subscriptions | length }}</span></h3>
 {% if not subscriptions %}
-<p class="muted">None yet. Search above and press Subscribe.</p>
+<p class="empty">None yet. Search above and press Subscribe.</p>
 {% else %}
+<div class="table-wrap">
 <table>
-  <thead><tr><th>Series</th><th>Source</th><th>Strategies</th><th>Enabled</th><th>Last scan</th></tr></thead>
+  <thead><tr><th>Series</th><th>Source</th><th>Matching</th><th>Last scan</th><th></th></tr></thead>
   <tbody>
   {% for s in subscriptions %}
     <tr>
-      <td><a href="/subscriptions/{{ s.id }}">{{ s.title or ("series " ~ s.series_id) }}</a></td>
-      <td><a href="{{ s.source_url }}" target="_blank" rel="noopener">{{ s.source_url | truncate(60) }}</a></td>
-      <td>pins{% for st in s.strategies %} → {{ st }}{% endfor %}</td>
-      <td>{{ "yes" if s.enabled else "no" }}</td>
-      <td>{% if s.last_scan_at %}{{ s.last_scan_at.strftime("%Y-%m-%d %H:%M") }}Z
-        {% if s.last_scan_result %}<br><span class="muted">{% if s.last_scan_result.error %}<span class="warn">{{ s.last_scan_result.error | truncate(80) }}</span>{% else %}matched {{ s.last_scan_result.matched }} · queued {{ s.last_scan_result.created }} · unmatched {{ s.last_scan_result.unmatched }}{% endif %}</span>{% endif %}
+      <td><a href="/subscriptions/{{ s.id }}">{{ s.title or ("series " ~ s.series_id) }}</a>
+        {% if not s.enabled %}<span class="badge badge-off">disabled</span>{% endif %}</td>
+      <td><a href="{{ s.source_url }}" target="_blank" rel="noopener" class="truncate" title="{{ s.source_url }}">{{ s.source_url | replace("https://www.youtube.com/", "") | replace("https://youtube.com/", "") }}</a></td>
+      <td><span class="chips"><span class="chip">pins</span>{% for st in s.strategies %}<span class="chip">{{ st }}</span>{% endfor %}</span></td>
+      <td>{% if s.last_scan_at %}<span title="{{ s.last_scan_at.strftime('%Y-%m-%d %H:%M') }}Z">{{ s.last_scan_at | ago }}</span>
+        {% if s.last_scan_result %}<span class="two-line">{% if s.last_scan_result.error %}<span class="bad">{{ s.last_scan_result.error | truncate(70) }}</span>{% else %}<span class="chips"><span class="chip">{{ s.last_scan_result.matched }} matched</span><span class="chip {{ 'ok' if s.last_scan_result.created else '' }}">{{ s.last_scan_result.created }} queued</span><span class="chip {{ 'warn' if s.last_scan_result.unmatched else '' }}">{{ s.last_scan_result.unmatched }} unmatched</span></span>{% endif %}</span>{% endif %}
         {% else %}<span class="muted">never</span>{% endif %}</td>
+      <td class="actions"><a href="/subscriptions/{{ s.id }}" role="button" class="secondary outline">Open</a></td>
     </tr>
   {% endfor %}
   </tbody>
 </table>
+</div>
 {% endif %}
 {% endblock %}

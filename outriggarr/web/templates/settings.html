@@ -1,76 +1,95 @@
 {% extends "base.html" %}
 {% block title %}Settings · Outriggarr{% endblock %}
 {% block content %}
-<h2>Settings</h2>
+<div class="page-header">
+  <div><h2>Settings</h2><p class="sub">Connections to Sonarr and Radarr, download options, notifications.</p></div>
+</div>
 {% if request.query_params.get("saved") %}<p class="notice">Saved.</p>{% endif %}
 
-<h3>Connections</h3>
-{% if conn_error %}<p class="warn">{{ conn_error }}</p>{% endif %}
+<section>
+<h3 class="section">Connections</h3>
+{% if conn_error %}<p class="notice bad">{{ conn_error }}</p>{% endif %}
 {% for c in connections %}
-<details {% if conn_error %}open{% endif %}>
-  <summary>{{ c.name }} <span class="muted">({{ c.kind.value }}) · {{ c.url }}{% if not c.enabled %} · disabled{% endif %}</span></summary>
+<article class="card">
+  <header><span class="badge badge-kind">{{ c.kind.value }}</span> {{ c.name }} <span class="muted">· {{ c.url }}</span>{% if not c.enabled %} <span class="badge badge-off">disabled</span>{% endif %}</header>
   <form method="post" action="/settings/connections/{{ c.id }}">
     <div class="grid">
       <label>Kind<select name="kind">{% for k in kinds %}<option value="{{ k }}" {% if k == c.kind.value %}selected{% endif %}>{{ k }}</option>{% endfor %}</select></label>
       <label>Name<input name="name" value="{{ c.name }}" required></label>
     </div>
-    <label>URL<input name="url" value="{{ c.url }}" required placeholder="http://sonarr:8989"></label>
-    <label>API key <span class="muted">(blank keeps the stored key)</span><input name="api_key" type="password" autocomplete="off" placeholder="••••••••"></label>
-    <label>Staging path as this *arr sees it<input name="staging_path_remote" value="{{ c.staging_path_remote }}" required></label>
+    <div class="grid">
+      <label>URL<input name="url" value="{{ c.url }}" required placeholder="http://sonarr:8989"></label>
+      <label>API key <span class="hint">Blank keeps the stored key.</span><input name="api_key" type="password" autocomplete="off" placeholder="••••••••"></label>
+    </div>
+    <label>Staging path as this *arr sees it <span class="hint">The staging folder's path inside {{ c.name }}'s own container.</span><input name="staging_path_remote" value="{{ c.staging_path_remote }}" required></label>
     <label><input type="checkbox" name="enabled" value="1" {% if c.enabled %}checked{% endif %}> Enabled</label>
-    <button type="submit">Save</button>
-    <button type="button" class="secondary" hx-post="/settings/connections/{{ c.id }}/test" hx-target="#test-{{ c.id }}" hx-swap="innerHTML">Test</button>
-    <span id="test-{{ c.id }}"></span>
+    <div class="form-actions">
+      <button type="submit">Save</button>
+      <button type="button" class="secondary" hx-post="/settings/connections/{{ c.id }}/test" hx-target="#test-{{ c.id }}" hx-swap="innerHTML" hx-indicator="#test-busy-{{ c.id }}">Test</button>
+      <span id="test-busy-{{ c.id }}" class="htmx-indicator muted" aria-busy="true">testing…</span>
+      <span id="test-{{ c.id }}"></span>
+    </div>
   </form>
   <form method="post" action="/settings/connections/{{ c.id }}/delete" onsubmit="return confirm('Delete connection {{ c.name }}?')">
-    <button type="submit" class="secondary outline">Delete</button>
+    <div class="form-actions"><button type="submit" class="secondary outline">Delete</button></div>
   </form>
-</details>
+</article>
 {% endfor %}
 <details {% if not connections %}open{% endif %}>
   <summary>Add a connection</summary>
+  <article class="card">
   <form method="post" action="/settings/connections">
     <div class="grid">
       <label>Kind<select name="kind">{% for k in kinds %}<option value="{{ k }}">{{ k }}</option>{% endfor %}</select></label>
       <label>Name<input name="name" required placeholder="Sonarr"></label>
     </div>
-    <label>URL<input name="url" required placeholder="http://sonarr:8989"></label>
-    <label>API key<input name="api_key" type="password" autocomplete="off" required></label>
+    <div class="grid">
+      <label>URL<input name="url" required placeholder="http://sonarr:8989"></label>
+      <label>API key<input name="api_key" type="password" autocomplete="off" required></label>
+    </div>
     <label>Staging path as this *arr sees it<input name="staging_path_remote" required placeholder="/data/outriggarr"></label>
     <input type="hidden" name="enabled" value="1">
-    <button type="submit">Add</button>
+    <div class="form-actions"><button type="submit">Add</button></div>
   </form>
+  </article>
 </details>
+</section>
 
-<h3>Downloads</h3>
-{% if settings_error %}<p class="warn">{{ settings_error }}</p>{% endif %}
+<section>
+<h3 class="section">Downloads</h3>
+{% if settings_error %}<p class="notice bad">{{ settings_error }}</p>{% endif %}
+<article class="card">
 <form method="post" action="/settings/downloads">
   <div class="grid">
     <label>Scan interval (minutes)<input type="number" name="scan_interval_minutes" min="1" max="1440" value="{{ settings.scan_interval_minutes }}"></label>
     <label>Concurrent downloads<input type="number" name="concurrency" min="1" max="8" value="{{ settings.concurrency }}"></label>
     <label>Videos listed per scan<input type="number" name="scan_video_limit" min="1" max="500" value="{{ settings.scan_video_limit }}"></label>
   </div>
-  <label>Default yt-dlp format<input name="default_format" value="{{ settings.default_format }}" required></label>
+  <label>Default yt-dlp format <span class="hint">Applies unless a subscription overrides it.</span><input name="default_format" value="{{ settings.default_format }}" required></label>
   <div class="grid">
     <label>Merge container<select name="merge_container">{% for c in containers %}<option value="{{ c }}" {% if c == settings.merge_container %}selected{% endif %}>{{ c }}</option>{% endfor %}</select></label>
-    <label>Cookies file <span class="muted">(path inside the container, e.g. /config/cookies.txt)</span><input name="cookies_path" value="{{ settings.cookies_path }}"></label>
+    <label>Cookies file <span class="hint">Path inside the container, e.g. /config/cookies.txt.</span><input name="cookies_path" value="{{ settings.cookies_path }}"></label>
   </div>
-  <label>Extra yt-dlp options (JSON object, merged last) <span class="muted">e.g. <code>{"sponsorblock_remove": ["sponsor"], "ratelimit": 5000000}</code></span>
-    <textarea name="ytdlp_extra_opts" rows="3">{{ settings.ytdlp_extra_opts }}</textarea></label>
+  <label>Extra yt-dlp options <span class="hint">A JSON object merged last, e.g. <code>{"sponsorblock_remove": ["sponsor"], "ratelimit": 5000000}</code>.</span>
+    <textarea name="ytdlp_extra_opts" rows="2">{{ settings.ytdlp_extra_opts }}</textarea></label>
   <div class="grid">
-    <label>Subtitle languages <span class="muted">(comma-separated, e.g. en,es; blank = none; saved as .srt sidecars the *arr imports)</span><input name="subtitles_langs" value="{{ settings.subtitles_langs }}" placeholder="en"></label>
+    <label>Subtitle languages <span class="hint">Comma-separated, e.g. en,es; blank = none. Saved as .srt sidecars the *arr imports.</span><input name="subtitles_langs" value="{{ settings.subtitles_langs }}" placeholder="en"></label>
     <label>Auto-generated captions too<select name="subtitles_auto"><option value="0" {% if settings.subtitles_auto == "0" %}selected{% endif %}>no — only uploader captions</option><option value="1" {% if settings.subtitles_auto == "1" %}selected{% endif %}>yes — accept machine transcripts</option></select></label>
   </div>
   <div class="grid">
-    <label>Audio language tag <span class="muted">(ISO 639-2; YouTube audio is untagged and shows as "Unknown" in Plex; blank = leave)</span><input name="audio_language" value="{{ settings.audio_language }}" placeholder="eng"></label>
-    <label>Sonarr tag for subscribed series <span class="muted">(blank = off)</span><input name="sonarr_tag" value="{{ settings.sonarr_tag }}" placeholder="outriggarr"></label>
+    <label>Audio language tag <span class="hint">ISO 639-2; YouTube audio is untagged and shows as "Unknown" in Plex. Blank = leave.</span><input name="audio_language" value="{{ settings.audio_language }}" placeholder="eng"></label>
+    <label>Sonarr tag for subscribed series <span class="hint">Blank = off.</span><input name="sonarr_tag" value="{{ settings.sonarr_tag }}" placeholder="outriggarr"></label>
   </div>
-  <button type="submit">Save downloads</button>
+  <div class="form-actions"><button type="submit">Save downloads</button></div>
 </form>
+</article>
+</section>
 
-<h3>Notifications</h3>
+<section>
+<h3 class="section">Notifications</h3>
+<article class="card">
 <form method="post" action="/settings/downloads">
-  <label>Apprise URLs <span class="muted">(one per line, e.g. <code>discord://webhook_id/webhook_token</code>, <code>pover://user@token</code>; see the Apprise wiki)</span>
+  <label>Apprise URLs <span class="hint">One per line, e.g. <code>discord://webhook_id/webhook_token</code>, <code>ntfy://topic</code>, <code>pover://user@token</code>. See the Apprise wiki for every service.</span>
     <textarea name="apprise_urls" rows="3" placeholder="discord://…">{{ settings.apprise_urls }}</textarea></label>
   <div class="grid">
     <label><input type="checkbox" name="notify_on_failed" value="1" {% if settings.notify_on_failed == "1" %}checked{% endif %}> Job failed for good</label>
@@ -78,8 +97,13 @@
     <label><input type="checkbox" name="notify_on_done" value="1" {% if settings.notify_on_done == "1" %}checked{% endif %}> Job imported <span class="muted">(Sonarr/Radarr usually announce this)</span></label>
   </div>
   <input type="hidden" name="_notify_form" value="1">
-  <button type="submit">Save notifications</button>
-  <button type="button" class="secondary" hx-post="/settings/notify/test" hx-target="#notify-test" hx-swap="innerHTML">Send test</button>
-  <span id="notify-test"></span>
+  <div class="form-actions">
+    <button type="submit">Save notifications</button>
+    <button type="button" class="secondary" hx-post="/settings/notify/test" hx-target="#notify-test" hx-swap="innerHTML" hx-indicator="#notify-busy">Send test</button>
+    <span id="notify-busy" class="htmx-indicator muted" aria-busy="true">sending…</span>
+    <span id="notify-test"></span>
+  </div>
 </form>
+</article>
+</section>
 {% endblock %}

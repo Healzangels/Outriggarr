@@ -1,37 +1,42 @@
 {% if not jobs %}
-<p class="muted">No jobs{% if view != "all" %} in "{{ view }}"{% endif %}. Queue one from <a href="/grab">Grab</a>.</p>
+<p class="empty">No jobs{% if view != "all" %} in "{{ view }}"{% endif %}. Queue one from <a href="/grab">Grab</a> or subscribe to a series under <a href="/series">Series</a>.</p>
 {% else %}
+<div class="table-wrap">
 <table>
-  <thead><tr><th>#</th><th>Status</th><th>Target</th><th>Video</th><th>Progress</th><th>Attempts</th><th></th></tr></thead>
+  <thead><tr><th>#</th><th>Status</th><th>Target</th><th>Video</th><th>Progress</th><th>When</th><th class="actions"></th></tr></thead>
   <tbody>
   {% for job in jobs %}
     <tr id="job-{{ job.id }}">
-      <td>{{ job.id }}</td>
-      <td><span class="status status-{{ job.status.value }}">{{ job.status.value }}</span>
-        {% if job.next_retry_at %}<br><span class="muted">retry {{ job.next_retry_at.strftime("%Y-%m-%d %H:%M") }}Z</span>{% endif %}
+      <td class="mono">{{ job.id }}</td>
+      <td><span class="badge badge-{{ job.status.value }} status status-{{ job.status.value }}">{{ job.status.value }}</span>
+        {% if job.next_retry_at %}<span class="two-line muted">retry {{ job.next_retry_at | ago }}</span>{% endif %}
+        {% if job.attempts > 1 %}<span class="two-line muted">attempt {{ job.attempts }}</span>{% endif %}
       </td>
       <td>
         {% if job.target_label %}{{ job.target_label }}{% else %}
           {% if job.target_kind.value == "episode" %}series {{ job.series_id }} · episodes {{ job.episode_ids }}{% else %}movie {{ job.movie_id }}{% endif %}
         {% endif %}
-        <br><span class="muted">{{ job.connection.name }}</span>
+        <span class="two-line muted">{{ job.connection.name }}{% if job.subscription_id %} · subscription {{ job.subscription_id }}{% endif %}</span>
       </td>
-      <td><a href="{{ job.video_url }}" target="_blank" rel="noopener">{{ job.video_title or job.video_id }}</a>
-        {% if job.error %}<details class="error"><summary class="warn">error</summary><pre>{{ job.error }}</pre></details>{% endif %}
+      <td><a href="{{ job.video_url }}" target="_blank" rel="noopener" class="truncate" title="{{ job.video_title or job.video_id }}">{{ job.video_title or job.video_id }}</a>
+        {% if job.error %}<details class="error"><summary class="{{ 'warn' if job.status.value == 'done' else 'bad' }}">{{ job.error.splitlines()[0] | truncate(60) }}</summary><pre>{{ job.error }}</pre></details>{% endif %}
       </td>
-      <td>
-        {% if job.status.value == "downloading" %}<progress value="{{ job.progress_pct }}" max="100"></progress> {{ job.progress_pct }}%
-        {% elif job.status.value == "importing" %}<progress></progress> importing
+      <td class="num">
+        {% if job.status.value == "downloading" %}<progress value="{{ job.progress_pct }}" max="100"></progress><br>{{ job.progress_pct }}%
+        {% elif job.status.value == "importing" %}<progress></progress><br>importing
         {% elif job.status.value == "done" %}100%
         {% else %}<span class="muted">{{ job.progress_pct }}%</span>{% endif %}
       </td>
-      <td>{{ job.attempts }}</td>
+      <td class="muted" title="created {{ job.created_at.strftime('%Y-%m-%d %H:%M') }}Z{% if job.finished_at %} · finished {{ job.finished_at.strftime('%Y-%m-%d %H:%M') }}Z{% endif %}">
+        {% if job.finished_at %}{{ job.finished_at | ago }}{% else %}{{ job.created_at | ago }}{% endif %}
+      </td>
       <td class="actions">
         {% if job.status in RETRYABLE %}<button hx-post="/activity/jobs/{{ job.id }}/retry?view={{ view }}" hx-target="#jobs">Retry</button>{% endif %}
-        {% if job.status in CANCELLABLE %}<button class="secondary" hx-post="/activity/jobs/{{ job.id }}/cancel?view={{ view }}" hx-target="#jobs" hx-confirm="Cancel job {{ job.id }}?">Cancel</button>{% endif %}
+        {% if job.status in CANCELLABLE %}<button class="secondary outline" hx-post="/activity/jobs/{{ job.id }}/cancel?view={{ view }}" hx-target="#jobs" hx-confirm="Cancel job {{ job.id }}?">Cancel</button>{% endif %}
       </td>
     </tr>
   {% endfor %}
   </tbody>
 </table>
+</div>
 {% endif %}

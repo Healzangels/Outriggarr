@@ -1,36 +1,52 @@
 {% extends "base.html" %}
 {% block title %}{{ sub.title }} · Outriggarr{% endblock %}
 {% block content %}
-<h2>{{ sub.title or ("series " ~ sub.series_id) }} <span class="muted" style="font-size:.6em">subscription {{ sub.id }}{% if not sub.enabled %} · disabled{% endif %}</span></h2>
-{% if error %}<p class="warn">{{ error }}</p>{% endif %}
-<p><a href="{{ sub.source_url }}" target="_blank" rel="noopener">{{ sub.source_url }}</a>
-  · matching: <span title="Videos you pin to an episode on this page always win">your pins</span>{% for st in sub.strategies %} → {{ st }}{% endfor %}
-  {% if sub.last_scan_at %} · last scan {{ sub.last_scan_at.strftime("%Y-%m-%d %H:%M") }}Z{% endif %}</p>
-
-<div id="preview" hx-get="/subscriptions/{{ sub.id }}/preview" hx-trigger="load" hx-swap="innerHTML">
-  <p class="muted" aria-busy="true">Loading match preview…</p>
+<div class="page-header">
+  <div>
+    <h2>{{ sub.title or ("series " ~ sub.series_id) }} {% if not sub.enabled %}<span class="badge badge-off">disabled</span>{% endif %}</h2>
+    <p class="sub"><a href="{{ sub.source_url }}" target="_blank" rel="noopener" class="truncate" title="{{ sub.source_url }}">{{ sub.source_url | replace("https://www.youtube.com/", "youtube.com/") }}</a></p>
+  </div>
+  <div class="chips">
+    <span class="chip" title="Videos you pin to an episode on this page always win">your pins</span>{% for st in sub.strategies %}<span class="chip">{{ st }}</span>{% endfor %}
+    {% if sub.last_scan_at %}<span class="chip" title="{{ sub.last_scan_at.strftime('%Y-%m-%d %H:%M') }}Z">last scan {{ sub.last_scan_at | ago }}</span>{% else %}<span class="chip">never scanned</span>{% endif %}
+    <span class="chip">subscription {{ sub.id }}</span>
+  </div>
 </div>
+{% if error %}<p class="notice bad">{{ error }}</p>{% endif %}
 
-<h3>Episodes in Sonarr</h3>
-<div id="episodes" hx-get="/subscriptions/{{ sub.id }}/episodes" hx-trigger="load" hx-swap="innerHTML">
-  <p class="muted" aria-busy="true">Loading episodes…</p>
-</div>
+<article class="card">
+  <header>Match preview <span class="muted">· what the next scan would do</span></header>
+  <div id="preview" hx-get="/subscriptions/{{ sub.id }}/preview" hx-trigger="load" hx-swap="innerHTML">
+    <p class="muted" aria-busy="true">Loading match preview…</p>
+  </div>
+</article>
+
+<article class="card">
+  <header>Episodes in Sonarr</header>
+  <div id="episodes" hx-get="/subscriptions/{{ sub.id }}/episodes" hx-trigger="load" hx-swap="innerHTML">
+    <p class="muted" aria-busy="true">Loading episodes…</p>
+  </div>
+</article>
+
+<article class="card">
+  <header>Recent jobs from this subscription</header>
+  {% if not jobs %}<p class="muted">None yet.</p>{% else %}
+  <div class="table-wrap"><table><thead><tr><th>#</th><th>Status</th><th>Target</th><th>Video</th><th>When</th></tr></thead><tbody>
+  {% for job in jobs %}<tr><td class="mono"><a href="/activity">{{ job.id }}</a></td><td><span class="badge badge-{{ job.status.value }} status status-{{ job.status.value }}">{{ job.status.value }}</span></td><td>{{ job.target_label }}</td><td><span class="truncate" title="{{ job.video_title }}">{{ job.video_title }}</span></td><td class="muted">{{ (job.finished_at or job.created_at) | ago }}</td></tr>{% endfor %}
+  </tbody></table></div>{% endif %}
+</article>
 
 <details>
   <summary>Settings</summary>
+  <article class="card">
   <form method="post" action="/subscriptions/{{ sub.id }}/edit">
     {% include "partials/subscription_fields.html" %}
-    <label><input type="checkbox" name="enabled" value="1" {% if sub.enabled %}checked{% endif %}> Enabled (scanned on the schedule)</label>
-    <button type="submit">Save</button>
+    <label><input type="checkbox" name="enabled" value="1" {% if sub.enabled %}checked{% endif %}> Enabled <span class="muted">(scanned on the schedule)</span></label>
+    <div class="form-actions"><button type="submit">Save</button></div>
   </form>
   <form method="post" action="/subscriptions/{{ sub.id }}/delete" onsubmit="return confirm('Delete this subscription? Jobs are kept.')">
-    <button type="submit" class="secondary">Delete subscription</button>
+    <div class="form-actions"><button type="submit" class="secondary outline">Delete subscription</button></div>
   </form>
+  </article>
 </details>
-
-<h3>Recent jobs from this subscription</h3>
-{% if not jobs %}<p class="muted">None yet.</p>{% else %}
-<table><thead><tr><th>#</th><th>Status</th><th>Target</th><th>Video</th></tr></thead><tbody>
-{% for job in jobs %}<tr><td><a href="/activity">{{ job.id }}</a></td><td><span class="status status-{{ job.status.value }}">{{ job.status.value }}</span></td><td>{{ job.target_label }}</td><td>{{ job.video_title }}</td></tr>{% endfor %}
-</tbody></table>{% endif %}
 {% endblock %}

@@ -1,55 +1,64 @@
-<p>
+{% set queueable = report.matches | rejectattr("job_id") | rejectattr("skipped") | list | length %}
+<div class="form-actions">
   <button class="secondary" hx-post="/subscriptions/{{ sub.id }}/scan" hx-target="#preview" hx-indicator="#scan-busy">Scan now</button>
-  {% set queueable = report.matches | rejectattr("job_id") | rejectattr("skipped") | list | length %}
   <button hx-post="/subscriptions/{{ sub.id }}/download" hx-target="#preview" hx-indicator="#scan-busy" {% if not queueable %}disabled{% endif %}>Download{% if queueable %} {{ queueable }} matched{% endif %}</button>
-  <span id="scan-busy" class="htmx-indicator muted">working…</span>
-</p>
+  <span id="scan-busy" class="htmx-indicator muted" aria-busy="true">working…</span>
+  <span class="chips">
+    <span class="chip">{{ report.videos | length }} videos listed</span>
+    <span class="chip {{ 'ok' if report.matches else '' }}">{{ report.matches | length }} matched</span>
+    <span class="chip {{ 'warn' if report.unmatched else '' }}">{{ report.unmatched | length }} unmatched</span>
+    <span class="chip">{{ report.skipped_existing | length }} already have jobs</span>
+    {% if report.dry_run %}<span class="chip">preview only</span>{% endif %}
+  </span>
+</div>
 {% if notice %}<p class="notice">{{ notice }}</p>{% endif %}
-{% if report.error %}<p class="warn">Scan failed: {{ report.error }}</p>{% endif %}
-<p class="muted">{{ report.videos | length }} video(s) listed from the source ·
-  {{ report.matches | length }} matched · {{ report.unmatched | length }} unmatched · {{ report.skipped_existing | length }} already have jobs
-  {% if report.dry_run %}· preview only, nothing queued{% endif %}</p>
+{% if report.error %}<p class="notice bad">Scan failed: {{ report.error }}</p>{% endif %}
 
 {% if report.matches %}
 <h4>Matches</h4>
+<div class="table-wrap">
 <table>
-  <thead><tr><th>Episode</th><th>Video</th><th>Strategy</th><th>Job</th></tr></thead>
+  <thead><tr><th>Episode</th><th>Video</th><th>How</th><th>Job</th></tr></thead>
   <tbody>
   {% for m in report.matches %}
     <tr>
-      <td>{{ m.code }} {{ m.title }}<br><span class="muted">{{ m.air_date or "" }}</span></td>
-      <td><a href="{{ m.video_url }}" target="_blank" rel="noopener">{{ m.video_title }}</a><br><span class="muted">{{ m.video_id }}</span></td>
-      <td><span class="strategy">{{ m.strategy }}</span></td>
+      <td><strong>{{ m.code }}</strong> {{ m.title }}<span class="two-line muted">{{ m.air_date or "" }}</span></td>
+      <td><a href="{{ m.video_url }}" target="_blank" rel="noopener" class="truncate" title="{{ m.video_title }}">{{ m.video_title }}</a><span class="two-line muted mono">{{ m.video_id }}</span></td>
+      <td><span class="chip">{{ m.strategy }}</span></td>
       <td>{% if m.job_id %}<a href="/activity">#{{ m.job_id }}</a>{% elif m.skipped %}<span class="muted">{{ m.skipped }}</span>{% elif report.dry_run %}<span class="muted">would queue</span>{% endif %}</td>
     </tr>
   {% endfor %}
   </tbody>
 </table>
+</div>
 {% endif %}
 
 {% if report.unmatched %}
-<h4>Unmatched</h4>
+{% set shown = report.unmatched[:40] %}
+<h4>Unmatched <span class="muted">{{ report.unmatched | length }}{% if report.unmatched | length > shown | length %} · showing the first {{ shown | length }}{% endif %}</span></h4>
+<p class="muted">Pin a video to an episode by picking one of the listed uploads or pasting a video URL. Pins always win on the next scan.</p>
+<div class="table-wrap">
 <table>
-  <thead><tr><th>Episode</th><th>What each strategy saw</th><th>Set override</th></tr></thead>
+  <thead><tr><th>Episode</th><th>What each strategy saw</th><th>Pin a video</th></tr></thead>
   <tbody>
-  {% for u in report.unmatched %}
+  {% for u in shown %}
     <tr>
-      <td>{{ u.code }} {{ u.title }}<br><span class="muted">{{ u.air_date or "" }}</span></td>
-      <td>
+      <td><strong>{{ u.code }}</strong> {{ u.title }}<span class="two-line muted">{{ u.air_date or "" }}</span></td>
+      <td class="muted">
         {% for strategy, cands in u.candidates.items() %}
-          <span class="strategy">{{ strategy }}</span>
-          {% if not cands %}<span class="muted">no candidate</span>{% else %}<span class="warn">{{ cands | length }} candidates:</span>
-            {% for c in cands %}<span class="muted">{{ c.title }}</span>{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}<br>
+          <span class="chip">{{ strategy }}</span>
+          {% if not cands %}no candidate{% else %}<span class="warn">{{ cands | length }} candidates:</span>
+            {% for c in cands %}{{ c.title | truncate(50) }}{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}<br>
         {% endfor %}
       </td>
       <td>
         <form class="inline" hx-post="/subscriptions/{{ sub.id }}/overrides" hx-target="#preview">
           <input type="hidden" name="season" value="{{ u.season }}"><input type="hidden" name="episode" value="{{ u.number }}">
-          <select name="video_id" style="max-width:22em; display:inline-block">
+          <select name="video_id" style="max-width:20em; display:inline-block; margin:0 .2em .2em 0">
             <option value="">pick a listed video for {{ u.code }}…</option>
             {% for v in report.videos %}<option value="{{ v.id }}">{{ v.title | truncate(70) }}</option>{% endfor %}
           </select>
-          <input type="url" name="video_url" placeholder="…or paste a video URL" style="max-width:22em; display:inline-block">
+          <input type="url" name="video_url" placeholder="…or paste a video URL" style="max-width:20em; display:inline-block; margin:0 .2em .2em 0">
           <button type="submit">Set</button>
         </form>
       </td>
@@ -57,13 +66,14 @@
   {% endfor %}
   </tbody>
 </table>
+</div>
 {% endif %}
 
 {% if sub.overrides %}
-<h4>Overrides</h4>
+<h4>Your pins</h4>
 <ul>
 {% for o in sub.overrides %}
-  <li><code>{{ o.video_id }}</code>{% if o.video_title %} <span class="muted">{{ o.video_title | truncate(60) }}</span>{% endif %} → S{{ "%02d" % o.season }}E{{ "%02d" % o.episode }}{% if o.video_url %} <span class="muted">(URL)</span>{% endif %}
+  <li><code>{{ o.video_id }}</code>{% if o.video_title %} <span class="muted">{{ o.video_title | truncate(60) }}</span>{% endif %} → S{{ "%02d" % o.season }}E{{ "%02d" % o.episode }}{% if o.video_url %} <span class="chip">URL</span>{% endif %}
     <form class="inline" hx-post="/subscriptions/{{ sub.id }}/overrides/{{ o.video_id }}/delete" hx-target="#preview"><button type="submit" class="secondary outline">remove</button></form></li>
 {% endfor %}
 </ul>
@@ -71,10 +81,10 @@
 
 {% if report.skipped_existing %}
 <details><summary>{{ report.skipped_existing | length }} wanted episode(s) already have jobs</summary>
-<ul>{% for s in report.skipped_existing %}<li>{{ s.code }} {{ s.title }} → job #{{ s.job_id }} ({{ s.job_status }})</li>{% endfor %}</ul>
+<ul>{% for s in report.skipped_existing %}<li>{{ s.code }} {{ s.title }} → job #{{ s.job_id }} <span class="badge badge-{{ s.job_status }}">{{ s.job_status }}</span></li>{% endfor %}</ul>
 </details>
 {% endif %}
 
-<details><summary>{{ report.videos | length }} video(s) from the source</summary>
-<ol>{% for v in report.videos %}<li><a href="{{ v.url }}" target="_blank" rel="noopener">{{ v.title }}</a> <span class="muted">{{ v.id }}{% if v.upload_date %} · {{ v.upload_date }}{% endif %}</span></li>{% endfor %}</ol>
+<details><summary>{{ report.videos | length }} video(s) listed from the source</summary>
+<ol>{% for v in report.videos %}<li><a href="{{ v.url }}" target="_blank" rel="noopener">{{ v.title }}</a> <span class="muted mono">{{ v.id }}{% if v.upload_date %} · {{ v.upload_date }}{% endif %}</span></li>{% endfor %}</ol>
 </details>

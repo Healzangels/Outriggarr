@@ -1,10 +1,14 @@
 {% extends "base.html" %}
 {% block title %}Subscribe · Outriggarr{% endblock %}
 {% block content %}
-<h2>Subscribe: {{ title or ("series " ~ series_id) }}</h2>
-{% if error %}<p class="warn">{{ error }}</p>{% endif %}
+<div class="page-header">
+  <div><h2>Subscribe: {{ title or ("series " ~ series_id) }}</h2><p class="sub">Give this series a YouTube source. Episodes stay wanted or not according to Sonarr.</p></div>
+</div>
+{% if error %}<p class="notice bad">{{ error }}</p>{% endif %}
+<article class="card">
 <form method="post" action="/series/{{ series_id }}/subscribe">
   {% include "partials/subscription_fields.html" %}
-  <button type="submit">Subscribe</button> <a href="/series" role="button" class="secondary outline">Cancel</a>
+  <div class="form-actions"><button type="submit">Subscribe</button> <a href="/series" role="button" class="secondary outline">Cancel</a></div>
 </form>
+</article>
 {% endblock %}

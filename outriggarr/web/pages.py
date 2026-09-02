@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
@@ -9,8 +11,9 @@ from typing import Annotated
 from fastapi import APIRouter, Form, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import select
+from sqlalchemy import func, select
 
+from outriggarr import __version__
 from outriggarr.api.connections import (
     ConnectionIn,
     create_connection,
@@ -43,7 +46,55 @@ router = APIRouter(include_in_schema=False)
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
-templates.env.globals.update(RETRYABLE=RETRYABLE, CANCELLABLE=CANCELLABLE, JobStatus=JobStatus)
+templates.env.globals.update(
+    RETRYABLE=RETRYABLE, CANCELLABLE=CANCELLABLE, JobStatus=JobStatus, app_version=__version__
+)
+
+
+def ago(dt: datetime | None) -> str:
+    """'3 min ago' / 'in 2 h' — coarse, for tables; the exact time goes in a title attr."""
+    if dt is None:
+        return ""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    delta = datetime.now(UTC) - dt
+    future = delta.total_seconds() < 0
+    secs = abs(int(delta.total_seconds()))
+    if secs < 60:
+        return "in under a minute" if future else "just now"
+    for unit, size in (("d", 86400), ("h", 3600), ("min", 60)):
+        if secs >= size:
+            n = secs // size
+            return f"in {n} {unit}" if future else f"{n} {unit} ago"
+    return "just now"
+
+
+templates.env.filters["ago"] = ago
+
+
+def _tooling(request: Request) -> dict:
+    from yt_dlp.version import __version__ as ytdlp_version
+
+    staging = request.app.state.settings.staging_dir
+    return {
+        "yt_dlp": ytdlp_version,
+        "js_runtime": next((r for r in ("deno", "node", "bun") if shutil.which(r)), None),
+        "ffmpeg": shutil.which("ffmpeg") is not None,
+        "staging_writable": staging.is_dir() and os.access(staging, os.W_OK),
+    }
+
+
+_original_template_response = templates.TemplateResponse
+
+
+def _render(request: Request, name: str, context: dict, **kw):
+    """Every page gets the footer context; partials ignore it."""
+    if not name.startswith("partials/"):
+        context = {"tooling": _tooling(request), **context}
+    return _original_template_response(request, name, context, **kw)
+
+
+templates.TemplateResponse = _render  # type: ignore[method-assign]
 
 ACTIVE = (JobStatus.queued, JobStatus.downloading, JobStatus.importing)
 FILTERS = {
@@ -83,10 +134,18 @@ def activity(
     request: Request, session: DbSession, view: Annotated[str, Query()] = "all"
 ) -> HTMLResponse:
     view = view if view in FILTERS else "all"
+    counts = {
+        f: (
+            session.scalar(select(func.count()).select_from(Job).where(Job.status.in_(sts)))
+            if sts
+            else session.scalar(select(func.count()).select_from(Job))
+        )
+        for f, sts in FILTERS.items()
+    }
     return templates.TemplateResponse(
         request,
         "activity.html",
-        {"jobs": _jobs(session, view), "view": view, "filters": list(FILTERS)},
+        {"jobs": _jobs(session, view), "view": view, "filters": list(FILTERS), "counts": counts},
     )
 
 
