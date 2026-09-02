@@ -189,7 +189,7 @@ Benefit/risk of the GUI vs v0.1's headless daemon: it adds one HTTP port on the 
 
 ## Deployment
 
-- `python:3.12-slim` + ffmpeg + deno (yt-dlp's JavaScript runtime for YouTube). `PUID`/`PGID`/`UMASK` handled by `entrypoint.sh` (chowns `/config`, drops privileges with `setpriv`) so staged files are importable by the *arr user. `OUTRIGGARR_YTDLP_UPDATE=1` upgrades yt-dlp on start.
+- `python:3.12-slim` + ffmpeg + deno (yt-dlp's JavaScript runtime for YouTube) + the `yt-dlp-ejs` package (the JS challenge solver, bundled at build time so yt-dlp never fetches remote components at runtime). `PUID`/`PGID`/`UMASK` handled by `entrypoint.sh` (chowns `/config`, drops privileges with `setpriv`) so staged files are importable by the *arr user. `OUTRIGGARR_YTDLP_UPDATE=1` upgrades yt-dlp on start.
 - Volumes: `/config` (DB, cookies), `/staging` (also mounted in Sonarr and Radarr from the same host path). Paths are overridable with `OUTRIGGARR_CONFIG_DIR` / `OUTRIGGARR_STAGING_DIR`; the DB URL with `OUTRIGGARR_DATABASE_URL`.
 - One published port for the GUI (`OUTRIGGARR_PORT`, default 8080 inside the container). Same bridge as Sonarr/Radarr; reaches them by container name.
 - Migrations run in-process at startup; the `alembic` CLI reads the same env vars.

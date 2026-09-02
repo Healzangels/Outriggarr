@@ -39,7 +39,7 @@ services:
     networks: [arr]                  # the network your *arr containers are on
 ```
 
-Build: `docker build -t outriggarr .` (needs internet: it fetches ffmpeg, deno and Python packages).
+Build: `docker build -t outriggarr .` (needs internet: it fetches ffmpeg, deno and Python packages). YouTube's JavaScript challenges are solved by deno plus the bundled `yt-dlp-ejs` package; nothing is downloaded at runtime for that.
 
 Then open the GUI → **Settings** → add Sonarr (and Radarr): URL, API key, and the staging path *as that app sees it*. **Test** checks the API key, that the server really is the kind you said, and that it can see the staging directory.
 
