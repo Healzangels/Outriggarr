@@ -168,3 +168,48 @@ def test_apprise_notifier_reads_urls_per_send(monkeypatch) -> None:
     urls.clear()
     assert n.send("t3", "b") is False, "no URLs → nothing sent"
     assert NullNotifier().send("x", "y") is False
+
+
+def test_extra_opts_cannot_override_runner_keys() -> None:
+    from outriggarr.settings import RESERVED_YTDLP_KEYS
+
+    for key in ("outtmpl", "postprocessors", "paths", "logger", "format", "progress_hooks"):
+        assert key in RESERVED_YTDLP_KEYS
+        with pytest.raises(ValueError, match="owns those options"):
+            validate_setting("ytdlp_extra_opts", json.dumps({key: "x"}))
+    assert validate_setting(
+        "ytdlp_extra_opts", '{"ratelimit": 1, "sponsorblock_remove": ["sponsor"]}'
+    )
+
+
+def test_source_drops_reserved_extra_keys_even_if_stored(monkeypatch) -> None:
+    import yt_dlp
+
+    from outriggarr.source import YtDlpSource
+
+    seen: list[dict] = []
+
+    class StubYDL:
+        def __init__(self, opts):
+            seen.append(opts)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def extract_info(self, url, download=False):
+            return {"id": "x", "title": "t", "webpage_url": url}
+
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", StubYDL)
+    src = YtDlpSource(
+        extra_opts=lambda: {
+            "outtmpl": "/etc/passwd",
+            "postprocessors": [{"key": "Exec"}],
+            "ratelimit": 5,
+        }
+    )
+    src.resolve("https://youtu.be/x")
+    assert seen[0].get("outtmpl") != "/etc/passwd" and "postprocessors" not in seen[0]
+    assert seen[0]["ratelimit"] == 5 and seen[0]["extract_flat"] == "in_playlist"

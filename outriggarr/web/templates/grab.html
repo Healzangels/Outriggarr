@@ -144,6 +144,8 @@ function grabApp() {
       let n = this.bulk.start;
       const rows = this.bulk.reverse ? [...this.rows].reverse() : this.rows;
       rows.forEach(r => { if (r.include) { r.season = this.bulk.season; r.number = n++; } });
+      // episodes that already have a file are not worth a download: untick them
+      rows.forEach(r => { const e = this.episodeFor(r); if (e && e.has_file) r.include = false; });
     },
     episodeFor(row) {
       if (row.season == null || row.number == null) return null;
@@ -154,7 +156,7 @@ function grabApp() {
       try { row.movieResults = await this.api('GET', `/api/connections/${this.connectionId}/movies?q=${encodeURIComponent(row.movieQuery)}`); }
       catch (e) { this.error = e.message; }
     },
-    pickMovie(row, m) { row.movieId = m.id; row.movieLabel = m.title + (m.year ? ` (${m.year})` : ''); row.movieQuery = row.movieLabel; row.movieResults = []; row.movieHasFile = m.has_file; },
+    pickMovie(row, m) { row.movieId = m.id; row.movieLabel = m.title + (m.year ? ` (${m.year})` : ''); row.movieQuery = row.movieLabel; row.movieResults = []; row.movieHasFile = m.has_file; if (m.has_file) row.include = false; },
     rowStatus(row) {
       if (!row.include) return { text: 'skipped', warn: false };
       if (this.kind === 'sonarr') {
@@ -177,8 +179,8 @@ function grabApp() {
       this.queueing = true; this.result = ''; this.error = '';
       const jobs = this.rows.filter(r => this.isReady(r)).map(r => {
         const target = this.kind === 'sonarr'
-          ? (() => { const e = this.episodeFor(r); return { kind: 'episode', series_id: this.series.id, episode_ids: [e.id], label: `${this.series.title} S${String(r.season).padStart(2, '0')}E${String(r.number).padStart(2, '0')}${e.title ? ' - ' + e.title : ''}` }; })()
-          : { kind: 'movie', movie_id: r.movieId, label: r.movieLabel };
+          ? (() => { const e = this.episodeFor(r); return { kind: 'episode', series_id: this.series.id, episode_ids: [e.id], label: `${this.series.title} S${String(r.season).padStart(2, '0')}E${String(r.number).padStart(2, '0')}${e.title ? ' - ' + e.title : ''}`.slice(0, 300) }; })()
+          : { kind: 'movie', movie_id: r.movieId, label: (r.movieLabel || '').slice(0, 300) };
         return { connection_id: this.connectionId, target, video: { url: r.video.url, id: r.video.id, title: r.video.title } };
       });
       try {

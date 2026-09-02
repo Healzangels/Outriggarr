@@ -48,7 +48,8 @@ class AppriseNotifier:
             return False
         client = apprise.Apprise()
         for u in urls:
-            client.add(u)
+            if not client.add(u):
+                log.warning("apprise rejected a configured URL (%s://…)", u.split("://", 1)[0])
         try:
             ok = bool(client.notify(title=title, body=body))
         except Exception as exc:  # apprise plugins raise all sorts; never let it out

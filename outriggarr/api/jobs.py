@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query, status
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -41,6 +41,14 @@ class VideoIn(BaseModel):
     url: str = Field(min_length=1, max_length=1000)
     id: str = Field(min_length=1, max_length=100)
     title: str = Field(default="", max_length=500)
+
+    @field_validator("url")
+    @classmethod
+    def _http_only(cls, v: str) -> str:
+        v = v.strip()
+        if not (v.startswith("http://") or v.startswith("https://")):
+            raise ValueError("video url must start with http:// or https://")
+        return v
 
 
 class JobIn(BaseModel):

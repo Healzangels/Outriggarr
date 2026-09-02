@@ -19,7 +19,7 @@
     </div>
     <div class="grid">
       <label>URL<input name="url" value="{{ c.url }}" required placeholder="http://sonarr:8989"></label>
-      <label>API key <span class="hint">Blank keeps the stored key.</span><input name="api_key" type="password" autocomplete="off" placeholder="••••••••"></label>
+      <label>API key <span class="hint">Blank keeps the stored key.</span><input name="api_key" type="password" autocomplete="new-password" placeholder="••••••••"></label>
     </div>
     <label>Staging path as this *arr sees it <span class="hint">The staging folder's path inside {{ c.name }}'s own container.</span><input name="staging_path_remote" value="{{ c.staging_path_remote }}" required></label>
     <label><input type="checkbox" name="enabled" value="1" {% if c.enabled %}checked{% endif %}> Enabled</label>
@@ -30,7 +30,7 @@
       <span id="test-{{ c.id }}"></span>
     </div>
   </form>
-  <form method="post" action="/settings/connections/{{ c.id }}/delete" onsubmit="return confirm('Delete connection {{ c.name }}?')">
+  <form method="post" action="/settings/connections/{{ c.id }}/delete" data-confirm="Delete connection {{ c.name }}?" onsubmit="return confirm(this.dataset.confirm)">
     <div class="form-actions"><button type="submit" class="secondary outline">Delete</button></div>
   </form>
 </article>
@@ -45,7 +45,7 @@
     </div>
     <div class="grid">
       <label>URL<input name="url" required placeholder="http://sonarr:8989"></label>
-      <label>API key<input name="api_key" type="password" autocomplete="off" required></label>
+      <label>API key<input name="api_key" type="password" autocomplete="new-password" required></label>
     </div>
     <label>Staging path as this *arr sees it<input name="staging_path_remote" required placeholder="/data/outriggarr"></label>
     <input type="hidden" name="enabled" value="1">

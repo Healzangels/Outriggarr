@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Form, Query, Request
+from fastapi import APIRouter, Form, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
@@ -113,9 +113,13 @@ def _jobs(session: DbSession, view: str) -> list[Job]:
     return list(session.scalars(q.limit(200)))
 
 
-def _rows(request: Request, session: DbSession, view: str) -> HTMLResponse:
+def _rows(
+    request: Request, session: DbSession, view: str, notice: str | None = None
+) -> HTMLResponse:
     return templates.TemplateResponse(
-        request, "partials/jobs_table.html", {"jobs": _jobs(session, view), "view": view}
+        request,
+        "partials/jobs_table.html",
+        {"jobs": _jobs(session, view), "view": view, "notice": notice},
     )
 
 
@@ -160,7 +164,10 @@ def activity_rows(
 def activity_retry(
     request: Request, job_id: int, session: DbSession, view: Annotated[str, Query()] = "all"
 ) -> HTMLResponse:
-    retry_job(session, job_id)
+    try:
+        retry_job(session, job_id)
+    except HTTPException as exc:
+        return _rows(request, session, view, notice=str(exc.detail))
     return _rows(request, session, view)
 
 
@@ -168,7 +175,10 @@ def activity_retry(
 def activity_cancel(
     request: Request, job_id: int, session: DbSession, view: Annotated[str, Query()] = "all"
 ) -> HTMLResponse:
-    cancel_job(session, job_id)
+    try:
+        cancel_job(session, job_id)
+    except HTTPException as exc:
+        return _rows(request, session, view, notice=str(exc.detail))
     return _rows(request, session, view)
 
 
@@ -284,7 +294,7 @@ def _form_to_body(
         series_id=series_id,
         source_url=source_url,
         format=format,
-        strategies=strategies,
+        strategies=strategies or [],
         date_tolerance_days=date_tolerance_days,
         date_offset_days=date_offset_days,
         title_regex=title_regex,
@@ -493,9 +503,13 @@ async def subscription_add_override(
 async def subscription_delete_override(
     request: Request, subscription_id: int, video_id: str, session: DbSession, deps: RunnerDepsDep
 ) -> HTMLResponse:
-    delete_override(session, subscription_id, video_id)
+    try:
+        delete_override(session, subscription_id, video_id)
+        notice = f"Override removed for {video_id}."
+    except HTTPException as exc:
+        notice = str(exc.detail)
     report = await run_scan(deps, subscription_id, dry_run=True)
-    return _preview_response(request, session, report, f"Override removed for {video_id}.")
+    return _preview_response(request, session, report, notice)
 
 
 @router.post("/subscriptions/{subscription_id}/edit")
@@ -584,6 +598,7 @@ async def settings_downloads_post(request: Request, session: DbSession) -> HTMLR
     try:
         update_settings(session, changes)
     except Exception as exc:
+        session.rollback()
         detail = getattr(exc, "detail", None) or str(exc)
         return templates.TemplateResponse(
             request,
@@ -627,6 +642,7 @@ async def settings_connection_create(request: Request, session: DbSession) -> HT
     try:
         create_connection(_connection_body(data), session)
     except Exception as exc:
+        session.rollback()
         detail = getattr(exc, "detail", None) or str(exc)
         return templates.TemplateResponse(
             request,
@@ -648,6 +664,7 @@ async def settings_connection_update(
             data["api_key"] = conn.api_key  # blank field keeps the stored key
         update_connection(connection_id, _connection_body(data), session)
     except Exception as exc:
+        session.rollback()
         detail = getattr(exc, "detail", None) or str(exc)
         return templates.TemplateResponse(
             request,
@@ -663,6 +680,7 @@ def settings_connection_delete(request: Request, connection_id: int, session: Db
     try:
         delete_connection(connection_id, session)
     except Exception as exc:
+        session.rollback()
         detail = getattr(exc, "detail", None) or str(exc)
         return templates.TemplateResponse(
             request,

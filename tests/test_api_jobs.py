@@ -179,3 +179,10 @@ def test_done_job_does_not_block_a_new_one_but_live_does(client: TestClient) -> 
     assert r.status_code == 201, "a done job is history; the same video can be grabbed again"
     assert r.json()[0]["id"] != first["id"]
     assert len(client.get("/api/jobs").json()) == 2
+
+
+def test_video_url_must_be_http(client: TestClient) -> None:
+    conn_id = client.post("/api/connections", json=SONARR).json()["id"]
+    bad = episode_job(conn_id)
+    bad["video"]["url"] = "javascript:alert(1)"
+    assert client.post("/api/jobs", json=[bad]).status_code == 422

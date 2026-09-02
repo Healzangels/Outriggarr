@@ -3,10 +3,12 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import func, select
+from sqlalchemy.orm import Session
 
 from outriggarr.api.deps import ArrFactoryDep, DbSession
+from outriggarr.api.library import library_cache
 from outriggarr.arr.base import ArrError
-from outriggarr.db.models import Connection, ConnectionKind, Job
+from outriggarr.db.models import Connection, ConnectionKind, Job, Subscription
 from outriggarr.settings import get_setting
 
 router = APIRouter(prefix="/api/connections", tags=["connections"])
@@ -19,6 +21,14 @@ class ConnectionIn(BaseModel):
     api_key: str = Field(min_length=1, max_length=200)
     staging_path_remote: str = Field(min_length=1, max_length=500)
     enabled: bool = True
+
+    @field_validator("api_key")
+    @classmethod
+    def _key(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("api_key must not be blank")
+        return v
 
     @field_validator("url")
     @classmethod
@@ -76,26 +86,46 @@ def get_connection(connection_id: int, session: DbSession) -> Connection:
     return _get_or_404(session, connection_id)
 
 
+def _references(session: Session, connection_id: int) -> tuple[int, int]:
+    """(subscriptions, jobs) that point at this connection."""
+    subs = (
+        session.scalar(select(func.count()).where(Subscription.connection_id == connection_id)) or 0
+    )
+    jobs = session.scalar(select(func.count()).where(Job.connection_id == connection_id)) or 0
+    return subs, jobs
+
+
 @router.put("/{connection_id}", response_model=ConnectionOut)
 def update_connection(connection_id: int, body: ConnectionIn, session: DbSession) -> Connection:
     conn = _get_or_404(session, connection_id)
+    if body.kind is not conn.kind:
+        subs, jobs = _references(session, connection_id)
+        if subs or jobs:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"connection {connection_id} is {conn.kind.value} and has {subs} "
+                f"subscription(s) and {jobs} job(s); its kind cannot change",
+            )
     for k, v in body.model_dump().items():
         setattr(conn, k, v)
     session.commit()
+    library_cache.clear()  # a changed URL/key must not serve the old instance's listing
     return conn
 
 
 @router.delete("/{connection_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_connection(connection_id: int, session: DbSession) -> None:
     conn = _get_or_404(session, connection_id)
-    n_jobs = session.scalar(select(func.count()).where(Job.connection_id == connection_id)) or 0
-    if n_jobs:
+    subs, jobs = _references(session, connection_id)
+    if subs or jobs:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
-            f"connection {connection_id} has {n_jobs} job(s); delete them first",
+            f"connection {connection_id} has {subs} subscription(s) and {jobs} job(s); "
+            "delete those first",
         )
     session.delete(conn)
     session.commit()
+    library_cache.clear()
 
 
 @router.post("/{connection_id}/test", response_model=ConnectionTestResult)

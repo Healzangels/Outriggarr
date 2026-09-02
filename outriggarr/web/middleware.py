@@ -1,0 +1,45 @@
+"""Cross-site request guard for a no-auth LAN app.
+
+Browsers send form posts cross-site without preflight, so a page on any site the
+operator visits could otherwise re-point a connection at an attacker's host (the
+blank-keeps-key form then leaks the *arr key) or rewrite yt-dlp options. Modern
+browsers label such requests with `Sec-Fetch-Site: cross-site`; older ones at least
+send an `Origin`/`Referer` that does not match `Host`. Same-origin browser requests
+and non-browser clients (curl, scripts: no Origin, no Sec-Fetch-Site) pass.
+"""
+
+from __future__ import annotations
+
+from urllib.parse import urlsplit
+
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
+
+UNSAFE = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+def cross_site(request: Request) -> str | None:
+    """Reason the request is cross-site, or None when it is allowed."""
+    if request.method not in UNSAFE:
+        return None
+    fetch_site = request.headers.get("sec-fetch-site", "").lower()
+    if fetch_site == "cross-site":
+        return "Sec-Fetch-Site: cross-site"
+    host = request.headers.get("host", "")
+    for header in ("origin", "referer"):
+        value = request.headers.get(header)
+        if not value or value == "null":
+            continue
+        other = urlsplit(value).netloc
+        if other and other.lower() != host.lower():
+            return f"{header.title()} {other} does not match Host {host}"
+    return None
+
+
+class SameOriginGuard(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next) -> Response:
+        reason = cross_site(request)
+        if reason is not None:
+            return JSONResponse({"detail": f"cross-site request refused ({reason})"}, 403)
+        return await call_next(request)

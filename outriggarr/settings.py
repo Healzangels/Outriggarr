@@ -77,6 +77,34 @@ def apprise_urls(session: Session) -> list[str]:
 
 MERGE_CONTAINERS = ("mkv", "mp4", "webm")
 
+# yt-dlp options the app owns; the operator passthrough may not set them (it would
+# redirect output outside staging, drop our progress/abort hooks, or run arbitrary
+# post-processors such as `Exec`).
+RESERVED_YTDLP_KEYS = frozenset(
+    {
+        "outtmpl",
+        "paths",
+        "postprocessors",
+        "progress_hooks",
+        "postprocessor_hooks",
+        "logger",
+        "format",
+        "merge_output_format",
+        "writesubtitles",
+        "writeautomaticsub",
+        "subtitleslangs",
+        "subtitlesformat",
+        "exec_cmd",
+        "external_downloader",
+        "external_downloader_args",
+        "ffmpeg_location",
+        "noplaylist",
+        "extract_flat",
+        "skip_download",
+        "playlistend",
+    }
+)
+
 
 def validate_setting(key: str, value: str) -> str:
     """Normalise and validate one setting value; raises ValueError with a plain message."""
@@ -111,6 +139,11 @@ def validate_setting(key: str, value: str) -> str:
             raise ValueError(f"ytdlp_extra_opts is not valid JSON: {exc.msg}") from None
         if not isinstance(parsed, dict):
             raise ValueError("ytdlp_extra_opts must be a JSON object")
+        reserved = sorted(k for k in parsed if k in RESERVED_YTDLP_KEYS)
+        if reserved:
+            raise ValueError(
+                f"ytdlp_extra_opts may not set {reserved}: Outriggarr owns those options"
+            )
         return json.dumps(parsed)
     if key == "apprise_urls":
         from outriggarr.notify import validate_apprise_urls

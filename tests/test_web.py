@@ -75,8 +75,12 @@ def test_activity_retry_and_cancel_return_rows(client: TestClient) -> None:
     assert "Retry" in r.text and "Cancel</button>" not in r.text
     r = client.post(f"/activity/jobs/{job_id}/retry?view=all")
     assert r.status_code == 200 and "status-queued" in r.text
-    assert client.post(f"/activity/jobs/{job_id}/retry").status_code == 409
-    assert client.post("/activity/jobs/999/cancel").status_code == 404
+    r = client.post(
+        f"/activity/jobs/{job_id}/retry"
+    )  # queued: not retryable → notice, no silent 409
+    assert r.status_code == 200 and "only failed or cancelled" in r.text
+    r = client.post("/activity/jobs/999/cancel")
+    assert r.status_code == 200 and "not found" in r.text
 
 
 def test_grab_page_lists_enabled_connections(client: TestClient) -> None:
@@ -432,3 +436,52 @@ def test_settings_notifications_form_and_test_button(client: TestClient, notifie
     assert notifier.sent[-1][0] == "Outriggarr: test"
     r = client.post("/settings/downloads", data={"apprise_urls": "nope://x", "_notify_form": "1"})
     assert r.status_code == 400 and "did not accept" in r.text
+
+
+def test_subscribe_form_with_no_strategies_is_pins_only(client: TestClient) -> None:
+    _seed_series(client)
+    r = client.post(
+        "/series/5/subscribe",
+        data={"source_url": "https://www.youtube.com/@hotones"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert client.get("/api/subscriptions").json()[0]["strategies"] == []
+
+
+def test_activity_stale_retry_shows_a_notice_not_a_silent_409(client: TestClient) -> None:
+    conn_id = client.post("/api/connections", json=SONARR).json()["id"]
+    job_id = _job(client, conn_id)
+    r = client.post(f"/activity/jobs/{job_id}/retry?view=all")  # queued → not retryable
+    assert r.status_code == 200 and "only failed or cancelled" in r.text
+    r = client.post("/activity/jobs/999/cancel?view=all")
+    assert r.status_code == 200 and "not found" in r.text
+
+
+def test_error_details_survive_polling_and_confirm_strings_are_data_attrs(
+    client: TestClient,
+) -> None:
+    conn_id = client.post("/api/connections", json={**SONARR, "name": "x'); alert(1); ('"}).json()[
+        "id"
+    ]
+    job_id = _job(client, conn_id)
+    with client.app.state.session_factory() as s:
+        job = s.get(Job, job_id)
+        job.status = JobStatus.failed
+        job.error = "boom"
+        s.commit()
+    rows = client.get("/activity/rows?view=failed").text
+    assert f'id="err-{job_id}" hx-preserve' in rows
+    page = client.get("/settings").text
+    assert 'onsubmit="return confirm(this.dataset.confirm)"' in page
+    assert "return confirm('" not in page, "no user text inside an inline JS string"
+    assert 'data-confirm="Delete connection x&#39;); alert(1); (&#39;?"' in page
+    assert 'autocomplete="new-password"' in page and 'autocomplete="off"' not in page
+
+
+def test_grab_excludes_rows_that_already_have_a_file_after_fill(client: TestClient) -> None:
+    client.post("/api/connections", json=SONARR)
+    page = client.get("/grab").text
+    assert "if (e && e.has_file) r.include = false" in page
+    assert "if (m.has_file) row.include = false" in page
+    assert ".slice(0, 300)" in page

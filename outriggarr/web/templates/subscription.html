@@ -44,7 +44,7 @@
     <label><input type="checkbox" name="enabled" value="1" {% if sub.enabled %}checked{% endif %}> Enabled <span class="muted">(scanned on the schedule)</span></label>
     <div class="form-actions"><button type="submit">Save</button></div>
   </form>
-  <form method="post" action="/subscriptions/{{ sub.id }}/delete" onsubmit="return confirm('Delete this subscription? Jobs are kept.')">
+  <form method="post" action="/subscriptions/{{ sub.id }}/delete" data-confirm="Delete this subscription? Jobs are kept." onsubmit="return confirm(this.dataset.confirm)">
     <div class="form-actions"><button type="submit" class="secondary outline">Delete subscription</button></div>
   </form>
   </article>

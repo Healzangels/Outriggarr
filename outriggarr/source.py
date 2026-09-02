@@ -129,7 +129,10 @@ class YtDlpSource:
         self._extra = extra_opts or (lambda: {})
 
     def _opts(self, base: dict[str, Any]) -> dict[str, Any]:
-        return {**base, **self._extra(), "logger": _YtDlpLogger()}
+        from outriggarr.settings import RESERVED_YTDLP_KEYS
+
+        extra = {k: v for k, v in self._extra().items() if k not in RESERVED_YTDLP_KEYS}
+        return {**base, **extra, "logger": _YtDlpLogger()}  # operator wins, except reserved
 
     def _extract(self, url: str, opts: dict[str, Any]) -> dict[str, Any]:
         import yt_dlp

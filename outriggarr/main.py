@@ -27,6 +27,7 @@ from outriggarr.db.session import make_engine, make_session_factory, run_migrati
 from outriggarr.notify import AppriseNotifier, Notifier
 from outriggarr.settings import Settings, apprise_urls, ytdlp_options
 from outriggarr.source import VideoSource, YtDlpSource
+from outriggarr.web.middleware import SameOriginGuard
 from outriggarr.web.pages import STATIC_DIR
 from outriggarr.web.pages import router as pages_router
 from outriggarr.worker.runner import RunnerDeps, run_worker
@@ -105,6 +106,7 @@ def create_app(
             engine.dispose()
 
     app = FastAPI(title="Outriggarr", version=__version__, lifespan=lifespan)
+    app.add_middleware(SameOriginGuard)
     app.include_router(health_router)
     app.include_router(connections_router)
     app.include_router(jobs_router)

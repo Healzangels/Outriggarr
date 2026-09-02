@@ -155,3 +155,46 @@ def test_test_warns_when_arr_will_not_import_srt(client: TestClient, arr: FakeAr
     body = client.post(f"/api/connections/{conn_id}/test").json()
     assert body["warning"] is None
     assert ("extra_files_config", None) not in fake.calls[-2:]
+
+
+def test_api_key_is_stripped_and_blank_refused(client: TestClient) -> None:
+    r = client.post("/api/connections", json={**SONARR, "api_key": "  k1  "})
+    assert r.status_code == 201 and r.json()["api_key"] == "k1"
+    assert (
+        client.post(
+            "/api/connections", json={**SONARR, "url": "http://x:1", "api_key": "   "}
+        ).status_code
+        == 422
+    )
+
+
+def test_kind_change_and_delete_refused_while_subscriptions_reference(
+    client: TestClient, arr: FakeArrFactory
+) -> None:
+    from outriggarr.arr.base import SeriesRef
+
+    conn_id = client.post("/api/connections", json=SONARR).json()["id"]
+    arr.by_url["http://sonarr-host:1234"] = FakeArrClient(
+        series_list=[SeriesRef(5, "Show", None, None, True)]
+    )
+    assert (
+        client.post(
+            "/api/subscriptions",
+            json={
+                "connection_id": conn_id,
+                "series_id": 5,
+                "source_url": "https://www.youtube.com/@x",
+            },
+        ).status_code
+        == 201
+    )
+    r = client.put(f"/api/connections/{conn_id}", json={**SONARR, "kind": "radarr"})
+    assert r.status_code == 409 and "kind cannot change" in r.json()["detail"]
+    r = client.put(f"/api/connections/{conn_id}", json={**SONARR, "name": "Renamed"})
+    assert r.status_code == 200
+    r = client.delete(f"/api/connections/{conn_id}")
+    assert r.status_code == 409 and "1 subscription(s)" in r.json()["detail"]
+    # the web route reports it too, without a 500
+    r = client.post(f"/settings/connections/{conn_id}/delete")
+    assert r.status_code == 400 and "subscription(s)" in r.text
+    assert client.get("/settings").status_code == 200
