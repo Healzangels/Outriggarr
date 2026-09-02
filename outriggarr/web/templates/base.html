@@ -35,6 +35,13 @@
       document.addEventListener('htmx:afterSwap', (e) => arm(e.detail && e.detail.target ? e.detail.target : e.target));
       document.addEventListener('DOMContentLoaded', () => arm(document));
     })();
+    // A section toggled with the mouse keeps the browser's focus ring (and Pico's focused
+    // colour) until something else is clicked, so a closed section looks selected. Drop
+    // focus after a mouse toggle; a keyboard toggle (detail 0) keeps its ring.
+    document.addEventListener('click', (e) => {
+      const summary = e.target.closest && e.target.closest('summary');
+      if (summary && e.detail > 0) summary.blur();
+    });
   </script>
   <script defer src="{{ static('alpine.min.js') }}"></script>
 </head>

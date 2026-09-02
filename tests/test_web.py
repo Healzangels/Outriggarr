@@ -1168,7 +1168,11 @@ def test_missing_episode_with_a_stale_job_offers_a_clear_button(client: TestClie
     r = client.post(f"/subscriptions/{sub_id}/episodes/jobs/{stale}/clear")
     assert r.status_code == 200 and f"Cleared job #{stale}." in r.text
     assert 'class="notice" role="status"' in r.text, "an action notice: the page fades it out"
-    assert "htmx:afterSwap" in client.get(f"/subscriptions/{sub_id}").text
+    page = client.get(f"/subscriptions/{sub_id}").text
+    assert "htmx:afterSwap" in page
+    assert "closest('summary')" in page and "summary.blur()" in page, (
+        "mouse-toggled sections drop focus"
+    )
     assert "x-clear" not in r.text
     assert client.get(f"/api/jobs/{stale}").status_code == 404
     r = client.post(f"/subscriptions/{sub_id}/episodes/jobs/{live}/clear")
