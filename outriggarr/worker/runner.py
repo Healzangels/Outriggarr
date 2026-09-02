@@ -491,10 +491,13 @@ async def _download_stage(
 
     if result.subtitles:
         log.info("job %d: %d subtitle sidecar(s) staged", job.id, len(result.subtitles))
-    language = get_setting(session, "audio_language")
+    language, origin = audio_language_for(
+        job, result.audio_language, get_setting(session, "audio_language")
+    )
     if language:
         try:
             await asyncio.to_thread(deps.source.tag_audio_language, staged, language)
+            log.info("job %d: audio tagged %s (%s)", job.id, language, origin)
         except SourceError as exc:
             # The file is still importable; keep the note on the job rather than fail it.
             log.warning("job %d: audio language tag failed: %s", job.id, exc)
@@ -606,6 +609,18 @@ async def _wait_for_command(
             # the *arr may still be moving a large file: try again later, do not fail
             raise _Retry(f"ManualImport command {command_id} still {status.status} after timeout")
         await deps.sleep(deps.command_poll_seconds)
+
+
+def audio_language_for(job: Job, detected: str | None, default: str) -> tuple[str | None, str]:
+    """Which language to stamp on the audio: the subscription's own setting is the
+    operator's word and wins; otherwise what the source declared (YouTube sets it per
+    audio track, so anime stays Japanese); otherwise the global default; blank = none."""
+    sub = job.subscription
+    if sub is not None and sub.audio_language:
+        return sub.audio_language, "subscription setting"
+    if detected:
+        return detected, "declared by the source"
+    return (default or None), "global default"
 
 
 def _fail(session: Session, job: Job, message: str, *, retry: bool, now: datetime) -> bool:

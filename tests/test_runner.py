@@ -1146,3 +1146,39 @@ async def test_second_worker_stays_idle_when_locked(deps, session_factory, tmp_p
     stop.set()
     await asyncio.wait_for(task, 2)
     holder.close()
+
+
+async def test_audio_language_precedence_subscription_then_source_then_default(
+    deps, session_factory
+) -> None:
+    from outriggarr.db.models import Subscription
+
+    conn_id = add_connection(session_factory)
+    # the source declares Japanese: tagged jpn, not the global default
+    deps.source.audio_language = "jpn"
+    job1 = add_job(session_factory, conn_id, video_id="v1", episode_id=101)
+    await process_job(deps, job1)
+    assert deps.source.tagged[-1][1] == "jpn"
+    # a subscription's own setting is the operator's word and beats what the source says
+    job2 = add_job(session_factory, conn_id, video_id="v2", episode_id=102)
+    with session_factory() as s:
+        sub = Subscription(
+            connection_id=conn_id,
+            series_id=5,
+            title="Anime",
+            sources=["https://x"],
+            strategies=["title"],
+            audio_language="kor",
+        )
+        s.add(sub)
+        s.flush()
+        s.get(Job, job2).subscription_id = sub.id
+        s.commit()
+    await process_job(deps, job2)
+    assert deps.source.tagged[-1][1] == "kor"
+    # nothing declared and no override: the global default, as before
+    deps.source.audio_language = None
+    job3 = add_job(session_factory, conn_id, video_id="v3", episode_id=103)
+    await process_job(deps, job3)
+    assert deps.source.tagged[-1][1] == "eng"
+    assert [t[1] for t in deps.source.tagged] == ["jpn", "kor", "eng"]

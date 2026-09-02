@@ -37,11 +37,22 @@ class SubscriptionIn(BaseModel):
     source_url: str | None = Field(default=None, exclude=True)
     format: str | None = Field(default=None, max_length=500)
     video_limit: int | None = Field(default=None, ge=1, le=MAX_VIDEO_LIMIT)
+    audio_language: str | None = None  # ISO 639-2; None → source-declared, then global
     strategies: list[str] = Field(default_factory=lambda: ["title"])
     date_tolerance_days: int = Field(default=2, ge=0, le=60)
     date_offset_days: int = Field(default=0, ge=-60, le=60)
     title_regex: str | None = Field(default=None, max_length=500)
     enabled: bool = True
+
+    @field_validator("audio_language")
+    @classmethod
+    def _audio_language(cls, v: str | None) -> str | None:
+        v = (v or "").strip().lower()
+        if not v:
+            return None
+        if not (len(v) == 3 and v.isalpha()):
+            raise ValueError("audio_language must be a 3-letter ISO 639-2 code (e.g. jpn) or blank")
+        return v
 
     @model_validator(mode="after")
     def _sources(self) -> SubscriptionIn:

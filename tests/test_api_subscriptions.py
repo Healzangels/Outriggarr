@@ -277,3 +277,14 @@ def test_sources_list_dedupes_validates_and_accepts_legacy_source_url(client, ar
         },
     )
     assert r.status_code == 201 and r.json()["sources"] == ["https://www.youtube.com/@legacy"]
+
+
+def test_audio_language_override_round_trip_and_validation(client, arr, source) -> None:
+    conn_id = seed(client, arr, source)
+    r = client.post("/api/subscriptions", json=body(conn_id, audio_language=" JPN "))
+    assert r.status_code == 201 and r.json()["audio_language"] == "jpn"
+    sid = r.json()["id"]
+    r = client.put(f"/api/subscriptions/{sid}", json=body(conn_id, audio_language="japanese"))
+    assert r.status_code == 422
+    r = client.put(f"/api/subscriptions/{sid}", json=body(conn_id, audio_language=""))
+    assert r.status_code == 200 and r.json()["audio_language"] is None

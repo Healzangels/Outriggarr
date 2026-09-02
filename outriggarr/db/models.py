@@ -117,6 +117,9 @@ class Subscription(Base):
     # Newest videos listed per scan; None → the global scan_video_limit. A channel whose
     # episodes sit behind hundreds of newer uploads needs a deeper listing than the rest.
     video_limit: Mapped[int | None] = mapped_column(Integer)
+    # ISO 639-2 audio tag for this series; None → what the source declares, then the
+    # global default. The operator's word for channels that declare nothing or lie.
+    audio_language: Mapped[str | None] = mapped_column(String(3))
     # Which optional strategies run, in the matcher's fixed order. Override always runs.
     strategies: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     date_tolerance_days: Mapped[int] = mapped_column(Integer, nullable=False, default=2)

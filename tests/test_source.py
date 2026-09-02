@@ -650,3 +650,42 @@ def test_archive_item_and_other_hosts_go_through_ytdlp(monkeypatch) -> None:
 
     with pytest.raises(SourceError, match="archive.org"):
         YtDlpSource(http_get=failing).list_recent("https://archive.org/details/scam_school", 50)
+
+
+@pytest.mark.parametrize(
+    ("tag", "code"),
+    [
+        ("ja", "jpn"),
+        ("ja-JP", "jpn"),
+        ("en-US", "eng"),
+        ("zh-Hans", "chi"),
+        ("ko", "kor"),
+        ("jpn", "jpn"),
+        ("und", None),
+        ("zxx", None),
+        ("xx", None),
+        ("", None),
+        (None, None),
+    ],
+)
+def test_iso639_2_mapping(tag, code) -> None:
+    from outriggarr.source import iso639_2
+
+    assert iso639_2(tag) == code
+
+
+def test_detected_audio_language_reads_the_chosen_audio_track() -> None:
+    from outriggarr.source import detected_audio_language
+
+    merged = {
+        "language": "en",  # the video's page language is not the audio track's
+        "requested_formats": [
+            {"format_id": "137", "vcodec": "avc1", "acodec": "none", "language": None},
+            {"format_id": "140-1", "vcodec": "none", "acodec": "mp4a", "language": "ja"},
+        ],
+    }
+    assert detected_audio_language(merged) == "jpn"
+    single = {"language": "ko", "requested_downloads": [{"language": "ko-KR"}]}
+    assert detected_audio_language(single) == "kor"
+    assert detected_audio_language({"language": "und"}) is None
+    assert detected_audio_language({}) is None

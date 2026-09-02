@@ -507,12 +507,14 @@ def _form_to_body(
     title_regex: str,
     enabled: bool,
     video_limit: str = "",
+    audio_language: str = "",
 ) -> SubscriptionIn:
     video_limit = video_limit.strip()
     if video_limit and not video_limit.isdigit():
         raise ValueError("Videos to list must be a whole number, or blank for the global setting")
     return SubscriptionIn(
         video_limit=int(video_limit) if video_limit else None,
+        audio_language=audio_language,
         connection_id=connection_id,
         series_id=series_id,
         sources=sources.splitlines(),
@@ -538,6 +540,7 @@ async def subscribe_submit(
     date_offset_days: Annotated[int, Form()] = 0,
     title_regex: Annotated[str, Form()] = "",
     video_limit: Annotated[str, Form()] = "",
+    audio_language: Annotated[str, Form()] = "",
 ) -> HTMLResponse:
     conn = _sonarr(session)
     if conn is None:
@@ -554,6 +557,7 @@ async def subscribe_submit(
             title_regex,
             True,
             video_limit,
+            audio_language,
         )
         sub = await create_subscription(session, arr_factory, body)
     except Exception as exc:  # validation / 409 / 502: show it on the form
@@ -758,6 +762,7 @@ async def subscription_edit(
     title_regex: Annotated[str, Form()] = "",
     enabled: Annotated[str | None, Form()] = None,
     video_limit: Annotated[str, Form()] = "",
+    audio_language: Annotated[str, Form()] = "",
 ) -> HTMLResponse:
     sub = session.get(Subscription, subscription_id)
     if sub is None:
@@ -774,6 +779,7 @@ async def subscription_edit(
             title_regex,
             enabled is not None,
             video_limit,
+            audio_language,
         )
         await update_subscription(session, arr_factory, subscription_id, body)
     except Exception as exc:

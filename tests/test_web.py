@@ -956,3 +956,34 @@ def test_source_hint_is_dropped_once_the_subscription_has_history(client: TestCl
     prev = client.get(f"/subscriptions/{sub_id}/preview").text
     assert "S30E06" in prev and "no candidate" in prev, "still unmatched with nothing seen"
     assert "This source may not carry these episodes" not in prev, "history alone drops the hint"
+
+
+def test_subscription_form_audio_language(client: TestClient) -> None:
+    _seed_series(client)
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={"connection_id": 1, "series_id": 5, "sources": ["https://www.youtube.com/@x"]},
+    ).json()["id"]
+    page = client.get(f"/subscriptions/{sub_id}").text
+    assert 'name="audio_language"' in page and "declared by the source" in page
+    base = {
+        "sources": "https://www.youtube.com/@x",
+        "strategies": ["title"],
+        "date_tolerance_days": "2",
+        "date_offset_days": "0",
+        "title_regex": "",
+        "format": "",
+    }
+    r = client.post(
+        f"/subscriptions/{sub_id}/edit",
+        data={**base, "audio_language": "jpn"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert client.get(f"/api/subscriptions/{sub_id}").json()["audio_language"] == "jpn"
+    r = client.post(
+        f"/subscriptions/{sub_id}/edit",
+        data={**base, "audio_language": "nope"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 400 and "3-letter" in r.text

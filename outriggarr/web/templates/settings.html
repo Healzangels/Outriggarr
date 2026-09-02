@@ -76,7 +76,7 @@
     <label>Auto-generated captions too<select name="subtitles_auto"><option value="0" {% if settings.subtitles_auto == "0" %}selected{% endif %}>no — only uploader captions</option><option value="1" {% if settings.subtitles_auto == "1" %}selected{% endif %}>yes — accept machine transcripts</option></select></label>
   </div>
   <div class="grid">
-    <label>Audio language tag <span class="hint">ISO 639-2; YouTube audio is untagged and shows as "Unknown" in Plex. Blank = leave.</span><input name="audio_language" value="{{ settings.audio_language }}" placeholder="eng"></label>
+    <label>Audio language tag <span class="hint">ISO 639-2, used when the source declares no language for the audio track and the subscription sets none; YouTube files carry no tag and show as "Unknown" in Plex. Blank = leave untagged.</span><input name="audio_language" value="{{ settings.audio_language }}" placeholder="eng"></label>
     <label>Sonarr tag for subscribed series <span class="hint">Blank = off.</span><input name="sonarr_tag" value="{{ settings.sonarr_tag }}" placeholder="outriggarr"></label>
   </div>
   <div class="form-actions"><button type="submit">Save downloads</button></div>

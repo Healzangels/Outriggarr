@@ -252,6 +252,7 @@ class FakeVideoSource:
     infos: dict[str, VideoRef] = field(default_factory=dict)  # url → full ref
     fetched: list[str] = field(default_factory=list)
     tagged: list[tuple[Path, str]] = field(default_factory=list)
+    audio_language: str | None = None  # what the fake "source" declares for its audio
     tag_error: Exception | None = None
 
     def tag_audio_language(self, path: Path, language: str) -> None:
@@ -325,6 +326,7 @@ class FakeVideoSource:
             title=self.title,
             video_id="vid123",
             subtitles=tuple(subs),
+            audio_language=self.audio_language,
         )
 
 

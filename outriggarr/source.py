@@ -47,6 +47,7 @@ class DownloadResult:
     title: str
     video_id: str
     subtitles: tuple[Path, ...] = ()  # .srt sidecars written next to `path`
+    audio_language: str | None = None  # ISO 639-2, as the source declared it; None = unknown
 
 
 ProgressCallback = Callable[[float], None]
@@ -556,6 +557,44 @@ def _ref(e: dict[str, Any], index: int | None) -> VideoRef:
     )
 
 
+# BCP-47 primary subtags → ISO 639-2 (the 3-letter codes ffmpeg writes and Plex reads).
+ISO_639_2: dict[str, str] = {
+    "en": "eng", "ja": "jpn", "ko": "kor", "zh": "chi", "es": "spa", "fr": "fre", "de": "ger",
+    "it": "ita", "pt": "por", "ru": "rus", "ar": "ara", "hi": "hin", "nl": "dut", "sv": "swe",
+    "no": "nor", "nb": "nob", "da": "dan", "fi": "fin", "pl": "pol", "tr": "tur", "th": "tha",
+    "vi": "vie", "id": "ind", "ms": "may", "tl": "tgl", "cs": "cze", "el": "gre", "he": "heb",
+    "iw": "heb", "hu": "hun", "ro": "rum", "uk": "ukr", "fa": "per", "bn": "ben", "ta": "tam",
+    "te": "tel", "ur": "urd", "ca": "cat", "sk": "slo", "bg": "bul", "hr": "hrv", "sr": "srp",
+    "sl": "slv", "lt": "lit", "lv": "lav", "et": "est", "is": "ice", "ga": "gle", "cy": "wel",
+    "eu": "baq", "gl": "glg", "af": "afr", "sw": "swa", "ka": "geo", "hy": "arm", "mk": "mac",
+    "sq": "alb", "my": "bur", "km": "khm", "lo": "lao", "ne": "nep", "si": "sin", "mn": "mon",
+    "bo": "tib", "la": "lat", "yi": "yid",
+}  # fmt: skip
+_NO_LANGUAGE = frozenset({"und", "zxx", "mul", "mis"})  # "undetermined" is not a language
+
+
+def iso639_2(tag: str | None) -> str | None:
+    """'ja' / 'ja-JP' / 'jpn' → 'jpn'; anything unknown or undetermined → None."""
+    if not tag:
+        return None
+    primary = str(tag).strip().lower().replace("_", "-").split("-")[0]
+    if len(primary) == 3 and primary.isalpha():
+        return None if primary in _NO_LANGUAGE else primary
+    return ISO_639_2.get(primary)
+
+
+def detected_audio_language(info: dict[str, Any]) -> str | None:
+    """The language the source declares for the audio track yt-dlp chose (YouTube sets it
+    per audio track, and prefers the original track on dubbed videos), as ISO 639-2."""
+    for f in info.get("requested_formats") or []:  # merged video+audio: the audio one
+        if f.get("acodec") not in (None, "none") and f.get("language"):
+            return iso639_2(str(f["language"]))
+    for d in info.get("requested_downloads") or []:  # a single progressive format
+        if d.get("language"):
+            return iso639_2(str(d["language"]))
+    return iso639_2(info.get("language"))
+
+
 def _result_from_info(info: dict[str, Any], dest_dir: Path | None = None) -> DownloadResult:
     downloads = info.get("requested_downloads") or []
     filepath = downloads[0].get("filepath") if downloads else None
@@ -573,4 +612,5 @@ def _result_from_info(info: dict[str, Any], dest_dir: Path | None = None) -> Dow
         title=str(info.get("title") or ""),
         video_id=video_id,
         subtitles=subtitle_sidecars(dest_dir, video_id) if dest_dir and video_id else (),
+        audio_language=detected_audio_language(info),
     )
