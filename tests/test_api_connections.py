@@ -86,7 +86,11 @@ def test_test_ok(client: TestClient, arr: FakeArrFactory) -> None:
         "warning": None,
     }
     fake = arr.by_url["http://sonarr-host:1234"]
-    assert fake.calls == [("status", None), ("path_visible", "/staging")]
+    assert fake.calls == [
+        ("status", None),
+        ("path_visible", "/staging"),
+        ("extra_files_config", None),  # subtitles are on by default → srt check
+    ]
     assert arr.made[0].api_key == "k1"
 
 
