@@ -1,3 +1,4 @@
+{% if notice %}<p class="notice" role="status" aria-live="polite">{{ notice }}</p>{% endif %}
 {% if error %}<p class="notice bad">{{ error }}</p>
 {% elif not seasons %}<p class="muted">Sonarr lists no episodes for this series.</p>
 {% else %}
@@ -18,7 +19,7 @@
             {% elif r.state == "missing" %}<span class="warn">missing</span>
             {% elif r.state == "unaired" %}<span class="muted">unaired</span>
             {% else %}<span class="muted">unmonitored</span>{% endif %}</td>
-        <td>{% if r.job %}<a href="/activity">#{{ r.job.id }}</a> <span class="badge badge-{{ r.job.status.value }} status status-{{ r.job.status.value }}">{{ r.job.status.value }}</span>{% endif %}</td>
+        <td class="nowrap">{% if r.job %}<a href="/activity">#{{ r.job.id }}</a> <span class="badge badge-{{ r.job.status.value }} status status-{{ r.job.status.value }}">{{ r.job.status.value }}</span>{% if r.state == "missing" and r.job.status in DELETABLE and not (r.job.status.value == "failed" and r.job.next_retry_at) %} <form class="inline" hx-post="/subscriptions/{{ sub.id }}/episodes/jobs/{{ r.job.id }}/clear" hx-target="#episodes" hx-swap="innerHTML"><button type="submit" class="x-clear" title="This job is history: the file is gone from Sonarr. Clear it from Activity{% if r.job.status.value != 'done' %} and offer the episode again{% endif %}" aria-label="clear job {{ r.job.id }}">✕</button></form>{% endif %}{% endif %}</td>
       </tr>
     {% endfor %}
     </tbody>

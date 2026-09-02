@@ -1111,3 +1111,65 @@ def test_fetch_upload_dates_runs_in_the_background_and_caches(
         },
     )
     assert "Fetch upload dates" not in client.get(f"/subscriptions/{sub_id}/preview").text
+
+
+def test_missing_episode_with_a_stale_job_offers_a_clear_button(client: TestClient) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from outriggarr.arr.base import EpisodeRef, SeriesRef
+    from outriggarr.db.models import Job, JobStatus, TargetKind
+    from tests.fakes import FakeArrClient
+
+    now = datetime.now(UTC)
+    aired = now - timedelta(days=3)
+    client.app.state.arr_factory.by_url["http://sonarr-host:1234"] = FakeArrClient(
+        series_list=[SeriesRef(5, "Show", 2015, 1, True)],
+        episodes_by_series={
+            5: [
+                EpisodeRef(11, 30, 6, "Six", False, True, aired),  # file deleted after import
+                EpisodeRef(12, 30, 7, "Seven", False, True, aired),  # a live job: no ✕
+                EpisodeRef(13, 30, 8, "Eight", True, True, aired),  # has a file: no ✕
+            ]
+        },
+    )
+    client.post("/api/connections", json=SONARR)
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={"connection_id": 1, "series_id": 5, "sources": ["https://www.youtube.com/@x"]},
+    ).json()["id"]
+    with client.app.state.session_factory() as s:
+        for eid, vid, st in (
+            (11, "a", JobStatus.done),
+            (12, "b", JobStatus.queued),
+            (13, "c", JobStatus.done),
+        ):
+            s.add(
+                Job(
+                    connection_id=1,
+                    subscription_id=sub_id,
+                    target_kind=TargetKind.episode,
+                    series_id=5,
+                    episode_ids=[eid],
+                    target_key=f"episode:5:{eid}",
+                    video_id=vid,
+                    video_url=f"https://y/{vid}",
+                    video_title="t",
+                    target_label=f"Show S30E0{eid - 5}",
+                    status=st,
+                )
+            )
+        s.commit()
+        stale = s.query(Job).filter_by(video_id="a").one().id
+        live = s.query(Job).filter_by(video_id="b").one().id
+    panel = client.get(f"/subscriptions/{sub_id}/episodes").text
+    assert f'aria-label="clear job {stale}"' in panel, "missing + done job: clearable"
+    assert f'aria-label="clear job {live}"' not in panel, "a live job is not history"
+    assert panel.count("x-clear") == 1
+    r = client.post(f"/subscriptions/{sub_id}/episodes/jobs/{stale}/clear")
+    assert r.status_code == 200 and f"Cleared job #{stale}." in r.text
+    assert "x-clear" not in r.text
+    assert client.get(f"/api/jobs/{stale}").status_code == 404
+    r = client.post(f"/subscriptions/{sub_id}/episodes/jobs/{live}/clear")
+    assert (
+        f"Job #{live} not cleared" in r.text and client.get(f"/api/jobs/{live}").status_code == 200
+    )

@@ -681,6 +681,40 @@ async def subscription_episodes(
     sub = session.get(Subscription, subscription_id)
     if sub is None:
         return RedirectResponse("/series", status_code=302)
+    return await _episodes_response(request, sub, session, arr_factory)
+
+
+@router.post("/subscriptions/{subscription_id}/episodes/jobs/{job_id}/clear")
+async def subscription_clear_job(
+    request: Request,
+    subscription_id: int,
+    job_id: int,
+    session: DbSession,
+    arr_factory: ArrFactoryDep,
+    deps: RunnerDepsDep,
+) -> HTMLResponse:
+    """The red ✗ on a missing episode whose job is history (the file was deleted in
+    Sonarr after the import): delete that job here rather than hunting it in Activity.
+    A cancelled or terminally failed job is history too, and clearing it also puts the
+    episode back on offer."""
+    sub = session.get(Subscription, subscription_id)
+    if sub is None:
+        return RedirectResponse("/series", status_code=302)
+    try:
+        delete_job(session, job_id, deps.staging_dir)
+        notice = f"Cleared job #{job_id}."
+    except HTTPException as exc:
+        notice = f"Job #{job_id} not cleared: {exc.detail}"
+    return await _episodes_response(request, sub, session, arr_factory, notice)
+
+
+async def _episodes_response(
+    request: Request,
+    sub: Subscription,
+    session: Session,
+    arr_factory,
+    notice: str | None = None,
+) -> HTMLResponse:
     error = None
     try:
         episodes = await arr_factory(sub.connection).episodes(sub.series_id)
@@ -723,7 +757,7 @@ async def subscription_episodes(
     return templates.TemplateResponse(
         request,
         "partials/episodes.html",
-        {"sub": sub, "seasons": ordered, "error": error},
+        {"sub": sub, "seasons": ordered, "error": error, "notice": notice},
     )
 
 
