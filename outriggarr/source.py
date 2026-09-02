@@ -162,6 +162,13 @@ def strip_collection_prefix(title: str, collection_title: str | None) -> str:
 
 
 YOUTUBE_SIGNIN_COOKIE = "LOGIN_INFO"  # present on .youtube.com only for a signed-in account
+# yt-dlp's wording when a video needs an account: age gate, bot check, private or
+# members-only videos. Anything else is not worth a second, signed-in attempt.
+NEEDS_LOGIN = re.compile(
+    r"sign in to confirm|sign in to|log ?in required|login required|private video|"
+    r"this video is private|members[- ]only|join this channel",
+    re.IGNORECASE,
+)
 
 
 def has_signin_cookie(netscape: str) -> bool:
@@ -271,15 +278,34 @@ class YtDlpSource:
             page += 1
         return refs[:ARCHIVE_MAX_ITEMS]
 
-    def _opts(self, base: dict[str, Any]) -> dict[str, Any]:
+    def _cookies_configured(self) -> bool:
+        return bool(self._extra().get("cookiefile"))
+
+    def _with_login_fallback(self, url: str, attempt: Callable[[bool], Any]) -> Any:
+        """Run without the cookies first, with them only when YouTube asks for a sign-in.
+        A signed-in session is needed for age-gated videos alone; used everywhere it
+        can get the account put on YouTube's "SABR-only" experiment, after which the
+        web clients offer nothing above 360p — seen live: 1080p without cookies, 360p
+        with. Using the session only on demand also keeps it from rotating away."""
+        try:
+            return attempt(False)
+        except SourceError as exc:
+            if not (self._cookies_configured() and NEEDS_LOGIN.search(str(exc))):
+                raise
+            log.info("%s: YouTube wants a sign-in; retrying with the cookies file", url)
+            return attempt(True)
+
+    def _opts(self, base: dict[str, Any], *, cookies: bool = True) -> dict[str, Any]:
         from outriggarr.settings import RESERVED_YTDLP_KEYS
 
         extra = {k: v for k, v in self._extra().items() if k not in RESERVED_YTDLP_KEYS}
-        cookies = extra.get("cookiefile")
-        if cookies and not os.access(cookies, os.R_OK):
+        configured = extra.get("cookiefile")
+        if not cookies:
+            extra.pop("cookiefile", None)
+        if configured and not os.access(configured, os.R_OK):
             # yt-dlp would silently run without cookies and fail with an unrelated
             # bot-check/age-gate message; say what actually went wrong.
-            raise SourceError(f"cookies file {cookies!r} is not readable by the app user")
+            raise SourceError(f"cookies file {configured!r} is not readable by the app user")
         # YouTube hands out its best formats only to clients that present a proof-of-origin
         # token; the bgutil plugin mints one through its Node script when told where it is.
         # The operator's own extractor_args are merged per extractor on top of ours.
@@ -355,19 +381,22 @@ class YtDlpSource:
         import yt_dlp
         from yt_dlp.utils import DownloadError
 
-        try:
-            with (
-                self._private_cookie_jar(self._opts(opts)) as ydl_opts,
-                yt_dlp.YoutubeDL(ydl_opts) as ydl,
-            ):
-                info = ydl.extract_info(url, download=False)
-        except DownloadError as exc:
-            raise SourceError(str(exc)) from exc
-        except Exception as exc:  # a bad format/option string raises inside YoutubeDL()
-            raise SourceError(f"yt-dlp could not run: {exc!r}") from exc
-        if info is None:
-            raise SourceError(f"yt-dlp returned no info for {url}")
-        return info
+        def attempt(with_cookies: bool) -> dict[str, Any]:
+            try:
+                with (
+                    self._private_cookie_jar(self._opts(opts, cookies=with_cookies)) as ydl_opts,
+                    yt_dlp.YoutubeDL(ydl_opts) as ydl,
+                ):
+                    info = ydl.extract_info(url, download=False)
+            except DownloadError as exc:
+                raise SourceError(str(exc)) from exc
+            except Exception as exc:  # a bad format/option string raises inside YoutubeDL()
+                raise SourceError(f"yt-dlp could not run: {exc!r}") from exc
+            if info is None:
+                raise SourceError(f"yt-dlp returned no info for {url}")
+            return info
+
+        return self._with_login_fallback(url, attempt)
 
     def resolve(self, url: str) -> list[VideoRef]:
         collection = self._archive_collection(url)
@@ -450,32 +479,36 @@ class YtDlpSource:
         }
         if subtitle_langs:
             opts.update(subtitle_opts(subtitle_langs, auto_subtitles))
-        info = None
-        try:
-            with (
-                self._private_cookie_jar(self._opts(opts)) as ydl_opts,
-                yt_dlp.YoutubeDL(ydl_opts) as ydl,
-            ):
-                info = ydl.extract_info(url, download=True)
-        except DownloadCancelled as exc:
-            # yt-dlp reuses DownloadCancelled for its own stop conditions (download
-            # archive hits, max-downloads); only OUR hook's abort is an abort.
-            if "aborted by outriggarr" in str(exc):
-                raise DownloadAborted(str(exc)) from exc
-            raise SourceError(f"yt-dlp stopped: {exc}") from exc
-        except DownloadError as exc:
-            raise SourceError(str(exc)) from exc
-        except OSError as exc:
-            # YoutubeDL.__exit__ saves the cookie jar; a read-only cookies file raises
-            # here AFTER a successful download. Keep the download, report the problem.
-            if info is None:
+
+        def attempt(with_cookies: bool) -> DownloadResult:
+            info = None
+            try:
+                with (
+                    self._private_cookie_jar(self._opts(opts, cookies=with_cookies)) as ydl_opts,
+                    yt_dlp.YoutubeDL(ydl_opts) as ydl,
+                ):
+                    info = ydl.extract_info(url, download=True)
+            except DownloadCancelled as exc:
+                # yt-dlp reuses DownloadCancelled for its own stop conditions (download
+                # archive hits, max-downloads); only OUR hook's abort is an abort.
+                if "aborted by outriggarr" in str(exc):
+                    raise DownloadAborted(str(exc)) from exc
+                raise SourceError(f"yt-dlp stopped: {exc}") from exc
+            except DownloadError as exc:
+                raise SourceError(str(exc)) from exc
+            except OSError as exc:
+                # YoutubeDL.__exit__ saves the cookie jar; a read-only cookies file raises
+                # here AFTER a successful download. Keep the download, report the problem.
+                if info is None:
+                    raise SourceError(f"yt-dlp could not run: {exc!r}") from exc
+                log.warning("yt-dlp could not save state after the download: %s", exc)
+            except Exception as exc:  # bad format/option strings raise inside YoutubeDL()
                 raise SourceError(f"yt-dlp could not run: {exc!r}") from exc
-            log.warning("yt-dlp could not save state after the download: %s", exc)
-        except Exception as exc:  # bad format/option strings raise inside YoutubeDL()
-            raise SourceError(f"yt-dlp could not run: {exc!r}") from exc
-        if info is None:
-            raise SourceError(f"yt-dlp returned no info for {url}")
-        return _result_from_info(info, dest_dir)
+            if info is None:
+                raise SourceError(f"yt-dlp returned no info for {url}")
+            return _result_from_info(info, dest_dir)
+
+        return self._with_login_fallback(url, attempt)
 
 
 def subtitle_opts(langs: tuple[str, ...], auto: bool) -> dict[str, Any]:

@@ -129,10 +129,13 @@ def test_ytdlp_source_merges_extra_opts_last(monkeypatch, tmp_path) -> None:
 
     seen: list[dict] = []
 
+    from yt_dlp.utils import DownloadError
+
     class StubYDL:
         def __init__(self, opts):
             # yt-dlp gets a private copy of the operator's jar; read it while it exists
-            seen.append({**opts, "_jar": Path(opts["cookiefile"]).read_text()})
+            jar = Path(opts["cookiefile"]).read_text() if "cookiefile" in opts else None
+            seen.append({**opts, "_jar": jar})
 
         def __enter__(self):
             return self
@@ -141,6 +144,8 @@ def test_ytdlp_source_merges_extra_opts_last(monkeypatch, tmp_path) -> None:
             return False
 
         def extract_info(self, url, download=False):
+            if seen[-1]["_jar"] is None:  # cookies come only when YouTube asks
+                raise DownloadError("ERROR: [youtube] x: Sign in to confirm your age")
             return {"id": "x", "title": "t", "webpage_url": url}
 
     monkeypatch.setattr(yt_dlp, "YoutubeDL", StubYDL)
@@ -149,11 +154,13 @@ def test_ytdlp_source_merges_extra_opts_last(monkeypatch, tmp_path) -> None:
     src = YtDlpSource(extra_opts=lambda: {"cookiefile": str(cookies), "quiet": False})
     (v,) = src.resolve("https://youtu.be/x")
     assert v.id == "x"
-    assert seen[0]["cookiefile"] != str(cookies) and seen[0]["_jar"] == "# cookies"
-    assert seen[0]["quiet"] is False, "operator options win over ours"
-    assert seen[0]["extract_flat"] == "in_playlist" and "logger" in seen[0]
+    with_cookies = [c for c in seen if "cookiefile" in c]
+    assert with_cookies[0]["cookiefile"] != str(cookies) and with_cookies[0]["_jar"] == "# cookies"
+    assert with_cookies[0]["quiet"] is False, "operator options win over ours"
+    assert with_cookies[0]["extract_flat"] == "in_playlist" and "logger" in with_cookies[0]
     src.list_recent("https://www.youtube.com/@c", 7)
-    assert seen[1]["playlistend"] == 7 and seen[1]["_jar"] == "# cookies"
+    with_cookies = [c for c in seen if "cookiefile" in c]
+    assert with_cookies[1]["playlistend"] == 7 and with_cookies[1]["_jar"] == "# cookies"
 
 
 def test_subtitle_opts_and_sidecars(tmp_path) -> None:
@@ -364,21 +371,28 @@ def test_ytdlp_gets_a_private_cookie_jar_and_never_clobbers_a_replaced_file(
     jar.write_text("# Netscape HTTP Cookie File\nold session\n")
     seen: dict = {}
 
+    from yt_dlp.utils import DownloadError
+
     class StubYDL:
         def __init__(self, opts):
             self.opts = opts
-            seen["cookiefile"] = opts["cookiefile"]
+            if "cookiefile" in opts:
+                seen["cookiefile"] = opts["cookiefile"]
 
         def __enter__(self):
             return self
 
         def __exit__(self, *a):
+            if "cookiefile" not in self.opts:
+                return False
             # yt-dlp saves its jar on close: the session it loaded, plus rotations
             path = Path(self.opts["cookiefile"])
             path.write_text(path.read_text() + "rotated\n")
             return False
 
         def extract_info(self, url, download=False):
+            if "cookiefile" not in self.opts:  # an age gate: cookies come on the retry
+                raise DownloadError("ERROR: [youtube] x: Sign in to confirm your age")
             if seen.get("replace_during_run"):
                 jar.write_text("# Netscape HTTP Cookie File\nNEW SESSION\n")
             return {"id": "x", "title": "T", "webpage_url": url, "duration": 1}
@@ -483,6 +497,8 @@ def test_a_jar_that_lost_the_sign_in_is_never_written_back(monkeypatch, tmp_path
     jar = tmp_path / "cookies.txt"
     jar.write_text(JAR_SIGNED_IN)
 
+    from yt_dlp.utils import DownloadError
+
     class SignsOut:
         def __init__(self, opts):
             self.opts = opts
@@ -491,11 +507,15 @@ def test_a_jar_that_lost_the_sign_in_is_never_written_back(monkeypatch, tmp_path
             return self
 
         def __exit__(self, *a):
+            if "cookiefile" not in self.opts:
+                return False
             # YouTube cleared LOGIN_INFO during the run; yt-dlp saves what is left
             Path(self.opts["cookiefile"]).write_text(JAR_SIGNED_OUT + "rotated\n")
             return False
 
         def extract_info(self, url, download=False):
+            if "cookiefile" not in self.opts:  # an age gate: cookies come on the retry
+                raise DownloadError("ERROR: [youtube] x: Sign in to confirm your age")
             return {"id": "x", "title": "t", "webpage_url": url}
 
     monkeypatch.setattr(yt_dlp, "YoutubeDL", SignsOut)
@@ -690,3 +710,54 @@ def test_detected_audio_language_reads_the_chosen_audio_track() -> None:
     assert detected_audio_language(single) == "kor"
     assert detected_audio_language({"language": "und"}) is None
     assert detected_audio_language({}) is None
+
+
+def test_cookies_are_used_only_when_youtube_asks_for_a_sign_in(monkeypatch, tmp_path) -> None:
+    import yt_dlp
+    from yt_dlp.utils import DownloadError
+
+    from outriggarr.source import SourceError, YtDlpSource
+
+    jar = tmp_path / "cookies.txt"
+    jar.write_text(JAR_SIGNED_IN)
+    calls: list[dict] = []
+    fail_without = {"msg": "ERROR: [youtube] x: Sign in to confirm your age. Use --cookies…"}
+
+    class StubYDL:
+        def __init__(self, opts):
+            calls.append(opts)
+            self.opts = opts
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def extract_info(self, url, download=False):
+            if "cookiefile" not in self.opts and fail_without["msg"]:
+                raise DownloadError(fail_without["msg"])
+            return {"id": "x", "title": "t", "webpage_url": url}
+
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", StubYDL)
+    src = YtDlpSource(extra_opts=lambda: {"cookiefile": str(jar)})
+    # an age gate: the first attempt carries no cookies, the retry does
+    src.fetch_info("https://youtu.be/x")
+    assert [("cookiefile" in c) for c in calls] == [False, True]
+    # a public video: one attempt, no cookies, even though a file is configured
+    calls.clear()
+    fail_without["msg"] = ""
+    src.fetch_info("https://youtu.be/x")
+    assert [("cookiefile" in c) for c in calls] == [False]
+    # any other error is not worth a signed-in retry
+    calls.clear()
+    fail_without["msg"] = "ERROR: [youtube] x: Video unavailable"
+    with pytest.raises(SourceError, match="Video unavailable"):
+        src.fetch_info("https://youtu.be/x")
+    assert len(calls) == 1
+    # no cookies configured: the sign-in error is simply the error
+    calls.clear()
+    fail_without["msg"] = "ERROR: [youtube] x: Sign in to confirm your age."
+    with pytest.raises(SourceError, match="Sign in"):
+        YtDlpSource(extra_opts=lambda: {}).fetch_info("https://youtu.be/x")
+    assert len(calls) == 1
