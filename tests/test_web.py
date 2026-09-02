@@ -196,7 +196,7 @@ def test_subscription_page_preview_scan_and_override(client: TestClient) -> None
 
     scan = client.post(f"/subscriptions/{sub_id}/scan")
     assert scan.status_code == 200 and "Nothing queued" in scan.text
-    assert "2 matched" in scan.text and "Download 2 matched" in scan.text
+    assert "2 matched" in scan.text and "Download all 2" in scan.text
     assert client.get("/api/jobs").json() == [], "Scan now never queues"
     dl = client.post(f"/subscriptions/{sub_id}/download")
     assert dl.status_code == 200 and "Queued 2 job(s)" in dl.text
@@ -344,7 +344,12 @@ def test_subscription_episodes_panel_states_and_jobs(client: TestClient) -> None
     ]
     sub_id = client.post(
         "/api/subscriptions",
-        json={"connection_id": 1, "series_id": 5, "source_url": "https://www.youtube.com/@hotones"},
+        json={
+            "connection_id": 1,
+            "series_id": 5,
+            "source_url": "https://www.youtube.com/@hotones",
+            "auto_download": "all",
+        },
     ).json()["id"]
     client.post(f"/api/subscriptions/{sub_id}/scan")  # queues S30E06 via title
     page = client.get(f"/subscriptions/{sub_id}").text
@@ -597,7 +602,7 @@ def test_preview_holds_a_length_mismatch_and_pin_releases_it(client: TestClient)
     ).json()["id"]
     prev = client.get(f"/subscriptions/{sub_id}/preview").text
     assert "1 held" in prev and "video runs 1m30s, Sonarr says the episode runs 25 min" in prev
-    assert "It's right, pin it" in prev and "would queue" not in prev
+    assert "It's right, pin it" in prev and "would queue on the next scan" not in prev
     r = client.post(f"/subscriptions/{sub_id}/download")
     assert r.status_code == 200 and client.get("/api/jobs").json() == []
     # pinning it is the release valve: pins are never held
@@ -987,3 +992,27 @@ def test_subscription_form_audio_language(client: TestClient) -> None:
         follow_redirects=False,
     )
     assert r.status_code == 400 and "3-letter" in r.text
+
+
+def test_subscribe_form_defaults_to_future_and_preview_downloads_selected(
+    client: TestClient,
+) -> None:
+    _seed_series(client)
+    page = client.get("/series/5/subscribe").text
+    assert 'name="auto_download" value="future" checked' in page
+    assert "Everything Sonarr wants" in page and "Nothing automatic" in page
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={"connection_id": 1, "series_id": 5, "sources": ["https://www.youtube.com/@hotones"]},
+    ).json()["id"]
+    prev = client.get(f"/subscriptions/{sub_id}/preview").text
+    assert "auto: future only, 0 of 1 would queue" in prev and "waits for you" in prev
+    assert 'name="episode_id" value="11"' in prev and "Download selected" in prev
+    # ticking nothing queues nothing; ticking S30E06 queues just that; the scheduler alone would not
+    r = client.post(f"/subscriptions/{sub_id}/download", data={"selected": "1"})
+    assert "Nothing ticked." in r.text and client.get("/api/jobs").json() == []
+    r = client.post(
+        f"/subscriptions/{sub_id}/download", data={"selected": "1", "episode_id": ["11"]}
+    )
+    assert "Queued 1 job(s)." in r.text
+    assert [j["episode_ids"] for j in client.get("/api/jobs").json()] == [[11]]

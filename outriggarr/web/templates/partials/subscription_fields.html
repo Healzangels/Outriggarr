@@ -18,6 +18,13 @@
 <label>Videos to list per scan <span class="hint">Blank uses the global setting ({{ scan_video_limit }}). Raise it for a channel whose episodes sit behind hundreds of newer uploads; a deep listing costs a few seconds per scan. Playlists are always listed whole.</span>
   <input type="number" name="video_limit" min="1" max="5000" value="{{ sub.video_limit or '' if sub else '' }}" placeholder="{{ scan_video_limit }}">
 </label>
+<fieldset>
+  <legend>Automatic downloads <span class="muted">(what the scheduler queues by itself; the Download buttons in the preview are always yours)</span></legend>
+  {% set mode = sub.auto_download if sub else "future" %}
+  <label><input type="radio" name="auto_download" value="future" {% if mode == "future" %}checked{% endif %}> Future episodes only <span class="muted">— episodes airing from {% if sub %}{{ sub.created_at.strftime('%Y-%m-%d') }}{% else %}today{% endif %} on; take the backlog from the preview when you choose</span></label>
+  <label><input type="radio" name="auto_download" value="all" {% if mode == "all" %}checked{% endif %}> Everything Sonarr wants <span class="muted">— backlog included; a big show means a big queue</span></label>
+  <label><input type="radio" name="auto_download" value="none" {% if mode == "none" %}checked{% endif %}> Nothing automatic <span class="muted">— scans only refresh the preview; you pick what to download</span></label>
+</fieldset>
 <label>Audio language <span class="hint">Three-letter ISO 639-2 code, e.g. <code>jpn</code>. Blank = the language the source declares for the audio track (YouTube sets one per track), then the global default.</span>
   <input type="text" name="audio_language" maxlength="3" value="{{ sub.audio_language or '' if sub else '' }}" placeholder="declared by the source">
 </label>

@@ -46,6 +46,7 @@ def body(conn_id: int, **over) -> dict:
         "connection_id": conn_id,
         "series_id": 5,
         "source_url": "https://www.youtube.com/@show",
+        "auto_download": "all",
         **over,
     }
 
@@ -288,3 +289,32 @@ def test_audio_language_override_round_trip_and_validation(client, arr, source) 
     assert r.status_code == 422
     r = client.put(f"/api/subscriptions/{sid}", json=body(conn_id, audio_language=""))
     assert r.status_code == 200 and r.json()["audio_language"] is None
+
+
+def test_auto_download_default_validation_and_manual_download_endpoint(client, arr, source) -> None:
+    conn_id = seed(client, arr, source)
+    r = client.post(
+        "/api/subscriptions",
+        json={
+            "connection_id": conn_id,
+            "series_id": 5,
+            "sources": ["https://www.youtube.com/@show"],
+        },
+    )
+    assert r.status_code == 201 and r.json()["auto_download"] == "future", (
+        "new subscriptions do not dump the backlog"
+    )
+    sid = r.json()["id"]
+    assert (
+        client.put(
+            f"/api/subscriptions/{sid}", json=body(conn_id, auto_download="sometimes")
+        ).status_code
+        == 422
+    )
+    # the backlog episode is matched but not automatic; a manual download takes it
+    scan = client.post(f"/api/subscriptions/{sid}/scan").json()
+    assert (
+        scan["created_job_ids"] == [] and scan["matches"][0]["skipped"] == "not automatic (future)"
+    )
+    picked = client.post(f"/api/subscriptions/{sid}/download", json={"episode_ids": [11]}).json()
+    assert len(picked["created_job_ids"]) == 1

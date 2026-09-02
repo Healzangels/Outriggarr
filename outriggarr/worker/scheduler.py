@@ -7,6 +7,7 @@ import asyncio
 import contextlib
 import logging
 import re
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 
@@ -40,6 +41,7 @@ class ScanReport:
     subscription_id: int
     scanned_at: datetime
     dry_run: bool
+    manual: bool = False  # a Download button: the auto-download policy does not apply
     sources: int = 0  # how many sources the listing came from
     videos: list[dict] = field(default_factory=list)
     matches: list[dict] = field(default_factory=list)
@@ -61,6 +63,7 @@ class ScanReport:
             "created": len(self.created_job_ids),
             "unmatched": len(self.unmatched),
             "held": len(self.held),
+            "not_auto": sum(1 for m in self.matches if m.get("skipped") and not m.get("job_id")),
             "skipped_existing": len(self.skipped_existing),
             "error": self.error,
         }
@@ -167,9 +170,29 @@ def live_video_ids_for_series(session: Session, connection_id: int, series_id: i
     )
 
 
+AUTO_DOWNLOAD = ("future", "all", "none")
+
+
+def auto_queues(sub: Subscription, ep: Episode) -> bool:
+    """Whether the scheduler queues this match by itself under the subscription's
+    auto-download policy; Download buttons never ask."""
+    if sub.auto_download == "all":
+        return True
+    if sub.auto_download == "future":
+        return ep.air_date is not None and ep.air_date >= sub.created_at.date()
+    return False
+
+
 async def scan_subscription(
-    deps: RunnerDeps, subscription_id: int, *, dry_run: bool = False
+    deps: RunnerDeps,
+    subscription_id: int,
+    *,
+    dry_run: bool = False,
+    manual: bool = False,
+    episode_ids: set[int] | None = None,
 ) -> ScanReport:
+    """dry_run: report only. Otherwise queue jobs — every match the policy allows on a
+    scheduled scan, or (manual) every match, or just `episode_ids`, from a button."""
     now = deps.now()
     with deps.session_factory() as session:
         sub = session.get(
@@ -177,9 +200,9 @@ async def scan_subscription(
         )
         if sub is None:
             raise SubscriptionNotFound(subscription_id)
-        report = ScanReport(subscription_id=sub.id, scanned_at=now, dry_run=dry_run)
+        report = ScanReport(subscription_id=sub.id, scanned_at=now, dry_run=dry_run, manual=manual)
         try:
-            await _scan(deps, session, sub, report, now)
+            await _scan(deps, session, sub, report, now, episode_ids=episode_ids)
         except (ArrError, SourceError) as exc:
             report.error = str(exc)
         if not dry_run:
@@ -201,7 +224,12 @@ async def scan_subscription(
 
 
 async def _scan(
-    deps: RunnerDeps, session: Session, sub: Subscription, report: ScanReport, now: datetime
+    deps: RunnerDeps,
+    session: Session,
+    sub: Subscription,
+    report: ScanReport,
+    now: datetime,
+    episode_ids: set[int] | None = None,
 ) -> None:
     conn = sub.connection
     client = deps.arr_factory(conn)
@@ -306,8 +334,20 @@ async def _scan(
         for v in videos
     ]
     _fill_report(report, result, videos)
+    for entry, m in zip(report.matches, result.matches, strict=True):
+        entry["auto"] = auto_queues(sub, m.episode)
     if not report.dry_run:
-        _create_jobs(session, sub, result, report)
+        if report.manual:
+
+            def allowed(ep: Episode) -> bool:
+                return episode_ids is None or ep.id in episode_ids
+
+        else:
+
+            def allowed(ep: Episode) -> bool:
+                return auto_queues(sub, ep)
+
+        _create_jobs(session, sub, result, report, allowed=allowed)
 
 
 DATE_RETRY_AFTER = timedelta(days=7)  # an undated fetch is retried a week later
@@ -390,10 +430,21 @@ def _fill_report(report: ScanReport, result: MatchResult, videos: list[Video]) -
 
 
 def _create_jobs(
-    session: Session, sub: Subscription, result: MatchResult, report: ScanReport
+    session: Session,
+    sub: Subscription,
+    result: MatchResult,
+    report: ScanReport,
+    *,
+    allowed: Callable[[Episode], bool] = lambda ep: True,
 ) -> None:
     for entry, m in zip(report.matches, result.matches, strict=True):
         ep = m.episode
+        if not allowed(ep):
+            entry["job_id"] = None
+            entry["skipped"] = (
+                "not selected" if report.manual else f"not automatic ({sub.auto_download})"
+            )
+            continue
         label = f"{sub.title} {episode_code(ep.season, [ep.number])}"
         if ep.title:
             label += f" - {ep.title}"

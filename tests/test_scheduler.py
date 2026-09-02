@@ -74,6 +74,7 @@ def make_sub(session_factory, **over) -> tuple[int, int]:
             title="Show",
             sources=["https://www.youtube.com/@show"],
             strategies=["title"],
+            auto_download="all",  # these tests are about matching; the policy has its own
         )
         for k, v in over.items():
             setattr(sub, k, v)
@@ -653,3 +654,45 @@ async def test_every_source_is_listed_and_videos_are_pooled_once(deps, session_f
     r2 = await scan_subscription(deps, sub_id)
     assert r2.error.startswith("https://www.youtube.com/@show: ERROR: [youtube:tab]")
     assert r2.created_job_ids == [] and r2.matches == []
+
+
+async def test_auto_download_policy_gates_scheduled_scans_only(deps, session_factory) -> None:
+    from outriggarr.db.models import Job
+
+    # "future": only episodes airing from the subscription's creation on queue by themselves
+    sub_id, conn_id = make_sub(
+        session_factory, auto_download="future", created_at=NOW - timedelta(days=1)
+    )
+    client = fake_client(deps, conn_id)
+    client.episodes_by_series[5] = [
+        EpisodeRef(11, 30, 6, "Six Spicy Wings", False, True, NOW - timedelta(days=10)),  # backlog
+        EpisodeRef(12, 30, 7, "Seven Spicy Wings", False, True, NOW - timedelta(hours=1)),
+    ]
+    report = await scan_subscription(deps, sub_id)  # a scheduled scan
+    assert {m["code"]: m["auto"] for m in report.matches} == {"S30E06": False, "S30E07": True}
+    assert [m["code"] for m in report.matches if m["job_id"]] == ["S30E07"]
+    assert report.matches[0]["skipped"] == "not automatic (future)"
+    assert report.summary()["not_auto"] == 1 and report.summary()["created"] == 1
+
+    # a dry run reports the same policy view and queues nothing
+    dry = await scan_subscription(deps, sub_id, dry_run=True)
+    assert dry.created_job_ids == [] and {m["code"]: m["auto"] for m in dry.matches} == {
+        "S30E06": False
+    }
+
+    # a manual download ignores the policy: only the ticked episode, or all of them
+    picked = await scan_subscription(deps, sub_id, manual=True, episode_ids={999})
+    assert picked.created_job_ids == [] and picked.matches[0]["skipped"] == "not selected"
+    picked = await scan_subscription(deps, sub_id, manual=True, episode_ids={11})
+    assert len(picked.created_job_ids) == 1
+    with session_factory() as s:
+        assert sorted(j.episode_ids[0] for j in s.query(Job).all()) == [11, 12]
+
+    # "none": scheduled scans queue nothing at all
+    sub2, conn2 = make_sub(session_factory, auto_download="none", series_id=6)
+    c2 = fake_client(deps, conn2)
+    c2.episodes_by_series[6] = [EpisodeRef(21, 30, 6, "Six Spicy Wings", False, True, NOW)]
+    r2 = await scan_subscription(deps, sub2)
+    assert r2.created_job_ids == [] and r2.matches[0]["skipped"] == "not automatic (none)"
+    everything = await scan_subscription(deps, sub2, manual=True)
+    assert len(everything.created_job_ids) == 1, "Download all ignores the policy"

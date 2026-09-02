@@ -126,6 +126,12 @@ class Subscription(Base):
     date_offset_days: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     title_regex: Mapped[str | None] = mapped_column(String(500))
     enabled: Mapped[bool] = mapped_column(default=True, nullable=False)
+    # What the scheduler queues by itself: "all" wanted episodes, only those airing
+    # from created_at on ("future", the default for a new subscription: a big show must
+    # not dump its backlog on the queue), or "none" (scans only refresh the preview).
+    # Download buttons in the preview are always manual and ignore this.
+    auto_download: Mapped[str] = mapped_column(String(10), nullable=False, default="future")
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False, default=utcnow)
     last_scan_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     last_scan_result: Mapped[dict | None] = mapped_column(JSON)
 

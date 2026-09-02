@@ -19,7 +19,12 @@ from outriggarr.db.models import Connection, ConnectionKind, Override, Subscript
 from outriggarr.matcher import OPTIONAL_STRATEGIES, compile_title_regex
 from outriggarr.settings import get_setting
 from outriggarr.source import SourceError, VideoSource
-from outriggarr.worker.scheduler import ScanReport, SubscriptionNotFound, scan_subscription
+from outriggarr.worker.scheduler import (
+    AUTO_DOWNLOAD,
+    ScanReport,
+    SubscriptionNotFound,
+    scan_subscription,
+)
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/subscriptions", tags=["subscriptions"])
@@ -38,11 +43,21 @@ class SubscriptionIn(BaseModel):
     format: str | None = Field(default=None, max_length=500)
     video_limit: int | None = Field(default=None, ge=1, le=MAX_VIDEO_LIMIT)
     audio_language: str | None = None  # ISO 639-2; None → source-declared, then global
+    # what the scheduler queues by itself: "future" (default), "all", or "none"
+    auto_download: str = "future"
     strategies: list[str] = Field(default_factory=lambda: ["title"])
     date_tolerance_days: int = Field(default=2, ge=0, le=60)
     date_offset_days: int = Field(default=0, ge=-60, le=60)
     title_regex: str | None = Field(default=None, max_length=500)
     enabled: bool = True
+
+    @field_validator("auto_download")
+    @classmethod
+    def _auto_download(cls, v: str) -> str:
+        v = (v or "").strip().lower()
+        if v not in AUTO_DOWNLOAD:
+            raise ValueError(f"auto_download must be one of {', '.join(AUTO_DOWNLOAD)}")
+        return v
 
     @field_validator("audio_language")
     @classmethod
@@ -289,9 +304,22 @@ def delete_override(session: Session, subscription_id: int, video_id: str) -> No
     session.commit()
 
 
-async def run_scan(deps, subscription_id: int, *, dry_run: bool) -> ScanReport:
+class DownloadIn(BaseModel):
+    episode_ids: list[int] | None = None  # None → every current match
+
+
+async def run_scan(
+    deps,
+    subscription_id: int,
+    *,
+    dry_run: bool,
+    manual: bool = False,
+    episode_ids: set[int] | None = None,
+) -> ScanReport:
     try:
-        return await scan_subscription(deps, subscription_id, dry_run=dry_run)
+        return await scan_subscription(
+            deps, subscription_id, dry_run=dry_run, manual=manual, episode_ids=episode_ids
+        )
     except SubscriptionNotFound:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND, f"subscription {subscription_id} not found"
@@ -357,6 +385,18 @@ def remove_override(subscription_id: int, video_id: str, session: DbSession) -> 
 @router.post("/{subscription_id}/scan")
 async def scan(subscription_id: int, deps: RunnerDepsDep) -> dict:
     return (await run_scan(deps, subscription_id, dry_run=False)).as_dict()
+
+
+@router.post("/{subscription_id}/download")
+async def download(
+    subscription_id: int, deps: RunnerDepsDep, body: DownloadIn | None = None
+) -> dict:
+    """A manual download: every current match, or just the given episodes, whatever
+    the subscription's auto-download policy says."""
+    ids = set(body.episode_ids) if body and body.episode_ids is not None else None
+    return (
+        await run_scan(deps, subscription_id, dry_run=False, manual=True, episode_ids=ids)
+    ).as_dict()
 
 
 @router.get("/{subscription_id}/preview")

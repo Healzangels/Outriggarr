@@ -1,7 +1,9 @@
-{% set queueable = report.matches | rejectattr("job_id") | rejectattr("skipped") | list | length %}
+{% set queueable = report.matches | rejectattr("job_id") | list | length %}
+{% set auto_count = report.matches | rejectattr("job_id") | selectattr("auto") | list | length %}
 <div class="form-actions">
   <button class="secondary" hx-post="/subscriptions/{{ sub.id }}/scan" hx-target="#preview" hx-indicator="#scan-busy">Scan now</button>
-  <button hx-post="/subscriptions/{{ sub.id }}/download" hx-target="#preview" hx-indicator="#scan-busy" {% if not queueable %}disabled{% endif %}>Download{% if queueable %} {{ queueable }} matched{% endif %}</button>
+  <button hx-post="/subscriptions/{{ sub.id }}/download" hx-vals='{"all": "1"}' hx-target="#preview" hx-indicator="#scan-busy" {% if not queueable %}disabled{% endif %} title="Queue every current match, whatever the auto-download setting">Download all{% if queueable %} {{ queueable }}{% endif %}</button>
+  <button class="secondary" hx-post="/subscriptions/{{ sub.id }}/download" hx-include="#match-picks" hx-vals='{"selected": "1"}' hx-target="#preview" hx-indicator="#scan-busy" {% if not queueable %}disabled{% endif %} title="Queue only the ticked matches">Download selected</button>
   <span id="scan-busy" class="htmx-indicator muted" aria-busy="true">working…</span>
   <span class="chips">
     <span class="chip">{{ report.videos | length }} videos listed{% if report.sources > 1 %} from {{ report.sources }} sources{% endif %}</span>
@@ -9,6 +11,7 @@
     <span class="chip {{ 'warn' if report.unmatched else '' }}">{{ report.unmatched | length }} unmatched</span>
     {% if report.held %}<span class="chip warn" title="Paired, but the video's length contradicts the episode's runtime">{{ report.held | length }} held</span>{% endif %}
     <span class="chip">{{ report.skipped_existing | length }} already have jobs</span>
+    <span class="chip" title="What the scheduler queues by itself: {{ sub.auto_download }}">auto: {% if sub.auto_download == "future" %}future only, {{ auto_count }} of {{ queueable }} would queue{% elif sub.auto_download == "all" %}everything{% else %}nothing{% endif %}</span>
     {% if report.dry_run %}<span class="chip">preview only</span>{% endif %}
   </span>
 </div>
@@ -24,14 +27,15 @@
 <h4>Matches</h4>
 <div class="table-wrap">
 <table>
-  <thead><tr><th>Episode</th><th>Video</th><th>How</th><th>Job</th></tr></thead>
-  <tbody>
+  <thead><tr><th><input type="checkbox" aria-label="tick all" onclick="document.querySelectorAll('#match-picks input[name=episode_id]').forEach(c => c.checked = this.checked)" checked></th><th>Episode</th><th>Video</th><th>How</th><th>Job</th></tr></thead>
+  <tbody id="match-picks">
   {% for m in report.matches %}
     <tr>
+      <td>{% if not m.job_id %}<input type="checkbox" name="episode_id" value="{{ m.episode_id }}" aria-label="download {{ m.code }}" checked>{% endif %}</td>
       <td><strong>{{ m.code }}</strong> {{ m.title }}<span class="two-line muted">{{ m.air_date or "" }}</span></td>
       <td><a href="{{ m.video_url }}" target="_blank" rel="noopener" class="truncate" title="{{ m.video_title }}">{{ m.video_title }}</a><span class="two-line muted mono">{{ m.video_id }}</span></td>
       <td><span class="chip">{{ m.strategy }}</span></td>
-      <td>{% if m.job_id %}<a href="/activity">#{{ m.job_id }}</a>{% elif m.skipped %}<span class="muted">{{ m.skipped }}</span>{% elif report.dry_run %}<span class="muted">would queue</span>{% endif %}</td>
+      <td>{% if m.job_id %}<a href="/activity">#{{ m.job_id }}</a>{% elif m.skipped %}<span class="muted">{{ m.skipped }}</span>{% elif report.dry_run %}<span class="muted">{% if m.auto %}would queue on the next scan{% else %}waits for you{% endif %}</span>{% endif %}</td>
     </tr>
   {% endfor %}
   </tbody>

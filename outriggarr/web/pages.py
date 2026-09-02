@@ -508,6 +508,7 @@ def _form_to_body(
     enabled: bool,
     video_limit: str = "",
     audio_language: str = "",
+    auto_download: str = "future",
 ) -> SubscriptionIn:
     video_limit = video_limit.strip()
     if video_limit and not video_limit.isdigit():
@@ -515,6 +516,7 @@ def _form_to_body(
     return SubscriptionIn(
         video_limit=int(video_limit) if video_limit else None,
         audio_language=audio_language,
+        auto_download=auto_download,
         connection_id=connection_id,
         series_id=series_id,
         sources=sources.splitlines(),
@@ -541,6 +543,7 @@ async def subscribe_submit(
     title_regex: Annotated[str, Form()] = "",
     video_limit: Annotated[str, Form()] = "",
     audio_language: Annotated[str, Form()] = "",
+    auto_download: Annotated[str, Form()] = "future",
 ) -> HTMLResponse:
     conn = _sonarr(session)
     if conn is None:
@@ -558,6 +561,7 @@ async def subscribe_submit(
             True,
             video_limit,
             audio_language,
+            auto_download,
         )
         sub = await create_subscription(session, arr_factory, body)
     except Exception as exc:  # validation / 409 / 502: show it on the form
@@ -690,10 +694,21 @@ async def subscription_scan(
 
 @router.post("/subscriptions/{subscription_id}/download")
 async def subscription_download(
-    request: Request, subscription_id: int, session: DbSession, deps: RunnerDepsDep
+    request: Request,
+    subscription_id: int,
+    session: DbSession,
+    deps: RunnerDepsDep,
+    episode_id: Annotated[list[int] | None, Form()] = None,
+    all: Annotated[str, Form()] = "",
+    selected: Annotated[str, Form()] = "",
 ) -> HTMLResponse:
-    """Download = a real scan: every match becomes a job."""
-    report = await run_scan(deps, subscription_id, dry_run=False)
+    """Download = a manual scan: every current match, or only the ticked episodes,
+    whatever the auto-download policy says."""
+    ids = None if all or not selected else set(episode_id or [])
+    if ids is not None and not ids:
+        report = await run_scan(deps, subscription_id, dry_run=True)
+        return _preview_response(request, session, report, "Nothing ticked.")
+    report = await run_scan(deps, subscription_id, dry_run=False, manual=True, episode_ids=ids)
     notice = None
     if not report.error:
         n = len(report.created_job_ids)
@@ -763,6 +778,7 @@ async def subscription_edit(
     enabled: Annotated[str | None, Form()] = None,
     video_limit: Annotated[str, Form()] = "",
     audio_language: Annotated[str, Form()] = "",
+    auto_download: Annotated[str, Form()] = "future",
 ) -> HTMLResponse:
     sub = session.get(Subscription, subscription_id)
     if sub is None:
@@ -780,6 +796,7 @@ async def subscription_edit(
             enabled is not None,
             video_limit,
             audio_language,
+            auto_download,
         )
         await update_subscription(session, arr_factory, subscription_id, body)
     except Exception as exc:
