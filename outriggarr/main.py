@@ -17,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 
 from outriggarr import __version__
 from outriggarr.api.connections import router as connections_router
+from outriggarr.api.dates import router as dates_router
 from outriggarr.api.health import router as health_router
 from outriggarr.api.jobs import router as jobs_router
 from outriggarr.api.library import router as library_router
@@ -118,6 +119,7 @@ def create_app(
     app.include_router(jobs_router)
     app.include_router(library_router)
     app.include_router(matches_router)
+    app.include_router(dates_router)
     app.include_router(subscriptions_router)
     app.include_router(settings_router)
     app.include_router(pages_router)

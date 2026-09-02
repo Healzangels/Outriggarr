@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Form, HTTPException, Query, Request
+from fastapi import APIRouter, Form, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
@@ -21,6 +21,8 @@ from outriggarr.api.connections import (
     test_connection,
     update_connection,
 )
+from outriggarr.api.dates import progress_map as date_progress_map
+from outriggarr.api.dates import start_date_fetch
 from outriggarr.api.deps import ArrFactoryDep, DbSession, RunnerDepsDep
 from outriggarr.api.health import staging_writable
 from outriggarr.api.jobs import (
@@ -601,6 +603,23 @@ def subscription_page(request: Request, subscription_id: int, session: DbSession
     )
 
 
+def _date_fetch_context(request: Request, sub: Subscription, report=None) -> dict:
+    p = date_progress_map(request.app).get(sub.id)
+    show = p is not None and (p.running or (p.finished_at is not None and not p.reported))
+    if show and p is not None and not p.running:
+        p.reported = True  # the finished summary reads like a notice: once
+    undated = (
+        sum(1 for v in report.videos if not v.get("upload_date") and v["title"] != v["id"])
+        if report is not None
+        else None
+    )
+    return {
+        "date_progress": p,
+        "date_progress_text": p.summary() if show and p else "",
+        "undated": undated,
+    }
+
+
 def _preview_response(request: Request, session: DbSession, report, notice: str | None = None):
     sub = session.get(Subscription, report.subscription_id)
     # "this source may not carry the series" is only a fair reading for a subscription
@@ -611,7 +630,38 @@ def _preview_response(request: Request, session: DbSession, report, notice: str 
     return templates.TemplateResponse(
         request,
         "partials/preview.html",
-        {"sub": sub, "report": report, "notice": notice, "has_history": has_history},
+        {
+            "sub": sub,
+            "report": report,
+            "notice": notice,
+            "has_history": has_history,
+            **_date_fetch_context(request, sub, report),
+        },
+    )
+
+
+@router.post("/subscriptions/{subscription_id}/dates")
+async def subscription_fetch_dates(
+    request: Request, subscription_id: int, session: DbSession
+) -> HTMLResponse:
+    sub = session.get(Subscription, subscription_id)
+    if sub is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "subscription not found")
+    start_date_fetch(request.app, subscription_id)
+    return templates.TemplateResponse(
+        request, "partials/date_fetch.html", {"sub": sub, **_date_fetch_context(request, sub)}
+    )
+
+
+@router.get("/subscriptions/{subscription_id}/dates/status")
+async def subscription_fetch_dates_status(
+    request: Request, subscription_id: int, session: DbSession
+) -> HTMLResponse:
+    sub = session.get(Subscription, subscription_id)
+    if sub is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "subscription not found")
+    return templates.TemplateResponse(
+        request, "partials/date_fetch.html", {"sub": sub, **_date_fetch_context(request, sub)}
     )
 
 

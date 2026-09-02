@@ -1016,3 +1016,94 @@ def test_subscribe_form_defaults_to_future_and_preview_downloads_selected(
     )
     assert "Queued 1 job(s)." in r.text
     assert [j["episode_ids"] for j in client.get("/api/jobs").json()] == [[11]]
+
+
+def test_fetch_upload_dates_runs_in_the_background_and_caches(
+    client: TestClient, monkeypatch
+) -> None:
+    import time
+    from datetime import UTC, datetime, timedelta
+
+    from outriggarr.worker import scheduler
+
+    monkeypatch.setattr(scheduler, "DATE_FETCH_LIMIT", 0)  # the scan's own trickle: off
+
+    from outriggarr.arr.base import EpisodeRef, SeriesRef
+    from outriggarr.db.models import VideoMeta
+    from outriggarr.source import VideoRef
+    from tests.fakes import FakeArrClient
+
+    now = datetime.now(UTC)
+    client.app.state.arr_factory.by_url["http://sonarr-host:1234"] = FakeArrClient(
+        series_list=[SeriesRef(5, "Show", 2015, 1, True)],
+        episodes_by_series={
+            5: [EpisodeRef(11, 30, 6, "Nothing alike", False, True, now - timedelta(days=400))]
+        },
+    )
+    source = client.app.state.source
+    source.recent = [
+        VideoRef("a", "Retitled one", "https://y/a", 100, 1, None),
+        VideoRef("b", "Another", "https://y/b", 100, 2, None),
+        VideoRef("c", "Gone", "https://y/c", 100, 3, None),
+        VideoRef("d", "d", "https://y/d", None, 4, None),  # unavailable: never fetched
+    ]
+    source.infos = {
+        "https://y/a": VideoRef("a", "Retitled one", "https://y/a", 100, 1, "20160218"),
+        "https://y/b": VideoRef("b", "Another", "https://y/b", 100, 2, None),
+    }
+    client.post("/api/connections", json=SONARR)
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={
+            "connection_id": 1,
+            "series_id": 5,
+            "sources": ["https://www.youtube.com/@x"],
+            "strategies": ["title", "date"],
+        },
+    ).json()["id"]
+    prev = client.get(f"/subscriptions/{sub_id}/preview").text
+    assert "Fetch upload dates" in prev and "3 undated" in prev, "unavailable entries do not count"
+    fetched_before = len(source.fetched)
+    r = client.post(f"/subscriptions/{sub_id}/dates")
+    assert r.status_code == 200 and f'hx-get="/subscriptions/{sub_id}/dates/status"' in r.text
+    for _ in range(100):
+        st = client.get(f"/api/subscriptions/{sub_id}/dates").json()
+        if not st["running"]:
+            break
+        time.sleep(0.05)
+    assert st["failure"] is None and (
+        st["total"],
+        st["dated"],
+        st["unknown"],
+        st["error_count"],
+    ) == (3, 1, 1, 1), st
+    assert "Fetched dates for 1 of 3 videos (1 carry none); 1 could not be fetched" in st["summary"]
+    assert len(source.fetched) - fetched_before == 3, "the scan's own trickle did not run again"
+    with client.app.state.session_factory() as s:
+        rows = {m.video_id: m.upload_date for m in s.query(VideoMeta).all()}
+    assert rows == {"a": "20160218", "b": None, "c": None}
+    status_html = client.get(f"/subscriptions/{sub_id}/dates/status").text
+    assert "Fetched dates for 1 of 3" in status_html and "every 3s" not in status_html
+    assert "Fetched dates" not in client.get(f"/subscriptions/{sub_id}/dates/status").text, (
+        "shown once"
+    )
+    # the second start is a no-op for the already-known ones: nothing left to fetch
+    client.post(f"/api/subscriptions/{sub_id}/dates")
+    for _ in range(100):
+        st = client.get(f"/api/subscriptions/{sub_id}/dates").json()
+        if not st["running"]:
+            break
+        time.sleep(0.05)
+    assert st["total"] == 0 and "already has its date" in st["summary"]
+    assert client.post("/api/subscriptions/999/dates").status_code == 404
+    # the button is not offered when the date strategy is off
+    client.put(
+        f"/api/subscriptions/{sub_id}",
+        json={
+            "connection_id": 1,
+            "series_id": 5,
+            "sources": ["https://www.youtube.com/@x"],
+            "strategies": ["title"],
+        },
+    )
+    assert "Fetch upload dates" not in client.get(f"/subscriptions/{sub_id}/preview").text

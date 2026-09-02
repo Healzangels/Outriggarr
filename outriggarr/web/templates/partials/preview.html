@@ -16,6 +16,7 @@
   </span>
 </div>
 {% if notice %}<p class="notice" role="status" aria-live="polite">{{ notice }}</p>{% endif %}
+{% include "partials/date_fetch.html" %}
 {% if report.error %}<p class="notice bad">Scan failed: {{ report.error }}</p>{% endif %}
 {# "this source may not carry the series" is only a fair reading when the subscription has never matched anything; a fully imported series with a few absent episodes looks the same to the matcher #}
 {% set nothing_seen = report.unmatched and not report.matches and not report.skipped_existing and not has_history and (report.unmatched | map(attribute="candidates") | map("dictsort") | map("map", attribute="1") | map("sum", start=[]) | map("length") | sum == 0) %}
