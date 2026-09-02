@@ -180,8 +180,14 @@ REVIEW_LIMIT = 500
 RISK_ORDER = ("date", "regex", "unknown", "contains", "exact", "override")  # riskiest first
 
 
-def _tier_from_titles(job: Job) -> str:
-    """Jobs from before matched_by was recorded: read the tier off the titles."""
+def _tier_inferred(job: Job) -> str:
+    """Jobs from before matched_by was recorded: a pin on the subscription names the
+    video outright; otherwise the titles say exact/contains; otherwise the subscription's
+    other enabled strategy is the only way it could have been paired ("unknown" only
+    when regex and date were both on)."""
+    sub = job.subscription
+    if sub is not None and any(o.video_id == job.video_id for o in sub.overrides):
+        return "override"
     label = job.target_label or ""
     want = normalise_title(label.split(" - ", 1)[1] if " - " in label else "")
     have = normalise_title(job.video_title or "")
@@ -189,15 +195,17 @@ def _tier_from_titles(job: Job) -> str:
         return "exact"
     if want and f" {want} " in f" {have} ":
         return "contains"
-    return "unknown"
+    others = [s for s in (sub.strategies if sub is not None else []) if s in ("regex", "date")]
+    return others[0] if len(others) == 1 else "unknown"
 
 
 def review_entry(job: Job) -> dict:
-    tier = job.matched_by or _tier_from_titles(job)
+    tier = job.matched_by or _tier_inferred(job)
     reason = length_mismatch(job.target_runtime, job.video_duration)
     return {
         "job": job,
         "tier": tier,
+        "inferred": job.matched_by is None,
         "reason": reason,
         "video_length": mmss(job.video_duration) if job.video_duration else None,
         "needs_look": tier not in ("exact", "override") or reason is not None,
@@ -212,7 +220,7 @@ def matches_page(
     jobs = session.scalars(
         select(Job)
         .where(Job.subscription_id.is_not(None))
-        .options(selectinload(Job.subscription))
+        .options(selectinload(Job.subscription).selectinload(Subscription.overrides))
         .order_by(Job.created_at.desc(), Job.id.desc())
         .limit(REVIEW_LIMIT)
     ).all()

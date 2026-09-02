@@ -616,7 +616,7 @@ def test_preview_holds_a_length_mismatch_and_pin_releases_it(client: TestClient)
     assert (job["matched_by"], job["video_duration"], job["target_runtime"]) == ("override", 90, 25)
     page = client.get("/matches?view=review").text
     assert "Six Spicy Wings" in page and "1m30s vs 25 min ✗" in page, "flagged even though pinned"
-    assert '<span class="chip ok">override</span>' in page
+    assert 'Recorded by the scheduler when it paired them">override</span>' in page
 
 
 def test_matches_page_tiers_and_fallback_for_old_jobs(client: TestClient) -> None:
@@ -630,7 +630,7 @@ def test_matches_page_tiers_and_fallback_for_old_jobs(client: TestClient) -> Non
     ).json()["id"]
     client.post(f"/subscriptions/{sub_id}/download")
     page = client.get("/matches").text
-    assert "Six Spicy Wings" in page and '<span class="chip warn">contains</span>' in page
+    assert "Six Spicy Wings" in page and 'paired them">contains</span>' in page
     assert f'href="/subscriptions/{sub_id}"' in page
     assert "needs a look" in page and "Matches" in client.get("/activity").text  # nav link
     old = Job(
@@ -646,4 +646,33 @@ def test_matches_page_tiers_and_fallback_for_old_jobs(client: TestClient) -> Non
     old.video_title = "Seven Spicy Wings | Hot Ones"
     assert review_entry(old)["tier"] == "contains" and review_entry(old)["needs_look"] is True
     old.video_title = "Something"
-    assert review_entry(old)["tier"] == "unknown"
+    assert review_entry(old)["tier"] == "unknown", "no subscription to consult"
+    from outriggarr.db.models import Override, Subscription
+
+    old.subscription = Subscription(strategies=["title", "date"], overrides=[])
+    assert review_entry(old)["tier"] == "date", "the only other enabled strategy"
+    old.subscription.strategies = ["title", "regex", "date"]
+    assert review_entry(old)["tier"] == "unknown", "could have been either"
+    old.subscription.overrides = [Override(video_id="v", season=30, episode=7)]
+    assert review_entry(old)["tier"] == "override" and review_entry(old)["inferred"] is True
+    # a job from before the tier was recorded shows its inferred tier with a "?"
+    with client.app.state.session_factory() as s:
+        sub = s.get(Subscription, sub_id)
+        sub.strategies = ["title", "date"]
+        s.add(
+            Job(
+                connection_id=1,
+                subscription_id=sub_id,
+                target_kind=TargetKind.episode,
+                series_id=5,
+                episode_ids=[12],
+                target_key="episode:5:12",
+                video_id="q",
+                video_url="https://y/q",
+                video_title="Totally different upload",
+                target_label="Hot Ones S30E07 - Seven Spicy Wings",
+            )
+        )
+        s.commit()
+    page = client.get("/matches?view=all").text
+    assert "date?" in page and "Worked out afterwards" in page

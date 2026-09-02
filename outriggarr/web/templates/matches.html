@@ -20,7 +20,7 @@
     <tr>
       <td>{{ job.target_label }}<span class="two-line muted">{{ job.subscription.title if job.subscription else "" }}</span></td>
       <td><a href="{{ job.video_url }}" target="_blank" rel="noopener" class="truncate" title="{{ job.video_title }}">{{ job.video_title }}</a></td>
-      <td><span class="chip {{ 'ok' if e.tier in ('exact', 'override') else 'warn' }}">{{ e.tier }}</span></td>
+      <td><span class="chip {{ 'ok' if e.tier in ('exact', 'override') else 'warn' }}" title="{% if e.inferred %}Worked out afterwards from the titles, the subscription's strategies and its pins: this job predates Outriggarr recording how it matched{% if e.tier == 'unknown' %}, and both regex and date were on, so it could have been either{% endif %}{% else %}Recorded by the scheduler when it paired them{% endif %}">{{ e.tier }}{% if e.inferred %}?{% endif %}</span></td>
       <td class="{{ 'warn' if e.reason else 'muted' }}" title="{{ e.reason or '' }}">{% if job.video_duration and job.target_runtime %}{{ e.video_length }} vs {{ job.target_runtime }} min{% if e.reason %} ✗{% endif %}{% elif job.video_duration %}{{ e.video_length }}{% else %}–{% endif %}</td>
       <td><span class="badge badge-{{ job.status.value }}">{{ job.status.value }}</span></td>
       <td class="muted">{{ (job.finished_at or job.created_at) | ago }}</td>
