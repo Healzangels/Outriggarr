@@ -23,7 +23,7 @@ Sonarr and Radarr stay the management platforms: they decide what is wanted (mon
 
 **Later (explicitly not v1)**
 
-- Radarr auto-matching; multiple *arr instances; built-in auth; a public API key for automation; Torznab/download-client emulation so grabs show in Sonarr's queue; quality upgrades (cutoff-unmet).
+- Radarr auto-matching (decided 2026-09-02 to stay here: films Radarr wants are rarely on YouTube legitimately, a search-per-movie returns trailers, reviews and fan cuts, and a wrong import makes Radarr stop looking for the real film; Grab covers the real case. If it ever returns it is the channel-based shape — a channel's uploads against the whole wanted list, exact title only, a tight runtime check against TMDB, held for approval by default — never a YouTube search); multiple *arr instances; built-in auth; a public API key for automation; Torznab/download-client emulation so grabs show in Sonarr's queue; quality upgrades (cutoff-unmet).
 
 **Pulled forward (2026-09-02, owner's call): notifications via Apprise** — only for Outriggarr's own events, which nothing else can report: a job failing for good (retries exhausted, import rejected, internal error), a subscription scan error (announced once per new error text, not every interval), and optionally a job import (off by default because the *arr announces it). URLs and toggles live in Settings → Notifications with a *Send test* button; delivery never affects a job.
 
