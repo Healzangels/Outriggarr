@@ -1,3 +1,4 @@
+import pytest
 from fastapi.testclient import TestClient
 
 from outriggarr import __version__
@@ -50,3 +51,32 @@ def test_health_degrades_when_ffmpeg_or_staging_or_worker_is_gone(
     assert r.json()["worker_alive"] is False and r.json()["scheduler_alive"] is None
     client.app.state.background_tasks = {}
     loop.close()
+
+
+def test_staging_probe_logs_each_flip_with_the_reason(tmp_path, caplog, monkeypatch) -> None:
+    import logging
+    import os
+
+    from outriggarr.api import health
+
+    if os.geteuid() == 0:
+        pytest.skip("root can write to a read-only directory")
+    monkeypatch.setattr(health, "_last_staging_state", None)
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    with caplog.at_level(logging.INFO, logger="outriggarr.api.health"):
+        assert health.staging_writable(staging) is True
+        staging.chmod(0o555)
+        try:
+            assert health.staging_writable(staging) is False
+            assert health.staging_writable(staging) is False  # same answer: no second line
+        finally:
+            staging.chmod(0o755)
+        staging.rmdir()
+        assert health.staging_writable(staging) is False
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1 and "NOT writable" in warnings[0], warnings
+    assert "mode=dr-xr-xr-x" in warnings[0] and f"uid {os.geteuid()}" in warnings[0]
+    assert "is writable" in caplog.records[0].getMessage()
+    # the directory vanishing is a different reason, but the answer did not change: silent
+    assert sum("NOT writable" in r.getMessage() for r in caplog.records) == 1

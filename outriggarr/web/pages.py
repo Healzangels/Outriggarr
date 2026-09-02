@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import shutil
 from datetime import UTC, datetime
 from pathlib import Path
@@ -23,6 +22,7 @@ from outriggarr.api.connections import (
     update_connection,
 )
 from outriggarr.api.deps import ArrFactoryDep, DbSession, RunnerDepsDep
+from outriggarr.api.health import staging_writable
 from outriggarr.api.jobs import CANCELLABLE, DELETABLE, RETRYABLE, cancel_job, delete_job, retry_job
 from outriggarr.api.library import library_cache
 from outriggarr.api.settings import update_settings
@@ -85,7 +85,7 @@ def _tooling(request: Request) -> dict:
         "yt_dlp": ytdlp_version,
         "js_runtime": next((r for r in ("deno", "node", "bun") if shutil.which(r)), None),
         "ffmpeg": shutil.which("ffmpeg") is not None,
-        "staging_writable": staging.is_dir() and os.access(staging, os.W_OK),
+        "staging_writable": staging_writable(staging),
     }
 
 

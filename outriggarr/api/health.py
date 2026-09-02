@@ -1,12 +1,42 @@
+import logging
 import os
 import shutil
+import stat
+from pathlib import Path
 
 from fastapi import APIRouter, Request, Response
 from sqlalchemy import text
 
 from outriggarr import __version__
 
+log = logging.getLogger(__name__)
 router = APIRouter()
+
+_last_staging_state: bool | None = None
+
+
+def staging_writable(staging: Path) -> bool:
+    """The one probe behind /health and the page footer. Every change of answer is
+    logged with what stat saw (or the OS error), so a red "NOT writable" footer has a
+    reason in the container log: a re-created bind source owned by root, a chmod, or
+    the mount itself answering with an error for a moment."""
+    global _last_staging_state
+    try:
+        st = staging.stat()
+        ok = stat.S_ISDIR(st.st_mode) and os.access(staging, os.W_OK)
+        detail = f"mode={stat.filemode(st.st_mode)} owner={st.st_uid}:{st.st_gid}"
+    except OSError as exc:
+        ok, detail = False, f"{type(exc).__name__}: {exc}"
+    if ok != _last_staging_state:
+        (log.info if ok else log.warning)(
+            "staging %s is %swritable as uid %d (%s)",
+            staging,
+            "" if ok else "NOT ",
+            os.geteuid(),
+            detail,
+        )
+        _last_staging_state = ok
+    return ok
 
 
 @router.get("/health")
@@ -27,7 +57,7 @@ def health(request: Request, response: Response) -> dict[str, object]:
         "js_runtime": next((r for r in ("deno", "node", "bun") if shutil.which(r)), None),
         "ffmpeg": shutil.which("ffmpeg") is not None,
         # False means downloads will fail: fix the mount's ownership (see entrypoint.sh)
-        "staging_writable": staging.is_dir() and os.access(staging, os.W_OK),
+        "staging_writable": staging_writable(staging),
         "worker_alive": liveness.get("worker"),
         "scheduler_alive": liveness.get("scheduler"),
     }
