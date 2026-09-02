@@ -72,7 +72,7 @@ def make_sub(session_factory, **over) -> tuple[int, int]:
             series_id=5,
             tvdb_id=1,
             title="Show",
-            source_url="https://www.youtube.com/@show",
+            sources=["https://www.youtube.com/@show"],
             strategies=["title"],
         )
         for k, v in over.items():
@@ -236,7 +236,7 @@ def test_due_subscription_ids(session_factory) -> None:
             connection=conn,
             series_id=6,
             title="F",
-            source_url="https://x",
+            sources=["https://x"],
             strategies=[],
             last_scan_at=NOW - timedelta(minutes=5),
         )
@@ -244,7 +244,7 @@ def test_due_subscription_ids(session_factory) -> None:
             connection=conn,
             series_id=7,
             title="S",
-            source_url="https://x",
+            sources=["https://x"],
             strategies=[],
             last_scan_at=NOW - timedelta(minutes=45),
         )
@@ -252,7 +252,7 @@ def test_due_subscription_ids(session_factory) -> None:
             connection=conn,
             series_id=8,
             title="O",
-            source_url="https://x",
+            sources=["https://x"],
             strategies=[],
             enabled=False,
         )
@@ -629,3 +629,27 @@ async def test_length_mismatch_is_held_not_queued_and_jobs_carry_the_evidence(
             100,
             None,
         )
+
+
+async def test_every_source_is_listed_and_videos_are_pooled_once(deps, session_factory) -> None:
+    from outriggarr.source import SourceError
+
+    sub_id, conn_id = make_sub(
+        session_factory, sources=["https://www.youtube.com/@show", "https://www.youtube.com/@extra"]
+    )
+    fake_client(deps, conn_id)
+    # the fake lists the same videos for any URL: a video on both sources counts once
+    report = await scan_subscription(deps, sub_id)
+    assert report.error is None
+    assert deps.source.listed == [
+        ("https://www.youtube.com/@show", 50),
+        ("https://www.youtube.com/@extra", 50),
+    ]
+    assert report.sources == 2 and len(report.videos) == len(RECENT)
+    assert len(report.matches) == 2 and report.summary()["created"] == 2
+
+    # one source failing fails the scan, names the source, and queues nothing
+    deps.source.recent_error = SourceError("ERROR: [youtube:tab] @x: This channel does not exist")
+    r2 = await scan_subscription(deps, sub_id)
+    assert r2.error.startswith("https://www.youtube.com/@show: ERROR: [youtube:tab]")
+    assert r2.created_job_ids == [] and r2.matches == []

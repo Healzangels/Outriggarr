@@ -40,6 +40,7 @@ class ScanReport:
     subscription_id: int
     scanned_at: datetime
     dry_run: bool
+    sources: int = 0  # how many sources the listing came from
     videos: list[dict] = field(default_factory=list)
     matches: list[dict] = field(default_factory=list)
     unmatched: list[dict] = field(default_factory=list)
@@ -236,7 +237,24 @@ async def _scan(
             )
 
     limit = sub.video_limit or int(get_setting(session, "scan_video_limit"))
-    refs = await asyncio.to_thread(deps.source.list_recent, sub.source_url, limit)
+    # Every source is listed with the same depth and the videos are matched as one pool
+    # (a video on both a channel and a playlist counts once). One source failing fails
+    # the scan: matching against a partial pool could turn an ambiguous pair into a
+    # confident wrong match.
+    refs: list[VideoRef] = []
+    seen_ids: set[str] = set()
+    for src in sub.sources:
+        try:
+            listed = await asyncio.to_thread(deps.source.list_recent, src, limit)
+        except SourceError as exc:
+            if len(sub.sources) == 1:
+                raise  # verbatim, as always
+            raise SourceError(f"{src}: {exc}") from exc  # say which source
+        for ref in listed:
+            if ref.id not in seen_ids:
+                seen_ids.add(ref.id)
+                refs.append(ref)
+    report.sources = len(sub.sources)
     taken = live_video_ids_for_series(session, conn.id, sub.series_id)
     videos = [_video(v) for v in refs if v.id not in taken]
     _apply_cached_dates(session, videos)

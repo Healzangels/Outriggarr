@@ -4,7 +4,7 @@
 <div class="page-header">
   <div>
     <h2>{{ sub.title or ("series " ~ sub.series_id) }} {% if not sub.enabled %}<span class="badge badge-off">disabled</span>{% endif %}</h2>
-    <p class="sub"><a href="{{ sub.source_url }}" target="_blank" rel="noopener" class="truncate" title="{{ sub.source_url }}">{{ sub.source_url | replace("https://www.youtube.com/", "youtube.com/") }}</a></p>
+    <p class="sub">{% for u in sub.sources %}<a href="{{ u }}" target="_blank" rel="noopener" class="truncate" title="{{ u }}">{{ u | replace("https://www.youtube.com/", "youtube.com/") }}</a>{% if not loop.last %} <span class="muted">·</span> {% endif %}{% endfor %}</p>
   </div>
   <div class="chips">
     <span class="chip" title="Videos you pin to an episode on this page always win">your pins</span>{% for st in sub.strategies %}<span class="chip">{{ st }}</span>{% endfor %}

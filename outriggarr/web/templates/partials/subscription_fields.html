@@ -1,5 +1,5 @@
-<label>Source URL <span class="hint">A channel (its newest uploads are scanned) or a playlist.</span>
-  <input type="url" name="source_url" required value="{{ sub.source_url if sub else '' }}" placeholder="https://www.youtube.com/@channel">
+<label>Source URLs <span class="hint">One per line: a channel (its newest uploads are scanned) or a playlist. Add another channel when some episodes are posted elsewhere; every scan lists all of them and matches against the lot.</span>
+  <textarea name="sources" rows="2" required placeholder="https://www.youtube.com/@channel">{{ sub.sources | join("\n") if sub else '' }}</textarea>
 </label>
 <fieldset>
   <legend>Automatic matching strategies <span class="muted">(videos you pin to an episode by hand always win, before any of these)</span></legend>

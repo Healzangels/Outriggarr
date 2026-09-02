@@ -110,7 +110,9 @@ class Subscription(Base):
     series_id: Mapped[int] = mapped_column(Integer, nullable=False)
     tvdb_id: Mapped[int | None] = mapped_column(Integer)
     title: Mapped[str] = mapped_column(String(300), nullable=False, default="")
-    source_url: Mapped[str] = mapped_column(String(1000), nullable=False)
+    # One or more channels/playlists; a scan lists every one and matches against the
+    # union, so a series whose episodes are split across channels needs one subscription.
+    sources: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     format: Mapped[str | None] = mapped_column(String(500))  # None → global default
     # Newest videos listed per scan; None → the global scan_video_limit. A channel whose
     # episodes sit behind hundreds of newer uploads needs a deeper listing than the rest.

@@ -212,8 +212,49 @@ def test_migrations_are_transactional_and_downgrade_keeps_dedupe(settings) -> No
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
     assert "ux_job_live_target_video" in names, "the partial index survives a failed downgrade"
     assert not [t for t in tables if t.startswith("_alembic_tmp")], "no half-rebuilt table left"
-    assert version == "0004", "0008→…→0004 applied; the failing 0004→0003 step rolled back"
+    assert version == "0004", "0009→…→0004 applied; the failing 0004→0003 step rolled back"
     command.upgrade(cfg, "head")  # and the DB is still usable: back to head cleanly
     with engine.connect() as conn:
-        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0008"
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0009"
+    engine.dispose()
+
+
+def test_sources_migration_backfills_from_source_url(settings) -> None:
+    import json
+
+    from alembic import command
+    from sqlalchemy import text
+
+    from outriggarr.db.session import alembic_config, make_engine
+
+    settings.config_dir.mkdir(parents=True)
+    cfg = alembic_config(settings.database_url)
+    command.upgrade(cfg, "0008")
+    engine = make_engine(settings.database_url)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO connection (kind, name, url, api_key, staging_path_remote, enabled)"
+                " VALUES ('sonarr', 's', 'http://s', 'k', '/data/x', 1)"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO subscription (connection_id, series_id, title, source_url, strategies,"
+                " date_tolerance_days, date_offset_days, enabled)"
+                " VALUES (1, 5, 'Show', 'https://www.youtube.com/@show', '[\"title\"]', 2, 0, 1)"
+            )
+        )
+    command.upgrade(cfg, "head")
+    with engine.begin() as conn:
+        raw = conn.execute(text("SELECT sources FROM subscription")).scalar()
+        assert json.loads(raw) == ["https://www.youtube.com/@show"]
+        cols = [r[1] for r in conn.execute(text("PRAGMA table_info(subscription)"))]
+        assert "source_url" not in cols and "sources" in cols
+    command.downgrade(cfg, "0008")
+    with engine.begin() as conn:
+        assert (
+            conn.execute(text("SELECT source_url FROM subscription")).scalar()
+            == "https://www.youtube.com/@show"
+        )
     engine.dispose()

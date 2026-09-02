@@ -27,7 +27,7 @@
     <tr>
       <td><a href="/subscriptions/{{ s.id }}">{{ s.title or ("series " ~ s.series_id) }}</a>
         {% if not s.enabled %}<span class="badge badge-off">disabled</span>{% endif %}</td>
-      <td><a href="{{ s.source_url }}" target="_blank" rel="noopener" class="truncate" title="{{ s.source_url }}">{{ s.source_url | replace("https://www.youtube.com/", "") | replace("https://youtube.com/", "") }}</a></td>
+      <td>{% set u = s.sources[0] if s.sources else "" %}<a href="{{ u }}" target="_blank" rel="noopener" class="truncate" title="{{ s.sources | join('\n') }}">{{ u | replace("https://www.youtube.com/", "") | replace("https://youtube.com/", "") }}</a>{% if s.sources | length > 1 %} <span class="muted">+{{ s.sources | length - 1 }} more</span>{% endif %}</td>
       <td><span class="chips"><span class="chip">pins</span>{% for st in s.strategies %}<span class="chip">{{ st }}</span>{% endfor %}</span></td>
       <td>{% if s.last_scan_at %}<span title="{{ s.last_scan_at.strftime('%Y-%m-%d %H:%M') }}Z">{{ s.last_scan_at | ago }}</span>
         {% if s.last_scan_result %}<span class="two-line">{% if s.last_scan_result.error %}<span class="bad">{{ s.last_scan_result.error | truncate(70) }}</span>{% else %}<span class="chips"><span class="chip">{{ s.last_scan_result.matched }} matched</span><span class="chip {{ 'ok' if s.last_scan_result.created else '' }}">{{ s.last_scan_result.created }} queued</span><span class="chip {{ 'warn' if s.last_scan_result.unmatched else '' }}">{{ s.last_scan_result.unmatched }} unmatched</span></span>{% endif %}</span>{% endif %}

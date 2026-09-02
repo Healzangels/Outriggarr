@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, status
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -25,13 +25,16 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/subscriptions", tags=["subscriptions"])
 
 
+MAX_SOURCES = 10  # channels/playlists per subscription; each is listed on every scan
 MAX_VIDEO_LIMIT = 5000  # a flat listing of ~1200 entries takes ~13 s; this bounds a scan
 
 
 class SubscriptionIn(BaseModel):
     connection_id: int
     series_id: int
-    source_url: str = Field(min_length=1, max_length=1000)
+    sources: list[str] = Field(default_factory=list)
+    # legacy single-URL form of `sources`; folded in by the validator, never stored
+    source_url: str | None = Field(default=None, exclude=True)
     format: str | None = Field(default=None, max_length=500)
     video_limit: int | None = Field(default=None, ge=1, le=MAX_VIDEO_LIMIT)
     strategies: list[str] = Field(default_factory=lambda: ["title"])
@@ -40,13 +43,25 @@ class SubscriptionIn(BaseModel):
     title_regex: str | None = Field(default=None, max_length=500)
     enabled: bool = True
 
-    @field_validator("source_url")
-    @classmethod
-    def _url(cls, v: str) -> str:
-        v = v.strip()
-        if not (v.startswith("http://") or v.startswith("https://")):
-            raise ValueError("source_url must start with http:// or https://")
-        return v
+    @model_validator(mode="after")
+    def _sources(self) -> SubscriptionIn:
+        cleaned: list[str] = []
+        for raw in [*self.sources, *([self.source_url] if self.source_url else [])]:
+            url = raw.strip()
+            if not url:
+                continue
+            if not (url.startswith("http://") or url.startswith("https://")):
+                raise ValueError(f"source {url!r} must start with http:// or https://")
+            if len(url) > 1000:
+                raise ValueError("a source URL may be at most 1000 characters")
+            if url not in cleaned:
+                cleaned.append(url)
+        if not cleaned:
+            raise ValueError("at least one source URL is needed")
+        if len(cleaned) > MAX_SOURCES:
+            raise ValueError(f"at most {MAX_SOURCES} sources per subscription")
+        self.sources, self.source_url = cleaned, None
+        return self
 
     @field_validator("strategies")
     @classmethod

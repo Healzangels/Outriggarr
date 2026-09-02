@@ -149,7 +149,7 @@ def test_series_search_rows_and_subscribe_flow(client: TestClient) -> None:
     r = client.post(
         "/series/5/subscribe",
         data={
-            "source_url": "https://www.youtube.com/@hotones",
+            "sources": "https://www.youtube.com/@hotones",
             "strategies": ["title"],
             "date_tolerance_days": "2",
             "date_offset_days": "0",
@@ -164,7 +164,7 @@ def test_series_search_rows_and_subscribe_flow(client: TestClient) -> None:
         == "/subscriptions/1"
     )
     # bad form shows the error on the page
-    r = client.post("/series/6/subscribe", data={"source_url": "nope"})
+    r = client.post("/series/6/subscribe", data={"sources": "nope"})
     assert r.status_code == 400 and "http://" in r.text
 
 
@@ -211,7 +211,7 @@ def test_subscription_page_preview_scan_and_override(client: TestClient) -> None
     r = client.post(
         f"/subscriptions/{sub_id}/edit",
         data={
-            "source_url": "https://www.youtube.com/@other",
+            "sources": "https://www.youtube.com/@other",
             "strategies": ["title", "date"],
             "date_tolerance_days": "3",
             "date_offset_days": "1",
@@ -444,7 +444,7 @@ def test_subscribe_form_with_no_strategies_is_pins_only(client: TestClient) -> N
     _seed_series(client)
     r = client.post(
         "/series/5/subscribe",
-        data={"source_url": "https://www.youtube.com/@hotones"},
+        data={"sources": "https://www.youtube.com/@hotones"},
         follow_redirects=False,
     )
     assert r.status_code == 303
@@ -544,7 +544,7 @@ def test_subscription_form_video_limit_and_picker_datalist(client: TestClient) -
     page = client.get(f"/subscriptions/{sub_id}").text
     assert 'name="video_limit"' in page and "global setting (50)" in page
     base = {
-        "source_url": "https://www.youtube.com/@hotones",
+        "sources": "https://www.youtube.com/@hotones",
         "strategies": ["title"],
         "date_tolerance_days": "2",
         "date_offset_days": "0",
@@ -676,3 +676,37 @@ def test_matches_page_tiers_and_fallback_for_old_jobs(client: TestClient) -> Non
         s.commit()
     page = client.get("/matches?view=all").text
     assert "date?" in page and "Worked out afterwards" in page
+
+
+def test_subscription_form_takes_one_source_per_line(client: TestClient) -> None:
+    _seed_series(client)
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={"connection_id": 1, "series_id": 5, "sources": ["https://www.youtube.com/@hotones"]},
+    ).json()["id"]
+    base = {
+        "strategies": ["title"],
+        "date_tolerance_days": "2",
+        "date_offset_days": "0",
+        "title_regex": "",
+        "format": "",
+    }
+    r = client.post(
+        f"/subscriptions/{sub_id}/edit",
+        data={
+            **base,
+            "sources": "https://www.youtube.com/@hotones\n\n https://www.youtube.com/@extra \n",
+        },
+        follow_redirects=False,
+    )
+    assert r.status_code == 303, r.text
+    assert client.get(f"/api/subscriptions/{sub_id}").json()["sources"] == [
+        "https://www.youtube.com/@hotones",
+        "https://www.youtube.com/@extra",
+    ]
+    page = client.get(f"/subscriptions/{sub_id}").text
+    assert 'youtube.com/@hotones</a> <span class="muted">·</span> ' in page
+    assert "@hotones\nhttps://www.youtube.com/@extra</textarea>" in page
+    assert "+1 more" in client.get("/series").text
+    prev = client.get(f"/subscriptions/{sub_id}/preview").text
+    assert "videos listed from 2 sources" in prev

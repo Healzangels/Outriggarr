@@ -242,3 +242,38 @@ def test_video_limit_round_trip_and_range(client, arr, source) -> None:
     r = client.post("/api/subscriptions", json=body(conn_id, video_limit=1200))
     assert r.status_code < 300 and r.json()["video_limit"] == 1200
     assert client.get(f"/api/subscriptions/{r.json()['id']}").json()["video_limit"] == 1200
+
+
+def test_sources_list_dedupes_validates_and_accepts_legacy_source_url(client, arr, source) -> None:
+    conn_id = seed(client, arr, source)
+    three = [
+        "https://www.youtube.com/@show",
+        " https://www.youtube.com/@show ",
+        "https://www.youtube.com/@extra",
+    ]
+    r = client.post(
+        "/api/subscriptions", json={"connection_id": conn_id, "series_id": 5, "sources": three}
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["sources"] == [
+        "https://www.youtube.com/@show",
+        "https://www.youtube.com/@extra",
+    ]
+    assert "source_url" not in r.json()
+    sid = r.json()["id"]
+    for bad in (["https://a", "ftp://b"], [], [f"https://c/{i}" for i in range(11)]):
+        r = client.put(
+            f"/api/subscriptions/{sid}",
+            json={"connection_id": conn_id, "series_id": 5, "sources": bad},
+        )
+        assert r.status_code == 422, bad
+    # the pre-list JSON shape still works
+    r = client.post(
+        "/api/subscriptions",
+        json={
+            "connection_id": conn_id,
+            "series_id": 6,
+            "source_url": "https://www.youtube.com/@legacy",
+        },
+    )
+    assert r.status_code == 201 and r.json()["sources"] == ["https://www.youtube.com/@legacy"]

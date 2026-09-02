@@ -4,7 +4,7 @@
   <button hx-post="/subscriptions/{{ sub.id }}/download" hx-target="#preview" hx-indicator="#scan-busy" {% if not queueable %}disabled{% endif %}>Download{% if queueable %} {{ queueable }} matched{% endif %}</button>
   <span id="scan-busy" class="htmx-indicator muted" aria-busy="true">working…</span>
   <span class="chips">
-    <span class="chip">{{ report.videos | length }} videos listed</span>
+    <span class="chip">{{ report.videos | length }} videos listed{% if report.sources > 1 %} from {{ report.sources }} sources{% endif %}</span>
     <span class="chip {{ 'ok' if report.matches else '' }}">{{ report.matches | length }} matched</span>
     <span class="chip {{ 'warn' if report.unmatched else '' }}">{{ report.unmatched | length }} unmatched</span>
     {% if report.held %}<span class="chip warn" title="Paired, but the video's length contradicts the episode's runtime">{{ report.held | length }} held</span>{% endif %}
