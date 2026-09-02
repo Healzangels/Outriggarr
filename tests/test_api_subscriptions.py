@@ -148,6 +148,7 @@ def test_preview_scan_and_overrides(client, arr, source) -> None:
         "Show S01E01 - One Long Title",
         "Show S01E02 - Two Long Title",
     }
+    assert {j["subscription_id"] for j in jobs} == {sub_id}
     assert client.get(f"/api/subscriptions/{sub_id}").json()["last_scan_result"]["created"] == 2
 
     assert client.delete(f"/api/subscriptions/{sub_id}/overrides/b").status_code == 204
