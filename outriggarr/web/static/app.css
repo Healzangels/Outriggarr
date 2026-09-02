@@ -72,6 +72,7 @@ progress { margin: 0; height: .5rem; }
 .tabs a { padding: .3em .8em; border-radius: var(--o-radius); text-decoration: none; color: var(--o-muted); border: 1px solid transparent; }
 .tabs a[aria-current=page] { color: var(--pico-color); border-color: var(--o-border); background: var(--o-card); }
 .tabs a .count { font-size: .8em; opacity: .8; margin-left: .35em; }
+button .count { font-size: .8em; opacity: .8; margin-left: .35em; font-weight: 400; }
 
 /* collapsible sections: one look everywhere */
 details.panel { border: 1px solid var(--o-border); border-radius: var(--o-radius); background: var(--o-card); margin-bottom: var(--o-gap); }

@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 
 from fastapi import APIRouter, Request
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from outriggarr.arr.base import ArrError
@@ -42,6 +42,7 @@ class RecheckProgress:
     started_at: datetime | None = None
     finished_at: datetime | None = None
     failure: str | None = None
+    reported: bool = False  # the finished summary has been shown once
 
     def as_dict(self) -> dict:
         d = asdict(self)
@@ -69,6 +70,20 @@ class RecheckProgress:
         if self.error_count:
             text += f" {self.error_count} could not be fetched (first: {self.first_error})."
         return text
+
+
+def unchecked_count(session: Session) -> int:
+    """Subscription jobs still missing their length evidence (and not confirmed)."""
+    return (
+        session.scalar(
+            select(func.count(Job.id)).where(
+                Job.subscription_id.is_not(None),
+                Job.reviewed_at.is_(None),
+                or_(Job.video_duration.is_(None), Job.target_runtime.is_(None)),
+            )
+        )
+        or 0
+    )
 
 
 def progress_of(app) -> RecheckProgress:

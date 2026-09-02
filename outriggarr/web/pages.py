@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import shutil
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
@@ -33,7 +33,7 @@ from outriggarr.api.jobs import (
     retry_job,
 )
 from outriggarr.api.library import library_cache
-from outriggarr.api.matches import RecheckProgress, progress_of, start_recheck
+from outriggarr.api.matches import RecheckProgress, progress_of, start_recheck, unchecked_count
 from outriggarr.api.settings import update_settings
 from outriggarr.api.subscriptions import (
     OverrideByUrlIn,
@@ -261,13 +261,12 @@ def review_entry(job: Job) -> dict:
 
 
 def _matches_context(
-    session: Session, view: str, notice: str | None = None, progress: RecheckProgress | None = None
+    session: Session,
+    view: str | None,
+    notice: str | None = None,
+    progress: RecheckProgress | None = None,
 ) -> dict:
-    view = view if view in ("review", "all") else "review"
     progress = progress or RecheckProgress()
-    recent = progress.finished_at is not None and (utcnow() - progress.finished_at) < timedelta(
-        minutes=15
-    )
     jobs = session.scalars(
         select(Job)
         .where(Job.subscription_id.is_not(None))
@@ -277,9 +276,16 @@ def _matches_context(
     ).all()
     entries = [review_entry(j) for j in jobs]
     counts = {"review": sum(1 for e in entries if e["needs_look"]), "all": len(entries)}
+    if view not in ("review", "all"):
+        # land where the work is; with nothing to look at, show everything
+        view = "review" if counts["review"] else "all"
     if view == "review":
         entries = [e for e in entries if e["needs_look"]]
     entries.sort(key=lambda e: (not e["reason"], RISK_ORDER.index(e["tier"])))  # stable
+    # the recheck summary reads like a notice: shown while it runs, then once when done
+    show_progress = progress.running or (progress.finished_at is not None and not progress.reported)
+    if show_progress and not progress.running:
+        progress.reported = True
     return {
         "entries": entries,
         "view": view,
@@ -287,26 +293,27 @@ def _matches_context(
         "total": counts[view],
         "notice": notice,
         "progress": progress,
-        "progress_text": progress.summary() if (progress.running or recent) else "",
+        "progress_text": progress.summary() if show_progress else "",
+        "unchecked": unchecked_count(session),
     }
 
 
 @router.get("/matches")
 def matches_page(
-    request: Request, session: DbSession, view: Annotated[str, Query()] = "review"
+    request: Request, session: DbSession, view: Annotated[str | None, Query()] = None
 ) -> HTMLResponse:
     ctx = _matches_context(session, view, progress=progress_of(request.app))
     return templates.TemplateResponse(request, "matches.html", ctx)
 
 
-def _matches_partial(request: Request, session: DbSession, view: str, notice: str | None):
+def _matches_partial(request: Request, session: DbSession, view: str | None, notice: str | None):
     ctx = _matches_context(session, view, notice, progress=progress_of(request.app))
     return templates.TemplateResponse(request, "partials/matches_content.html", ctx)
 
 
 @router.get("/matches/content")
 def matches_content(
-    request: Request, session: DbSession, view: Annotated[str, Query()] = "review"
+    request: Request, session: DbSession, view: Annotated[str | None, Query()] = None
 ) -> HTMLResponse:
     """The table plus the recheck status; polled while a recheck runs."""
     return _matches_partial(request, session, view, None)
@@ -314,7 +321,7 @@ def matches_content(
 
 @router.post("/matches/recheck")
 async def matches_recheck(
-    request: Request, session: DbSession, view: Annotated[str, Query()] = "review"
+    request: Request, session: DbSession, view: Annotated[str | None, Query()] = None
 ) -> HTMLResponse:
     start_recheck(request.app)
     return _matches_partial(request, session, view, None)
@@ -322,7 +329,7 @@ async def matches_recheck(
 
 @router.post("/matches/{job_id}/confirm")
 def matches_confirm(
-    request: Request, session: DbSession, job_id: int, view: Annotated[str, Query()] = "review"
+    request: Request, session: DbSession, job_id: int, view: Annotated[str | None, Query()] = None
 ) -> HTMLResponse:
     job = confirm_job(session, job_id, confirmed=True)
     return _matches_partial(request, session, view, f"Confirmed: {job.target_label}.")
@@ -330,7 +337,7 @@ def matches_confirm(
 
 @router.post("/matches/{job_id}/unconfirm")
 def matches_unconfirm(
-    request: Request, session: DbSession, job_id: int, view: Annotated[str, Query()] = "all"
+    request: Request, session: DbSession, job_id: int, view: Annotated[str | None, Query()] = None
 ) -> HTMLResponse:
     job = confirm_job(session, job_id, confirmed=False)
     return _matches_partial(request, session, view, f"Back on the list: {job.target_label}.")
@@ -338,7 +345,7 @@ def matches_unconfirm(
 
 @router.post("/matches/confirm-all")
 def matches_confirm_all(
-    request: Request, session: DbSession, view: Annotated[str, Query()] = "review"
+    request: Request, session: DbSession, view: Annotated[str | None, Query()] = None
 ) -> HTMLResponse:
     listed = [e["job"] for e in _matches_context(session, "review")["entries"]]
     now = utcnow()

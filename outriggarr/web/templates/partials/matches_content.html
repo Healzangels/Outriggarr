@@ -5,7 +5,7 @@
   {% endfor %}
 </div>
 <div class="form-actions">
-  <button class="secondary" hx-post="/matches/recheck?view={{ view }}" hx-target="#matches-content" hx-swap="outerHTML" {% if progress.running %}disabled{% endif %} title="Fetch each unchecked video's length and Sonarr's runtime for the episode; a pairing whose length agrees leaves the list by itself. Runs in the background; you can leave the page.">Recheck lengths</button>
+  <button class="secondary" hx-post="/matches/recheck?view={{ view }}" hx-target="#matches-content" hx-swap="outerHTML" {% if progress.running or not unchecked %}disabled{% endif %} title="{% if unchecked %}Fetch each unchecked video's length and Sonarr's runtime for the episode; a pairing whose length agrees leaves the list by itself. Runs in the background; you can leave the page.{% else %}Every pairing already has its length evidence{% endif %}">Recheck lengths{% if unchecked %} <span class="count">{{ unchecked }} unchecked</span>{% endif %}</button>
   {% if view == "review" and entries %}<button class="secondary outline" hx-post="/matches/confirm-all?view={{ view }}" hx-target="#matches-content" hx-swap="outerHTML" hx-confirm="Mark all {{ entries | length }} listed pairings as looked at and right?">Looks right, all {{ entries | length }}</button>{% endif %}
 </div>
 {% if progress_text %}<p class="notice {{ 'bad' if progress.failure else '' }}" role="status" aria-live="polite" {% if progress.running %}aria-busy="true"{% endif %}>{{ progress_text }}</p>{% endif %}
