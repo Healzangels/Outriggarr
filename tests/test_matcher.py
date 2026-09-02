@@ -344,3 +344,11 @@ def test_show_number_in_titles_is_a_guard_and_a_vouch() -> None:
         MatchConfig(("title",)),
     )
     assert r2.matches == () and r2.unmatched[0].candidates["title"] == ()
+
+
+def test_clashing_show_numbers_never_pair_even_on_an_exact_name() -> None:
+    # "#752 - TIM DILLON" vs an upload "KT #99 - TIM DILLON": same name, different
+    # show number — a different episode, not a candidate at all
+    eps = [ep(1, 2026, 2, "#752 - TIM DILLON")]
+    r = match(eps, [vid("x", "KT #99 - TIM DILLON")], [], MatchConfig(("title",)))
+    assert r.matches == () and r.unmatched[0].candidates["title"] == ()
