@@ -15,7 +15,7 @@ Everything is a job: a subscription scan and a manual grab produce the same row 
 ## Requirements
 
 - Sonarr v4 and/or Radarr (v3 API). One instance each.
-- A staging directory mounted into Outriggarr as `/staging` **and** into Sonarr/Radarr at a path of their choosing (the connection's *staging path* setting). Same host directory, any mount points.
+- A staging directory that Sonarr/Radarr can see. Simplest: mount your data share into Outriggarr exactly as you do for Sonarr/Radarr (e.g. `/data`) and set `OUTRIGGARR_STAGING_DIR=/data/outriggarr`; the *arr then moves files within one filesystem (an atomic rename). Alternatively mount only the staging folder as `/staging` (the default) — less access for Outriggarr, same result as long as the *arr sees the same host folder. Either way, each connection's *staging path* setting is the path as that *arr sees it.
 - The series you want must exist in Sonarr with their episodes (TVDB carries many YouTube-native shows).
 
 ## Run
@@ -31,9 +31,10 @@ services:
       UMASK: "002"
       TZ: "Etc/UTC"
       OUTRIGGARR_YTDLP_UPDATE: "0"   # "1" upgrades yt-dlp on every start
+      OUTRIGGARR_STAGING_DIR: /data/outriggarr
     volumes:
       - ./config:/config             # SQLite DB, cookies file, deno cache
-      - /path/to/shared/staging:/staging
+      - /path/to/data:/data          # the same data share Sonarr/Radarr mount
     ports:
       - "8080:8080"
     networks: [arr]                  # the network your *arr containers are on
@@ -41,7 +42,7 @@ services:
 
 Images: every push to `main` runs the tests and pushes `latest` (plus a `sha-…` tag) to Docker Hub; a `vX.Y.Z` git tag also pushes `X.Y.Z` and `X.Y`. Local build: `docker build -t outriggarr .` (needs internet: it fetches ffmpeg, deno and Python packages).
 
-Unraid: add the container with the image above, `PUID`/`PGID`/`UMASK` matching your Sonarr/Radarr template, a config path under your appdata share mapped to `/config`, the shared staging directory mapped to `/staging`, the same custom network as the *arr containers, and port 8080. YouTube's JavaScript challenges are solved by deno plus the bundled `yt-dlp-ejs` package; nothing is downloaded at runtime for that.
+Unraid: `unraid/my-outriggarr.xml` is a ready template (copy it to `/boot/config/plugins/dockerMan/templates-user/`). It maps your data share to `/data` like the *arr templates do, stages under `/data/outriggarr`, and expects `PUID`/`PGID`/`UMASK` matching your Sonarr/Radarr template, a config path under appdata, the same custom network as the *arr containers, and a host port for 8080. YouTube's JavaScript challenges are solved by deno plus the bundled `yt-dlp-ejs` package; nothing is downloaded at runtime for that.
 
 Then open the GUI → **Settings** → add Sonarr (and Radarr): URL, API key, and the staging path *as that app sees it*. **Test** checks the API key, that the server really is the kind you said, and that it can see the staging directory.
 

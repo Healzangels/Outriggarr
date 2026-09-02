@@ -28,7 +28,7 @@ ENV PATH="/app/.venv/bin:$PATH" \
     OUTRIGGARR_STAGING_DIR=/staging \
     OUTRIGGARR_PORT=8080
 
-VOLUME ["/config", "/staging"]
+VOLUME ["/config"]
 
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["sh", "-c", "uvicorn outriggarr.main:app --host 0.0.0.0 --port ${OUTRIGGARR_PORT}"]
