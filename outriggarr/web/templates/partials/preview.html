@@ -3,7 +3,7 @@
 <div class="form-actions">
   <button class="secondary" hx-post="/subscriptions/{{ sub.id }}/scan" hx-target="#preview" hx-indicator="#scan-busy">Scan now</button>
   <button hx-post="/subscriptions/{{ sub.id }}/download" hx-vals='{"all": "1"}' hx-target="#preview" hx-indicator="#scan-busy" {% if not queueable %}disabled{% endif %} title="Queue every current match, whatever the auto-download setting">Download all{% if queueable %} {{ queueable }}{% endif %}</button>
-  <button id="download-selected" class="secondary" hx-post="/subscriptions/{{ sub.id }}/download" hx-include="#match-picks" hx-vals='{"selected": "1"}' hx-target="#preview" hx-indicator="#scan-busy" {% if not queueable %}disabled{% endif %} title="Queue only the ticked matches">Download selected <span class="count" id="selected-count">{{ queueable }}</span></button>
+  <button id="download-selected" class="secondary" hx-post="/subscriptions/{{ sub.id }}/download" hx-include="#match-picks" hx-vals='{"selected": "1"}' hx-target="#preview" hx-indicator="#scan-busy" disabled title="Queue only the ticked matches; nothing is ticked until you tick it">Download selected <span class="count" id="selected-count">0</span></button>
   <span id="scan-busy" class="htmx-indicator muted" aria-busy="true">working…</span>
   <span class="chips">
     <span class="chip">{{ report.videos | length }} videos listed{% if report.sources > 1 %} from {{ report.sources }} sources{% endif %}</span>
@@ -28,11 +28,11 @@
 <h4>Matches</h4>
 <div class="table-wrap">
 <table>
-  <thead><tr><th><input type="checkbox" id="tick-all" aria-label="tick all" checked></th><th>Episode</th><th>Video</th><th>How</th><th>Job</th></tr></thead>
+  <thead><tr><th><input type="checkbox" id="tick-all" aria-label="tick all"></th><th>Episode</th><th>Video</th><th>How</th><th>Job</th></tr></thead>
   <tbody id="match-picks">
   {% for m in report.matches %}
     <tr>
-      <td>{% if not m.job_id %}<input type="checkbox" name="episode_id" value="{{ m.episode_id }}" aria-label="download {{ m.code }}" checked>{% endif %}</td>
+      <td>{% if not m.job_id %}<input type="checkbox" name="episode_id" value="{{ m.episode_id }}" aria-label="download {{ m.code }}">{% endif %}</td>
       <td><strong>{{ m.code }}</strong> {{ m.title }}<span class="two-line muted">{{ m.air_date or "" }}</span></td>
       <td><a href="{{ m.video_url }}" target="_blank" rel="noopener" class="truncate" title="{{ m.video_title }}">{{ m.video_title }}</a><span class="two-line muted mono">{{ m.video_id }}</span></td>
       <td><span class="chip">{{ m.strategy }}</span></td>
