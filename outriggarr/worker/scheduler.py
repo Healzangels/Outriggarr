@@ -100,19 +100,15 @@ def _episode_dict(ep: Episode) -> dict:
 def existing_jobs_for_series(
     session: Session, connection_id: int, series_id: int
 ) -> dict[int, Job]:
-    """episode id → the job that already covers it (active, done, or awaiting retry)."""
-    live = or_(
-        Job.status.in_(
-            (JobStatus.queued, JobStatus.downloading, JobStatus.importing, JobStatus.done)
-        ),
-        (Job.status == JobStatus.failed) & Job.next_retry_at.is_not(None),
-    )
+    """episode id → the job that already covers it: anything not `done`. Active jobs are
+    in flight; failed and cancelled ones wait for the user's Retry. A done job is history —
+    whether the episode needs a file again is Sonarr's `hasFile`, not ours."""
     rows = session.scalars(
         select(Job).where(
             Job.connection_id == connection_id,
             Job.series_id == series_id,
             Job.target_kind == TargetKind.episode,
-            live,
+            Job.status != JobStatus.done,
         )
     )
     out: dict[int, Job] = {}
@@ -176,6 +172,12 @@ async def _scan(
         title_regex=sub.title_regex,
     )
     overrides = [Override(o.video_id, o.season, o.episode) for o in sub.overrides]
+    listed = {v.id for v in videos}
+    for o in sub.overrides:
+        # An override given as a URL may point outside the listing: add it to the pool.
+        if o.video_id not in listed and o.video_url:
+            videos.append(Video(id=o.video_id, title=o.video_title or o.video_id, url=o.video_url))
+            listed.add(o.video_id)
 
     result = match(todo, videos, overrides, cfg)
     need = videos_needing_dates(result, videos, cfg)[:DATE_FETCH_LIMIT]

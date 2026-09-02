@@ -75,6 +75,8 @@ def test_series_search_filters_ranks_and_caches(client: TestClient, arr: FakeArr
         "year": 2015,
         "tvdb_id": 327172,
         "monitored": True,
+        "episode_count": None,
+        "episode_file_count": None,
     }
     assert [s["title"] for s in client.get(f"/api/connections/{conn_id}/series").json()] == [
         "Hot Ones",

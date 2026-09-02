@@ -285,6 +285,11 @@ async def _download_stage(
     except SourceError as exc:
         shutil.rmtree(dest, ignore_errors=True)
         raise _Retry(str(exc)) from exc
+    except OSError as exc:
+        # e.g. PermissionError creating /staging/<id>: an operator problem, retryable
+        # once the mount is fixed. Keep the OS text verbatim.
+        shutil.rmtree(dest, ignore_errors=True)
+        raise _Retry(f"staging error: {exc}") from exc
     except DownloadAborted:
         shutil.rmtree(dest, ignore_errors=True)
         raise

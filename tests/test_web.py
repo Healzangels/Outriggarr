@@ -310,3 +310,72 @@ def test_settings_connections_forms_and_test(client: TestClient) -> None:
 def test_grab_has_newest_first_toggle(client: TestClient) -> None:
     client.post("/api/connections", json=SONARR)
     assert 'x-model="bulk.reverse"' in client.get("/grab").text
+
+
+def test_subscription_episodes_panel_states_and_jobs(client: TestClient) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from outriggarr.arr.base import EpisodeRef
+
+    _seed_series(client)
+    now = datetime.now(UTC)
+    fake = client.app.state.arr_factory.by_url["http://sonarr-host:1234"]
+    fake.episodes_by_series[5] = [
+        EpisodeRef(11, 30, 6, "Six Spicy Wings", False, True, now - timedelta(days=1)),
+        EpisodeRef(12, 30, 7, "Has A File", True, True, now - timedelta(days=8)),
+        EpisodeRef(13, 30, 8, "Not Yet", False, True, now + timedelta(days=3)),
+        EpisodeRef(14, 30, 9, "Ignored", False, False, now - timedelta(days=30)),
+        EpisodeRef(15, 29, 1, "Old One", True, True, now - timedelta(days=300)),
+    ]
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={"connection_id": 1, "series_id": 5, "source_url": "https://www.youtube.com/@hotones"},
+    ).json()["id"]
+    client.post(f"/api/subscriptions/{sub_id}/scan")  # queues S30E06 via title
+    page = client.get(f"/subscriptions/{sub_id}").text
+    assert f'hx-get="/subscriptions/{sub_id}/episodes"' in page
+
+    html = client.get(f"/subscriptions/{sub_id}/episodes").text
+    assert html.index("Season 30") < html.index("Season 29"), "newest season first"
+    assert "1/4 files" in html and "1 missing" in html
+    assert "1/1 files" in html
+    for needle in ("✓ file", ">missing<", ">unaired<", ">unmonitored<"):
+        assert needle in html, needle
+    assert "status-queued" in html and "#1" in html, "the queued job is linked to S30E06"
+
+
+def test_series_rows_show_file_counts(client: TestClient) -> None:
+    from outriggarr.arr.base import SeriesRef
+
+    _seed_series(client)
+    fake = client.app.state.arr_factory.by_url["http://sonarr-host:1234"]
+    fake.series_list = [
+        SeriesRef(5, "Hot Ones", 2015, 1, True, 140, 128),
+        SeriesRef(6, "Hot Zone", 2019, 2, True),
+    ]
+    rows = client.get("/series/rows?q=hot").text
+    assert "128/140" in rows and "12 missing" in rows
+
+
+def test_override_form_accepts_a_url(client: TestClient) -> None:
+    from outriggarr.source import VideoRef
+
+    _seed_series(client)
+    source = client.app.state.source
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={"connection_id": 1, "series_id": 5, "source_url": "https://www.youtube.com/@hotones"},
+    ).json()["id"]
+    source.videos = [VideoRef("old7", "Seven, older upload", "https://y/old7", 1, None, None)]
+    r = client.post(
+        f"/subscriptions/{sub_id}/overrides",
+        data={"video_url": "https://y/old7", "season": "30", "episode": "7"},
+    )
+    assert r.status_code == 200
+    assert "Override set for Seven, older upload (from URL)" in r.text
+    assert "(URL)" in r.text and "S30E07" in r.text
+    assert "would queue" in r.text  # S30E07 now matches via the override
+    r = client.post(f"/subscriptions/{sub_id}/overrides", data={"season": "30", "episode": "7"})
+    assert "Pick a video or paste a URL" in r.text
+    prev = client.get(f"/subscriptions/{sub_id}/preview").text
+    assert 'name="video_url"' in prev or "Unmatched" not in prev

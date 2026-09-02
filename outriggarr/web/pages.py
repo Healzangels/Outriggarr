@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
@@ -22,6 +23,7 @@ from outriggarr.api.jobs import CANCELLABLE, RETRYABLE, cancel_job, retry_job
 from outriggarr.api.library import library_cache
 from outriggarr.api.settings import update_settings
 from outriggarr.api.subscriptions import (
+    OverrideByUrlIn,
     OverrideIn,
     SubscriptionIn,
     create_subscription,
@@ -29,6 +31,7 @@ from outriggarr.api.subscriptions import (
     delete_subscription,
     run_scan,
     set_override,
+    set_override_by_url,
     update_subscription,
 )
 from outriggarr.arr.base import ArrError
@@ -306,6 +309,60 @@ async def subscription_preview(
     return _preview_response(request, session, report)
 
 
+@router.get("/subscriptions/{subscription_id}/episodes")
+async def subscription_episodes(
+    request: Request, subscription_id: int, session: DbSession, arr_factory: ArrFactoryDep
+) -> HTMLResponse:
+    """Sonarr's view of every episode of the series, with the job that covers each."""
+    sub = session.get(Subscription, subscription_id)
+    if sub is None:
+        return RedirectResponse("/series", status_code=302)
+    error = None
+    try:
+        episodes = await arr_factory(sub.connection).episodes(sub.series_id)
+    except ArrError as exc:
+        episodes, error = [], str(exc)
+    jobs_by_episode: dict[int, Job] = {}
+    for job in session.scalars(
+        select(Job)
+        .where(Job.connection_id == sub.connection_id, Job.series_id == sub.series_id)
+        .order_by(Job.created_at)
+    ):
+        for eid in job.episode_ids or []:
+            jobs_by_episode[int(eid)] = job  # latest job wins
+    now = datetime.now(UTC)
+    seasons: dict[int, list[dict]] = {}
+    for e in episodes:
+        if e.has_file:
+            state = "file"
+        elif not e.monitored:
+            state = "unmonitored"
+        elif e.air_date_utc is None or e.air_date_utc > now:
+            state = "unaired"
+        else:
+            state = "missing"
+        seasons.setdefault(e.season_number, []).append(
+            {"ep": e, "state": state, "job": jobs_by_episode.get(e.id)}
+        )
+    ordered = []
+    for season in sorted(seasons, reverse=True):
+        rows = sorted(seasons[season], key=lambda r: r["ep"].episode_number)
+        ordered.append(
+            {
+                "season": season,
+                "rows": rows,
+                "files": sum(1 for r in rows if r["state"] == "file"),
+                "missing": sum(1 for r in rows if r["state"] == "missing"),
+                "total": len(rows),
+            }
+        )
+    return templates.TemplateResponse(
+        request,
+        "partials/episodes.html",
+        {"sub": sub, "seasons": ordered, "error": error},
+    )
+
+
 @router.post("/subscriptions/{subscription_id}/scan")
 async def subscription_scan(
     request: Request, subscription_id: int, session: DbSession, deps: RunnerDepsDep
@@ -322,15 +379,32 @@ async def subscription_add_override(
     subscription_id: int,
     session: DbSession,
     deps: RunnerDepsDep,
-    video_id: Annotated[str, Form()],
     season: Annotated[int, Form()],
     episode: Annotated[int, Form()],
+    video_id: Annotated[str, Form()] = "",
+    video_url: Annotated[str, Form()] = "",
 ) -> HTMLResponse:
-    set_override(
-        session, subscription_id, video_id.strip(), OverrideIn(season=season, episode=episode)
-    )
+    video_url, video_id = video_url.strip(), video_id.strip()
+    try:
+        if video_url:
+            row = await set_override_by_url(
+                session,
+                deps.source,
+                subscription_id,
+                OverrideByUrlIn(url=video_url, season=season, episode=episode),
+            )
+            notice = f"Override set for {row.video_title or row.video_id} (from URL)."
+        elif video_id:
+            set_override(
+                session, subscription_id, video_id, OverrideIn(season=season, episode=episode)
+            )
+            notice = f"Override set for {video_id}."
+        else:
+            notice = "Pick a video or paste a URL."
+    except Exception as exc:
+        notice = "Override not set: " + str(getattr(exc, "detail", None) or exc)
     report = await run_scan(deps, subscription_id, dry_run=True)
-    return _preview_response(request, session, report, f"Override set for {video_id.strip()}.")
+    return _preview_response(request, session, report, notice)
 
 
 @router.post("/subscriptions/{subscription_id}/overrides/{video_id}/delete")

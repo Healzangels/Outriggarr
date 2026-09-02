@@ -1,0 +1,26 @@
+{% if error %}<p class="warn">{{ error }}</p>
+{% elif not seasons %}<p class="muted">Sonarr lists no episodes for this series.</p>
+{% else %}
+{% for s in seasons %}
+<details {% if loop.first %}open{% endif %}>
+  <summary>Season {{ s.season }} <span class="muted">· {{ s.files }}/{{ s.total }} files{% if s.missing %} · <span class="warn">{{ s.missing }} missing</span>{% endif %}</span></summary>
+  <table>
+    <thead><tr><th>#</th><th>Title</th><th>Aired</th><th>Status</th><th>Job</th></tr></thead>
+    <tbody>
+    {% for r in s.rows %}
+      <tr>
+        <td>E{{ "%02d" % r.ep.episode_number }}</td>
+        <td>{{ r.ep.title }}</td>
+        <td class="muted">{{ r.ep.air_date_utc.strftime("%Y-%m-%d") if r.ep.air_date_utc else "" }}</td>
+        <td>{% if r.state == "file" %}<span class="ok">✓ file</span>
+            {% elif r.state == "missing" %}<span class="warn">missing</span>
+            {% elif r.state == "unaired" %}<span class="muted">unaired</span>
+            {% else %}<span class="muted">unmonitored</span>{% endif %}</td>
+        <td>{% if r.job %}<a href="/activity">#{{ r.job.id }}</a> <span class="status status-{{ r.job.status.value }}">{{ r.job.status.value }}</span>{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</details>
+{% endfor %}
+{% endif %}

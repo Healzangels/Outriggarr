@@ -68,6 +68,8 @@ class SonarrClient(ArrHttp):
                 year=int(s["year"]) if s.get("year") else None,
                 tvdb_id=int(s["tvdbId"]) if s.get("tvdbId") else None,
                 monitored=bool(s.get("monitored")),
+                episode_count=_stat(s, "episodeCount"),
+                episode_file_count=_stat(s, "episodeFileCount"),
             )
             for s in data
         ]
@@ -107,6 +109,11 @@ class SonarrClient(ArrHttp):
             tags.discard(tag_id)
         series["tags"] = sorted(tags)
         await self.put(f"series/{series_id}", series)
+
+
+def _stat(series: dict[str, Any], key: str) -> int | None:
+    stats = series.get("statistics") or {}
+    return int(stats[key]) if stats.get(key) is not None else None
 
 
 def _episode(r: dict[str, Any]) -> WantedEpisode:

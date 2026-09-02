@@ -158,3 +158,24 @@ def test_cancel_transitions(client: TestClient) -> None:
         _set_status(client, job_id, st)
         assert client.post(f"/api/jobs/{job_id}/cancel").status_code == 409
     assert client.post("/api/jobs/999/cancel").status_code == 404
+
+
+def test_done_job_does_not_block_a_new_one_but_live_does(client: TestClient) -> None:
+    from outriggarr.db.models import Job, JobStatus
+
+    conn_id = client.post("/api/connections", json=SONARR).json()["id"]
+    first = client.post("/api/jobs", json=[episode_job(conn_id)]).json()[0]
+    assert client.post("/api/jobs", json=[episode_job(conn_id)]).status_code == 409  # queued
+    for st in ("failed", "cancelled"):
+        with client.app.state.session_factory() as s:
+            s.get(Job, first["id"]).status = JobStatus(st)
+            s.commit()
+        r = client.post("/api/jobs", json=[episode_job(conn_id)])
+        assert r.status_code == 409 and "retry or cancel" in r.json()["detail"]
+    with client.app.state.session_factory() as s:
+        s.get(Job, first["id"]).status = JobStatus.done
+        s.commit()
+    r = client.post("/api/jobs", json=[episode_job(conn_id)])
+    assert r.status_code == 201, "a done job is history; the same video can be grabbed again"
+    assert r.json()[0]["id"] != first["id"]
+    assert len(client.get("/api/jobs").json()) == 2

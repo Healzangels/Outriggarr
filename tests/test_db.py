@@ -153,3 +153,21 @@ def test_naive_datetime_is_refused(session_factory) -> None:
         s.add(job)
         with pytest.raises(Exception, match="naive datetime"):
             s.commit()
+
+
+def test_dedupe_index_ignores_done_jobs(session_factory) -> None:
+    with session_factory() as s:
+        conn = _connection()
+        a = _job(conn)
+        a.status = JobStatus.done
+        s.add(a)
+        s.commit()
+        b = _job(conn)  # same target + video, live
+        s.add(b)
+        s.commit()  # allowed: a is done
+        c = _job(conn)
+        s.add(c)
+        with pytest.raises(IntegrityError):
+            s.commit()  # b is live → second live one refused
+        s.rollback()
+        assert s.query(Job).count() == 2

@@ -64,11 +64,11 @@ Deferred, not rejected. Source, matcher, and runner carry over unchanged if it i
 |---|---|
 | `connection` | id, kind (`sonarr`/`radarr`), name, url, api_key, staging_path_remote (how that *arr sees `/staging`), enabled |
 | `subscription` | id, connection_id, series_id (Sonarr's), tvdb_id, title (snapshot for display), source_url, format (nullable → global default), strategies, date_tolerance_days, date_offset_days, title_regex, enabled, last_scan_at |
-| `override` | subscription_id, video_id, season, episode |
+| `override` | subscription_id, video_id, season, episode, video_url, video_title (the last two set when the override was pasted as a URL, so a scan can use a video outside the source's newest-N listing) |
 | `job` | id, connection_id, target_kind (`episode`/`movie`), series_id, episode_ids (JSON), movie_id, target_key, target_label (display only, supplied by the creator), video_id, video_url, video_title, status, progress_pct, staged_path, error, attempts, next_retry_at, created_at, finished_at |
 | `setting` | key, value — scan interval, concurrency, default format, merge container, yt-dlp extra opts (JSON), cookies path |
 
-Job status: `queued → downloading → importing → done | failed | cancelled`. Unique constraint on `(connection_id, target_key, video_id)` for dedupe, where `target_key` is derived from the target ids (`episode:<series_id>:<sorted episode ids>` or `movie:<movie_id>`) so SQLite has a scalar column to constrain instead of a JSON list.
+Job status: `queued → downloading → importing → done | failed | cancelled`. Dedupe is a partial unique index on `(connection_id, target_key, video_id)` **over jobs that are not `done`** (migration 0004), where `target_key` is derived from the target ids (`episode:<series_id>:<sorted episode ids>` or `movie:<movie_id>`). A done job is history: if Sonarr later loses the file, the same video can be queued again by a scan or a grab. Failed and cancelled jobs still block a duplicate — Retry them instead.
 
 ## Job pipeline
 
@@ -93,13 +93,15 @@ Every `scan_interval` for each enabled subscription:
 
 1. The subscription's episodes from Sonarr (`GET /api/v3/episode?seriesId=`), reduced to monitored, no file, aired. One call per series beats paging the whole `wanted/missing` list (28 pages on the current library). Episodes that already have a live or done job are skipped before matching.
 2. Flat-list the newest N videos from `source_url` (IDs + titles, no per-video fetch; N = the `scan_video_limit` setting, default 50). A bare YouTube channel URL is rewritten to its `/videos` tab.
-3. Match (below). Create a job per match (carrying the subscription's format override and a display label); a duplicate (same episode and video) is reported, not created. The scan summary lands in `subscription.last_scan_result`.
+3. Match (below). Create a job per match (carrying the subscription's format override and a display label); a duplicate (same episode and video, job not done) is reported, not created. The scan summary lands in `subscription.last_scan_result`.
+
+**Re-acquisition.** Whether an episode needs a file is Sonarr's `hasFile`, never our job history: only jobs that are not `done` count as covering an episode. Delete the file in Sonarr and the next scan queues it again (the same video if it still matches). Failed and cancelled jobs keep covering their episode until the user retries or the job is deleted, so a deterministic failure does not pile up a new job every scan.
 
 ## Matching
 
 Applied in a fixed order — override, regex, title, date — regardless of how the subscription lists them; the first strategy yielding exactly one candidate wins. Zero or several → fall through; if all fall through, the episode is skipped and shown as *unmatched* in the GUI, with what each strategy saw, so the user can add an override. A video is assigned at most once per scan.
 
-1. **Override** — `video_id → SxxExx`, set from the GUI. Always wins.
+1. **Override** — `video_id → SxxExx`, set from the GUI by picking a listed video or pasting a URL (resolved once, on save). Always wins. A URL override is added to the candidate pool even when the listing does not contain it.
 2. **Title** — normalise both sides (lowercase, strip punctuation, collapse whitespace, strip `Ep. 5` / `#5` / `Episode 5` prefixes); equality, then containment. Containment needs a normalised episode title of at least 6 characters, so "TBA" or "Pilot" never match half a channel.
 3. **Air date** — upload date within `date_tolerance_days` of `airDateUtc + date_offset_days`. Flat listings usually lack upload dates, so this fetches per-video info only for still-unassigned, undated videos, only if the strategy is enabled and something is still unmatched, and at most 20 per scan.
 
@@ -121,7 +123,7 @@ Default yt-dlp format: `bestvideo*[height<=1080][vcodec^=avc1]+bestaudio[acodec^
 |---|---|
 | **Settings → Connections** | Add/edit Sonarr and Radarr: URL, API key, remote staging path. *Test* button (hits `/api/v3/system/status`, checks the reported `appName` matches the connection kind, and checks the staging path is visible via `/api/v3/filesystem`). `/filesystem` returns an empty listing for a missing directory, identical to an empty one, so the check lists the parent and looks for the staging directory in it. |
 | **Settings → Downloads** | Scan interval, concurrency, videos per scan, default yt-dlp format, container, cookies file, extra yt-dlp options (JSON passthrough — one escape hatch instead of a setting per feature; merged LAST so it always wins), optional Sonarr tag label. |
-| **Series** | Search box over Sonarr's series (live, cached), with a *subscribed* indicator. Subscribe → form: source URL, format override, strategies, tolerance/offset, regex. Detail view: match preview (a dry-run scan loaded by HTMX), unmatched list with a "set override" picker over the listed videos, *Scan now*, settings, recent jobs. Forms are plain HTML posts (python-multipart). |
+| **Series** | Search box over Sonarr's series (live, cached), with a *subscribed* indicator. Subscribe → form: source URL, format override, strategies, tolerance/offset, regex. Detail view: match preview (a dry-run scan loaded by HTMX), unmatched list with a "set override" picker over the listed videos or a pasted URL, an *Episodes in Sonarr* panel per season (file / missing / unaired / unmonitored, with the covering job), *Scan now*, settings, recent jobs. The series search shows Sonarr's file counts. Forms are plain HTML posts (python-multipart). |
 | **Grab** | Paste a video or playlist URL → flat-resolve → table of videos. For each: pick a target (Sonarr series → season/episode picker, or Radarr movie search). Playlist helper: "start at S01E01 and number sequentially" bulk-fill, editable per row. *Queue* creates jobs. Implemented as one Alpine.js component talking to the JSON API (`/api/resolve`, the library lookups, `POST /api/jobs`); a row is queueable only when its S/E resolves to a real Sonarr episode id (or a movie is picked); rows whose target already has a file are flagged. Known gap: YouTube season playlists usually list newest first, so "fill sequentially" needs the per-row correction it was designed for; a "reverse order" toggle is a cheap follow-up for M5. Sonarr's full series listing is ~22 MB / ~5 s on a 5 600-series library, hence the 60 s cache and a slow first search. |
 | **Activity** | One table, views all/active/failed/done, refreshed by HTMX every 3 s; error text verbatim in a collapsible; *Retry* / *Cancel* post to the web routes, which call the same functions as the JSON API and return the refreshed table. |
 

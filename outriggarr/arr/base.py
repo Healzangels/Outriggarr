@@ -59,6 +59,8 @@ class SeriesRef:
     year: int | None
     tvdb_id: int | None
     monitored: bool
+    episode_count: int | None = None  # aired episodes Sonarr tracks (its `statistics`)
+    episode_file_count: int | None = None
 
 
 @dataclass(frozen=True)

@@ -121,8 +121,8 @@ def create_jobs(body: list[JobIn], session: DbSession) -> list[Job]:
         existing = _find_duplicates(session, body)
         raise HTTPException(
             status.HTTP_409_CONFLICT,
-            f"duplicate job(s): {existing}; a job already exists for the same "
-            "connection, target and video",
+            f"duplicate job(s): {existing}; a job that is not done already exists for the "
+            "same connection, target and video (retry or cancel it instead)",
         ) from None
     return jobs
 
@@ -141,7 +141,10 @@ def _find_duplicates(session: DbSession, body: list[JobIn]) -> list[dict[str, ob
         )
         row = session.scalar(
             select(Job).where(
-                Job.connection_id == key[0], Job.target_key == key[1], Job.video_id == key[2]
+                Job.connection_id == key[0],
+                Job.target_key == key[1],
+                Job.video_id == key[2],
+                Job.status != JobStatus.done,
             )
         )
         if row is not None or key in seen:

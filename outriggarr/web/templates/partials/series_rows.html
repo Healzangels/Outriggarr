@@ -3,11 +3,13 @@
 {% elif not rows %}<p class="muted">No series match "{{ q }}".</p>
 {% else %}
 <table>
-  <thead><tr><th>Series</th><th>Year</th><th>TVDB</th><th></th></tr></thead>
+  <thead><tr><th>Series</th><th>Year</th><th>Files</th><th>TVDB</th><th></th></tr></thead>
   <tbody>
   {% for s in rows %}
     <tr>
-      <td>{{ s.title }}</td><td>{{ s.year or "" }}</td><td>{{ s.tvdb_id or "" }}</td>
+      <td>{{ s.title }}</td><td>{{ s.year or "" }}</td>
+      <td>{% if s.episode_count is not none %}{{ s.episode_file_count or 0 }}/{{ s.episode_count }}{% if s.episode_count and (s.episode_file_count or 0) < s.episode_count %} <span class="warn">({{ s.episode_count - (s.episode_file_count or 0) }} missing)</span>{% endif %}{% endif %}</td>
+      <td>{{ s.tvdb_id or "" }}</td>
       <td>{% if s.id in subscribed %}<a href="/subscriptions/{{ subscribed[s.id].id }}">subscribed ✓</a>
           {% else %}<a href="/series/{{ s.id }}/subscribe" role="button" class="outline">Subscribe</a>{% endif %}</td>
     </tr>

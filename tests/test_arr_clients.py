@@ -525,7 +525,14 @@ async def test_sonarr_series_and_episodes_parse() -> None:
             return httpx.Response(
                 200,
                 json=[
-                    {"id": 5, "title": "Show", "year": 2020, "tvdbId": 77, "monitored": True},
+                    {
+                        "id": 5,
+                        "title": "Show",
+                        "year": 2020,
+                        "tvdbId": 77,
+                        "monitored": True,
+                        "statistics": {"episodeCount": 13, "episodeFileCount": 12},
+                    },
                     {"id": 6, "title": "Bare"},
                 ],
             )
@@ -552,7 +559,7 @@ async def test_sonarr_series_and_episodes_parse() -> None:
 
     client, _ = make(SonarrClient, handler)
     assert await client.series() == [
-        SeriesRef(5, "Show", 2020, 77, True),
+        SeriesRef(5, "Show", 2020, 77, True, 13, 12),
         SeriesRef(6, "Bare", None, None, False),
     ]
     eps = await client.episodes(5)

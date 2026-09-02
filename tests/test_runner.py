@@ -585,3 +585,18 @@ async def test_job_format_overrides_default(deps, session_factory) -> None:
     fake_for(deps, conn_id)
     await process_job(deps, job_id)
     assert deps.source.calls[0]["fmt"] == "best[height<=480]"
+
+
+async def test_staging_permission_error_is_a_retryable_failure(deps, session_factory) -> None:
+    conn_id = add_connection(session_factory)
+    job_id = add_job(session_factory, conn_id)
+    fake_for(deps, conn_id)
+    deps.source.error = PermissionError(
+        13, "Permission denied", str(deps.staging_dir / str(job_id))
+    )
+    await process_job(deps, job_id)
+    job = get_job(deps, job_id)
+    assert job.status is JobStatus.failed
+    assert job.error.startswith("staging error: [Errno 13] Permission denied")
+    assert job.next_retry_at == NOW + BACKOFF[0], "retryable: fix the mount, it resumes"
+    assert not (deps.staging_dir / str(job_id)).exists()

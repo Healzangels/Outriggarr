@@ -39,10 +39,11 @@
       <td>
         <form class="inline" hx-post="/subscriptions/{{ sub.id }}/overrides" hx-target="#preview">
           <input type="hidden" name="season" value="{{ u.season }}"><input type="hidden" name="episode" value="{{ u.number }}">
-          <select name="video_id" required style="max-width:22em; display:inline-block">
-            <option value="">pick a video for {{ u.code }}…</option>
+          <select name="video_id" style="max-width:22em; display:inline-block">
+            <option value="">pick a listed video for {{ u.code }}…</option>
             {% for v in report.videos %}<option value="{{ v.id }}">{{ v.title | truncate(70) }}</option>{% endfor %}
           </select>
+          <input type="url" name="video_url" placeholder="…or paste a video URL" style="max-width:22em; display:inline-block">
           <button type="submit">Set</button>
         </form>
       </td>
@@ -56,7 +57,7 @@
 <h4>Overrides</h4>
 <ul>
 {% for o in sub.overrides %}
-  <li><code>{{ o.video_id }}</code> → S{{ "%02d" % o.season }}E{{ "%02d" % o.episode }}
+  <li><code>{{ o.video_id }}</code>{% if o.video_title %} <span class="muted">{{ o.video_title | truncate(60) }}</span>{% endif %} → S{{ "%02d" % o.season }}E{{ "%02d" % o.episode }}{% if o.video_url %} <span class="muted">(URL)</span>{% endif %}
     <form class="inline" hx-post="/subscriptions/{{ sub.id }}/overrides/{{ o.video_id }}/delete" hx-target="#preview"><button type="submit" class="secondary outline">remove</button></form></li>
 {% endfor %}
 </ul>

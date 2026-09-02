@@ -15,6 +15,13 @@ fi
 if [ "$(id -u)" = "0" ] && [ -n "${PUID:-}" ]; then
     PGID="${PGID:-$PUID}"
     chown "$PUID:$PGID" /config 2>/dev/null || true
+    # A bind-mount source that did not exist gets created by Docker as root:root 755,
+    # which the unprivileged app cannot write into. Take ownership of the staging root
+    # (not its contents — Sonarr/Radarr may own files in flight).
+    if ! setpriv --reuid="$PUID" --regid="$PGID" --clear-groups sh -c "test -w /staging"; then
+        echo "entrypoint: /staging is not writable by $PUID:$PGID — chowning it"
+        chown "$PUID:$PGID" /staging 2>/dev/null || echo "entrypoint: WARNING could not chown /staging; downloads will fail"
+    fi
     echo "entrypoint: running as uid=$PUID gid=$PGID umask=$(umask)"
     exec setpriv --reuid="$PUID" --regid="$PGID" --clear-groups "$@"
 fi

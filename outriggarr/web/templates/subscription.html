@@ -15,6 +15,11 @@
   <p class="muted" aria-busy="true">Loading match preview…</p>
 </div>
 
+<h3>Episodes in Sonarr</h3>
+<div id="episodes" hx-get="/subscriptions/{{ sub.id }}/episodes" hx-trigger="load" hx-swap="innerHTML">
+  <p class="muted" aria-busy="true">Loading episodes…</p>
+</div>
+
 <details>
   <summary>Settings</summary>
   <form method="post" action="/subscriptions/{{ sub.id }}/edit">

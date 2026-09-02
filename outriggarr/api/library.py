@@ -63,6 +63,8 @@ class SeriesOut(BaseModel):
     year: int | None
     tvdb_id: int | None
     monitored: bool
+    episode_count: int | None
+    episode_file_count: int | None
 
 
 class EpisodeOut(BaseModel):

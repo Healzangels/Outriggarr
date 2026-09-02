@@ -88,3 +88,12 @@ def test_health_reports_tooling(client: TestClient) -> None:
     assert isinstance(body["yt_dlp"], str) and body["yt_dlp"]
     assert "js_runtime" in body and "ffmpeg" in body
     assert json.dumps(body)
+
+
+def test_health_reports_staging_writable(client: TestClient, settings) -> None:
+    settings.staging_dir.mkdir(parents=True, exist_ok=True)
+    assert client.get("/health").json()["staging_writable"] is True
+    import shutil as _sh
+
+    _sh.rmtree(settings.staging_dir)
+    assert client.get("/health").json()["staging_writable"] is False

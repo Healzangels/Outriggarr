@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime
 from typing import Any
@@ -10,13 +11,14 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from outriggarr.api.deps import ArrFactoryDep, DbSession, RunnerDepsDep
+from outriggarr.api.deps import ArrFactoryDep, DbSession, RunnerDepsDep, SourceDep
 from outriggarr.api.library import library_cache
 from outriggarr.arr import ArrFactory
 from outriggarr.arr.base import ArrError
 from outriggarr.db.models import Connection, ConnectionKind, Override, Subscription
 from outriggarr.matcher import OPTIONAL_STRATEGIES, compile_title_regex
 from outriggarr.settings import get_setting
+from outriggarr.source import SourceError, VideoSource
 from outriggarr.worker.scheduler import ScanReport, SubscriptionNotFound, scan_subscription
 
 log = logging.getLogger(__name__)
@@ -88,6 +90,12 @@ class OverrideIn(BaseModel):
 class OverrideOut(OverrideIn):
     model_config = ConfigDict(from_attributes=True)
     video_id: str
+    video_url: str | None = None
+    video_title: str | None = None
+
+
+class OverrideByUrlIn(OverrideIn):
+    url: str = Field(min_length=1, max_length=1000)
 
 
 def _get_or_404(session: Session, subscription_id: int) -> Subscription:
@@ -211,6 +219,33 @@ def set_override(
     return row
 
 
+async def set_override_by_url(
+    session: Session, source: VideoSource, subscription_id: int, body: OverrideByUrlIn
+) -> Override:
+    """Resolve a pasted URL to one video and pin it; works for videos outside the listing."""
+    sub = _get_or_404(session, subscription_id)
+    try:
+        videos = await asyncio.to_thread(source.resolve, body.url.strip())
+    except SourceError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+    if len(videos) != 1:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            f"the URL resolved to {len(videos)} videos; an override needs exactly one",
+        )
+    (video,) = videos
+    row = next((o for o in sub.overrides if o.video_id == video.id), None)
+    if row is None:
+        row = Override(
+            subscription=sub, video_id=video.id, season=body.season, episode=body.episode
+        )
+        session.add(row)
+    row.season, row.episode = body.season, body.episode
+    row.video_url, row.video_title = video.url, video.title
+    session.commit()
+    return row
+
+
 def delete_override(session: Session, subscription_id: int, video_id: str) -> None:
     sub = _get_or_404(session, subscription_id)
     row = next((o for o in sub.overrides if o.video_id == video_id), None)
@@ -271,6 +306,13 @@ def put_override(
     subscription_id: int, video_id: str, body: OverrideIn, session: DbSession
 ) -> Override:
     return set_override(session, subscription_id, video_id, body)
+
+
+@router.post("/{subscription_id}/overrides", response_model=OverrideOut)
+async def post_override_by_url(
+    subscription_id: int, body: OverrideByUrlIn, session: DbSession, source: SourceDep
+) -> Override:
+    return await set_override_by_url(session, source, subscription_id, body)
 
 
 @router.delete("/{subscription_id}/overrides/{video_id}", status_code=status.HTTP_204_NO_CONTENT)

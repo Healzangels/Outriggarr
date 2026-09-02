@@ -129,26 +129,41 @@ async def test_dry_run_creates_nothing_and_does_not_stamp(deps, session_factory)
         assert s.get(Subscription, sub_id).last_scan_at is None
 
 
-async def test_scan_skips_episodes_that_already_have_jobs(deps, session_factory) -> None:
+async def test_scan_covers_non_done_jobs_and_requeues_after_done(deps, session_factory) -> None:
     sub_id, conn_id = make_sub(session_factory)
     fake_client(deps, conn_id)
     await scan_subscription(deps, sub_id)
     with session_factory() as s:
         done = s.query(Job).filter(Job.video_id == "v6").one()
-        done.status = JobStatus.done
+        done.status = JobStatus.done  # imported; Sonarr later loses the file (hasFile False)
         failed_terminal = s.query(Job).filter(Job.video_id == "v7").one()
         failed_terminal.status = JobStatus.failed
         failed_terminal.next_retry_at = None
         s.commit()
 
     report = await scan_subscription(deps, sub_id)
-    assert [s_["code"] for s_ in report.skipped_existing] == ["S30E06"]
-    # the terminally failed one is re-matched; same video → duplicate → reported, not created
-    (m,) = [m for m in report.matches if m["code"] == "S30E07"]
-    assert m["job_id"] is None and "already exists" in m["skipped"]
-    assert report.created_job_ids == []
+    # the terminally failed job still covers its episode (Retry is the user's call)
+    assert [(x["code"], x["job_status"]) for x in report.skipped_existing] == [("S30E07", "failed")]
+    # the done job does not: the episode is wanted again in Sonarr, so a NEW job is queued
+    (m,) = [m for m in report.matches if m["code"] == "S30E06"]
+    assert m["job_id"] is not None and m["job_id"] != done.id
+    assert report.created_job_ids == [m["job_id"]]
     with session_factory() as s:
-        assert s.query(Job).count() == 2
+        assert s.query(Job).filter(Job.video_id == "v6").count() == 2
+        assert s.get(Job, m["job_id"]).status is JobStatus.queued
+
+
+async def test_cancelled_job_still_covers_until_retried(deps, session_factory) -> None:
+    sub_id, conn_id = make_sub(session_factory)
+    fake_client(deps, conn_id)
+    await scan_subscription(deps, sub_id)
+    with session_factory() as s:
+        for j in s.query(Job):
+            j.status = JobStatus.cancelled
+        s.commit()
+    report = await scan_subscription(deps, sub_id)
+    assert {x["job_status"] for x in report.skipped_existing} == {"cancelled"}
+    assert report.created_job_ids == []
 
 
 async def test_override_and_date_strategy_fetch_only_unmatched(deps, session_factory) -> None:
@@ -283,3 +298,39 @@ async def test_run_scheduler_scans_due_and_records_crashes(deps, session_factory
     await asyncio.wait_for(task, 2)
     with session_factory() as s:
         assert "internal error" in s.get(Subscription, sub_id).last_scan_result["error"]
+
+
+async def test_url_override_outside_listing_is_matched(deps, session_factory) -> None:
+    sub_id, conn_id = make_sub(session_factory)
+    fake_client(deps, conn_id)
+    deps.source.recent = [
+        VideoRef("vx", "Lineup reveal", "https://y/vx", 50, 1, None)
+    ]  # nothing matches
+    with session_factory() as s:
+        s.add(
+            Override(
+                subscription_id=sub_id,
+                video_id="old1",
+                season=30,
+                episode=9,
+                video_url="https://y/old1",
+                video_title="An older upload of Nine",
+            )
+        )
+        s.add(
+            Override(subscription_id=sub_id, video_id="ghost", season=30, episode=7)
+        )  # no URL, not listed
+        s.commit()
+    report = await scan_subscription(deps, sub_id)
+    by_code = {m["code"]: m for m in report.matches}
+    assert by_code["S30E09"]["strategy"] == "override"
+    assert (
+        by_code["S30E09"]["video_id"] == "old1"
+        and by_code["S30E09"]["video_url"] == "https://y/old1"
+    )
+    assert "S30E07" in {u["code"] for u in report.unmatched}, (
+        "an id-only override needs the listing"
+    )
+    with session_factory() as s:
+        job = s.query(Job).filter(Job.video_id == "old1").one()
+        assert job.video_url == "https://y/old1" and job.video_title == "An older upload of Nine"

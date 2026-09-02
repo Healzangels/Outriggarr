@@ -5,7 +5,18 @@ from __future__ import annotations
 import enum
 from datetime import UTC, datetime
 
-from sqlalchemy import JSON, DateTime, Enum, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.engine import Dialect
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.types import TypeDecorator
@@ -128,6 +139,10 @@ class Override(Base):
     video_id: Mapped[str] = mapped_column(String(100), nullable=False)
     season: Mapped[int] = mapped_column(Integer, nullable=False)
     episode: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Set when the override was given as a URL: lets a scan use a video that is not in
+    # the source's newest-N listing (older upload, another channel).
+    video_url: Mapped[str | None] = mapped_column(String(1000))
+    video_title: Mapped[str | None] = mapped_column(String(500))
 
     subscription: Mapped[Subscription] = relationship(back_populates="overrides")
 
@@ -135,7 +150,16 @@ class Override(Base):
 class Job(Base):
     __tablename__ = "job"
     __table_args__ = (
-        UniqueConstraint("connection_id", "target_key", "video_id", name="uq_job_target_video"),
+        # Dedupe: at most one job that is not `done` per (connection, target, video). A
+        # done job is history; if Sonarr loses the file the same video can be queued again.
+        Index(
+            "ux_job_live_target_video",
+            "connection_id",
+            "target_key",
+            "video_id",
+            unique=True,
+            sqlite_where=text("status != 'done'"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
