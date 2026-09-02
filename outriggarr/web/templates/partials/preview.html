@@ -3,7 +3,7 @@
 <div class="form-actions">
   <button class="secondary" hx-post="/subscriptions/{{ sub.id }}/scan" hx-target="#preview" hx-indicator="#scan-busy">Scan now</button>
   <button hx-post="/subscriptions/{{ sub.id }}/download" hx-vals='{"all": "1"}' hx-target="#preview" hx-indicator="#scan-busy" {% if not queueable %}disabled{% endif %} title="Queue every current match, whatever the auto-download setting">Download all{% if queueable %} {{ queueable }}{% endif %}</button>
-  <button class="secondary" hx-post="/subscriptions/{{ sub.id }}/download" hx-include="#match-picks" hx-vals='{"selected": "1"}' hx-target="#preview" hx-indicator="#scan-busy" {% if not queueable %}disabled{% endif %} title="Queue only the ticked matches">Download selected</button>
+  <button id="download-selected" class="secondary" hx-post="/subscriptions/{{ sub.id }}/download" hx-include="#match-picks" hx-vals='{"selected": "1"}' hx-target="#preview" hx-indicator="#scan-busy" {% if not queueable %}disabled{% endif %} title="Queue only the ticked matches">Download selected <span class="count" id="selected-count">{{ queueable }}</span></button>
   <span id="scan-busy" class="htmx-indicator muted" aria-busy="true">working…</span>
   <span class="chips">
     <span class="chip">{{ report.videos | length }} videos listed{% if report.sources > 1 %} from {{ report.sources }} sources{% endif %}</span>
@@ -28,7 +28,7 @@
 <h4>Matches</h4>
 <div class="table-wrap">
 <table>
-  <thead><tr><th><input type="checkbox" aria-label="tick all" onclick="document.querySelectorAll('#match-picks input[name=episode_id]').forEach(c => c.checked = this.checked)" checked></th><th>Episode</th><th>Video</th><th>How</th><th>Job</th></tr></thead>
+  <thead><tr><th><input type="checkbox" id="tick-all" aria-label="tick all" checked></th><th>Episode</th><th>Video</th><th>How</th><th>Job</th></tr></thead>
   <tbody id="match-picks">
   {% for m in report.matches %}
     <tr>
@@ -42,6 +42,26 @@
   </tbody>
 </table>
 </div>
+<script>
+  // "Download selected N" follows the ticks; HTMX re-runs this after every preview swap.
+  (function () {
+    const picks = document.getElementById('match-picks');
+    const count = document.getElementById('selected-count');
+    const button = document.getElementById('download-selected');
+    const all = document.getElementById('tick-all');
+    if (!picks || !count || !button) return;
+    const boxes = () => picks.querySelectorAll('input[name=episode_id]');
+    const update = () => {
+      const n = picks.querySelectorAll('input[name=episode_id]:checked').length;
+      count.textContent = n;
+      button.disabled = n === 0;
+      if (all) { all.checked = n > 0 && n === boxes().length; all.indeterminate = n > 0 && n < boxes().length; }
+    };
+    picks.addEventListener('change', update);
+    if (all) all.addEventListener('change', () => { boxes().forEach(b => { b.checked = all.checked; }); update(); });
+    update();
+  })();
+</script>
 {% endif %}
 
 {% if report.held %}

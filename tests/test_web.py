@@ -1008,6 +1008,8 @@ def test_subscribe_form_defaults_to_future_and_preview_downloads_selected(
     prev = client.get(f"/subscriptions/{sub_id}/preview").text
     assert "auto: future only, 0 of 1 would queue" in prev and "waits for you" in prev
     assert 'name="episode_id" value="11"' in prev and "Download selected" in prev
+    assert 'id="selected-count">1</span>' in prev and 'id="tick-all"' in prev, "a live count"
+    assert "picks.addEventListener('change', update)" in prev
     # ticking nothing queues nothing; ticking S30E06 queues just that; the scheduler alone would not
     r = client.post(f"/subscriptions/{sub_id}/download", data={"selected": "1"})
     assert "Nothing ticked." in r.text and client.get("/api/jobs").json() == []
