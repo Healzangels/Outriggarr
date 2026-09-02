@@ -934,11 +934,13 @@ def test_source_hint_is_dropped_once_the_subscription_has_history(client: TestCl
             }
         ],
     )
-    from outriggarr.db.models import Job
+    from outriggarr.db.models import Job, JobStatus
 
     with client.app.state.session_factory() as s:
         job = s.query(Job).first()
         job.subscription_id = sub_id  # a job on record, however it got there
+        job.status = JobStatus.done  # done: it no longer covers the episode, which stays wanted
         s.commit()
     prev = client.get(f"/subscriptions/{sub_id}/preview").text
-    assert "This source may not carry these episodes" not in prev
+    assert "S30E06" in prev and "no candidate" in prev, "still unmatched with nothing seen"
+    assert "This source may not carry these episodes" not in prev, "history alone drops the hint"
