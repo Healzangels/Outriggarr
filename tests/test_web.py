@@ -743,16 +743,17 @@ def test_matches_recheck_and_confirm_clear_the_review_list(client: TestClient) -
         "/api/subscriptions",
         json={"connection_id": 1, "series_id": 5, "sources": ["https://www.youtube.com/@x"]},
     ).json()["id"]
-    # three jobs from before evidence was recorded: fine, wrong length, unfetchable
+    # jobs from before evidence was recorded: fine, wrong length, unfetchable, and a
+    # two-episode target whose second episode has no runtime in Sonarr
     with client.app.state.session_factory() as s:
-        for eid, vid in ((11, "ok"), (12, "short"), (13, "gone")):
+        for eid, vid in ((11, "ok"), (12, "short"), (13, "gone"), (14, "double")):
             s.add(
                 Job(
                     connection_id=1,
                     subscription_id=sub_id,
                     target_kind=TargetKind.episode,
                     series_id=5,
-                    episode_ids=[eid],
+                    episode_ids=[eid] if eid != 14 else [11, 99],
                     target_key=f"episode:5:{eid}",
                     video_id=vid,
                     video_url=f"https://y/{vid}",
@@ -761,33 +762,36 @@ def test_matches_recheck_and_confirm_clear_the_review_list(client: TestClient) -
                 )
             )
         s.commit()
+    source.infos["https://y/double"] = VideoRef("double", "x", "https://y/double", 3000, 1, None)
     page = client.get("/matches").text
-    assert 'needs a look<span class="count">3</span>' in page and page.count("not checked") == 3
+    assert 'needs a look<span class="count">4</span>' in page and page.count("not checked") == 4
 
     r = client.post("/matches/recheck")
     assert r.status_code == 200, r.text
     assert (
-        "Checked 3 pairings: 2 video lengths and 3 runtimes fetched; 1 contradict their runtime."
+        "Checked 4 pairings: 3 video lengths and 3 runtimes fetched; 1 contradict their runtime."
         in r.text
     )
     assert "1 could not be fetched" in r.text
-    assert 'needs a look<span class="count">2</span>' in r.text, "25 min vs 25 min cleared itself"
+    assert 'needs a look<span class="count">3</span>' in r.text, "25 min vs 25 min cleared itself"
+    jobs = {j["video_id"]: j for j in client.get("/api/jobs").json()}
+    assert jobs["double"]["target_runtime"] is None, "a half-known runtime is no evidence"
+    assert "50m00s, no runtime in Sonarr" in r.text
     assert "2m00s vs 25 min ✗" in r.text
     assert "25m00s vs 25 min ✓" in client.get("/matches?view=all").text
-    jobs = {j["video_id"]: j for j in client.get("/api/jobs").json()}
     assert (jobs["ok"]["video_duration"], jobs["ok"]["target_runtime"]) == (1500, 25)
-    assert client.post("/api/matches/recheck").json()["checked"] == 1, "only the unfetched one"
+    assert client.post("/api/matches/recheck").json()["checked"] == 2, "unfetched + half-known"
 
     short_id = jobs["short"]["id"]
     r = client.post(f"/matches/{short_id}/confirm")
     assert "Confirmed: Show S30E07 - T12." in r.text
-    assert 'needs a look<span class="count">1</span>' in r.text
+    assert 'needs a look<span class="count">2</span>' in r.text
     assert client.get(f"/api/jobs/{short_id}").json()["reviewed_at"] is not None
     r = client.post(f"/matches/{short_id}/unconfirm?view=review")
-    assert 'needs a look<span class="count">2</span>' in r.text
+    assert 'needs a look<span class="count">3</span>' in r.text
     r = client.post("/matches/confirm-all")
     assert (
-        "Confirmed 2 pairings." in r.text and 'needs a look<span class="count">0</span>' in r.text
+        "Confirmed 3 pairings." in r.text and 'needs a look<span class="count">0</span>' in r.text
     )
-    assert client.get("/matches?view=all").text.count(">confirmed</span>") == 2
+    assert client.get("/matches?view=all").text.count(">confirmed</span>") == 3
     assert client.delete(f"/api/jobs/{short_id}/confirm").json()["reviewed_at"] is None
