@@ -15,6 +15,7 @@ dependencies = [
     "yt-dlp-ejs>=0.8.0",
     "curl-cffi>=0.16.2",
     "apprise>=1.13.1",
+    "bgutil-ytdlp-pot-provider>=1.3.2",
 ]
 
 [dependency-groups]

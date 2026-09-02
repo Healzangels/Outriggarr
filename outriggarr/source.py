@@ -125,12 +125,26 @@ def channel_videos_url(url: str) -> str:
 OptsProvider = Callable[[], dict[str, Any]]
 
 
+def pot_provider_ready(server_home: Path | None) -> bool:
+    """True when the bgutil script and a Node runtime are both present: yt-dlp can then
+    fetch PO tokens, which YouTube requires for the best formats of some videos (every
+    age-gated one, for a signed-in session)."""
+    if server_home is None:
+        return False
+    return (server_home / "build" / "generate_once.js").is_file() and shutil.which(
+        "node"
+    ) is not None
+
+
 class YtDlpSource:
     """`extra_opts` is called per operation and merged LAST over our options, so the
     operator's passthrough (cookies, SponsorBlock, rate limits…) always wins."""
 
-    def __init__(self, extra_opts: OptsProvider | None = None) -> None:
+    def __init__(
+        self, extra_opts: OptsProvider | None = None, pot_server_home: Path | None = None
+    ) -> None:
         self._extra = extra_opts or (lambda: {})
+        self._pot_home = pot_server_home
 
     def _opts(self, base: dict[str, Any]) -> dict[str, Any]:
         from outriggarr.settings import RESERVED_YTDLP_KEYS
@@ -141,7 +155,25 @@ class YtDlpSource:
             # yt-dlp would silently run without cookies and fail with an unrelated
             # bot-check/age-gate message; say what actually went wrong.
             raise SourceError(f"cookies file {cookies!r} is not readable by the app user")
-        return {**base, **extra, "logger": _YtDlpLogger()}  # operator wins, except reserved
+        # YouTube hands out its best formats only to clients that present a proof-of-origin
+        # token; the bgutil plugin mints one through its Node script when told where it is.
+        # The operator's own extractor_args are merged per extractor on top of ours.
+        args: dict[str, dict[str, Any]] = {
+            k: dict(v) for k, v in (base.get("extractor_args") or {}).items()
+        }
+        if pot_provider_ready(self._pot_home):
+            args["youtubepot-bgutilscript"] = {
+                "server_home": [str(self._pot_home)],
+                **args.get("youtubepot-bgutilscript", {}),
+            }
+        theirs = extra.pop("extractor_args", None)
+        if isinstance(theirs, dict):
+            for ie, kv in theirs.items():
+                args[ie] = {**args.get(ie, {}), **kv} if isinstance(kv, dict) else kv
+        merged = {**base, **extra, "logger": _YtDlpLogger()}  # operator wins, except reserved
+        if args:
+            merged["extractor_args"] = args
+        return merged
 
     @contextlib.contextmanager
     def _private_cookie_jar(self, opts: dict[str, Any]) -> Iterator[dict[str, Any]]:

@@ -393,3 +393,54 @@ def test_ytdlp_gets_a_private_cookie_jar_and_never_clobbers_a_replaced_file(
         "a file replaced while yt-dlp ran wins over the old session yt-dlp would save"
     )
     assert not Path(seen["cookiefile"]).exists()
+
+
+def test_po_token_provider_is_wired_when_present_and_operator_args_merge(
+    monkeypatch, tmp_path
+) -> None:
+    import shutil
+
+    import yt_dlp
+
+    from outriggarr.source import YtDlpSource, pot_provider_ready
+
+    home = tmp_path / "server"
+    assert pot_provider_ready(None) is False and pot_provider_ready(home) is False
+    (home / "build").mkdir(parents=True)
+    (home / "build" / "generate_once.js").write_text("// stub")
+    monkeypatch.setattr(
+        shutil, "which", lambda name: "/usr/local/bin/node" if name == "node" else None
+    )
+    assert pot_provider_ready(home) is True
+
+    seen: list[dict] = []
+
+    class StubYDL:
+        def __init__(self, opts):
+            seen.append(opts)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def extract_info(self, url, download=False):
+            return {"id": "x", "title": "t", "webpage_url": url}
+
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", StubYDL)
+    operator = {
+        "extractor_args": {
+            "youtube": {"player_client": ["tv"]},
+            "youtubepot-bgutilscript": {"disable_innertube": ["1"]},
+        }
+    }
+    src = YtDlpSource(extra_opts=lambda: operator, pot_server_home=home)
+    src.resolve("https://youtu.be/x")
+    assert seen[0]["extractor_args"] == {
+        "youtubepot-bgutilscript": {"server_home": [str(home)], "disable_innertube": ["1"]},
+        "youtube": {"player_client": ["tv"]},
+    }, "ours plus the operator's, merged per extractor"
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    YtDlpSource(extra_opts=lambda: {}, pot_server_home=home).resolve("https://youtu.be/x")
+    assert "extractor_args" not in seen[1], "no node: nothing is promised to yt-dlp"

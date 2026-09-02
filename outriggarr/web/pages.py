@@ -42,6 +42,7 @@ from outriggarr.arr.base import ArrError
 from outriggarr.db.models import Connection, ConnectionKind, Job, JobStatus, Subscription
 from outriggarr.matcher import OPTIONAL_STRATEGIES, length_mismatch, mmss, normalise_title
 from outriggarr.settings import DEFAULTS, MERGE_CONTAINERS, all_settings, get_setting
+from outriggarr.source import pot_provider_ready
 
 router = APIRouter(include_in_schema=False)
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
@@ -85,6 +86,7 @@ def _tooling(request: Request) -> dict:
         "yt_dlp": ytdlp_version,
         "js_runtime": next((r for r in ("deno", "node", "bun") if shutil.which(r)), None),
         "ffmpeg": shutil.which("ffmpeg") is not None,
+        "po_token_provider": pot_provider_ready(request.app.state.settings.pot_server_home),
         "staging_writable": staging_writable(staging),
     }
 

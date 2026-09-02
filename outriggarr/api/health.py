@@ -8,6 +8,7 @@ from fastapi import APIRouter, Request, Response
 from sqlalchemy import text
 
 from outriggarr import __version__
+from outriggarr.source import pot_provider_ready
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -56,6 +57,8 @@ def health(request: Request, response: Response) -> dict[str, object]:
         "yt_dlp": ytdlp_version,
         "js_runtime": next((r for r in ("deno", "node", "bun") if shutil.which(r)), None),
         "ffmpeg": shutil.which("ffmpeg") is not None,
+        # off = age-gated videos top out at 480p (YouTube wants a proof-of-origin token)
+        "po_token_provider": pot_provider_ready(request.app.state.settings.pot_server_home),
         # False means downloads will fail: fix the mount's ownership (see entrypoint.sh)
         "staging_writable": staging_writable(staging),
         "worker_alive": liveness.get("worker"),

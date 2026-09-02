@@ -67,7 +67,7 @@ def create_app(
                 with sf() as s:
                     return ytdlp_options(s)
 
-            source = YtDlpSource(extra_opts=_extra_opts)
+            source = YtDlpSource(extra_opts=_extra_opts, pot_server_home=settings.pot_server_home)
         else:
             source = source_given
         app.state.source = source

@@ -53,6 +53,13 @@ def test_health_degrades_when_ffmpeg_or_staging_or_worker_is_gone(
     loop.close()
 
 
+def test_health_reports_po_token_provider(client: TestClient) -> None:
+    body = client.get("/health").json()
+    assert body["po_token_provider"] is False, "the test image has no bgutil checkout"
+    assert "po_token_provider" not in body.get("problems", []), "optional: never degrades"
+    assert "PO tokens: off" in client.get("/activity").text
+
+
 def test_staging_probe_logs_each_flip_with_the_reason(tmp_path, caplog, monkeypatch) -> None:
     import logging
     import os

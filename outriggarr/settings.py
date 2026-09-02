@@ -26,6 +26,8 @@ class Settings:
     staging_dir: Path
     database_url: str
     log_level: str
+    # bgutil PO-token provider checkout (script mode); the image ships it here. None = off.
+    pot_server_home: Path | None = Path("/opt/bgutil/server")
 
     @classmethod
     def from_env(cls, env: dict[str, str] | None = None) -> Settings:
@@ -34,6 +36,7 @@ class Settings:
         staging_dir = Path(env.get("OUTRIGGARR_STAGING_DIR", "/staging"))
         database_url = env.get("OUTRIGGARR_DATABASE_URL", f"sqlite:///{config_dir / 'app.db'}")
         level = env.get("OUTRIGGARR_LOG_LEVEL", "INFO").strip().upper() or "INFO"
+        pot_home = env.get("OUTRIGGARR_POT_SERVER_HOME", "/opt/bgutil/server").strip()
         if level not in logging.getLevelNamesMapping():
             raise ValueError(f"OUTRIGGARR_LOG_LEVEL={level!r} is not a logging level")
         return cls(
@@ -41,6 +44,7 @@ class Settings:
             staging_dir=staging_dir,
             database_url=database_url,
             log_level=level,
+            pot_server_home=Path(pot_home) if pot_home else None,
         )
 
 
