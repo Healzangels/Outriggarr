@@ -710,3 +710,84 @@ def test_subscription_form_takes_one_source_per_line(client: TestClient) -> None
     assert "+1 more" in client.get("/series").text
     prev = client.get(f"/subscriptions/{sub_id}/preview").text
     assert "videos listed from 2 sources" in prev
+
+
+def test_matches_recheck_and_confirm_clear_the_review_list(client: TestClient) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from outriggarr.arr.base import EpisodeRef, SeriesRef
+    from outriggarr.db.models import Job, TargetKind
+    from outriggarr.source import VideoRef
+    from tests.fakes import FakeArrClient
+
+    now = datetime.now(UTC)
+    aired = now - timedelta(days=1)
+    client.app.state.arr_factory.by_url["http://sonarr-host:1234"] = FakeArrClient(
+        series_list=[SeriesRef(5, "Show", 2015, 1, True)],
+        episodes_by_series={
+            5: [
+                EpisodeRef(11, 30, 6, "Six", False, True, aired, runtime=25),
+                EpisodeRef(12, 30, 7, "Seven", False, True, aired, runtime=25),
+                EpisodeRef(13, 30, 8, "Eight", False, True, aired, runtime=25),
+            ]
+        },
+    )
+    source = client.app.state.source
+    source.recent = []
+    source.infos = {
+        "https://y/ok": VideoRef("ok", "x", "https://y/ok", 1500, 1, None),
+        "https://y/short": VideoRef("short", "x", "https://y/short", 120, 1, None),
+    }
+    client.post("/api/connections", json=SONARR)
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={"connection_id": 1, "series_id": 5, "sources": ["https://www.youtube.com/@x"]},
+    ).json()["id"]
+    # three jobs from before evidence was recorded: fine, wrong length, unfetchable
+    with client.app.state.session_factory() as s:
+        for eid, vid in ((11, "ok"), (12, "short"), (13, "gone")):
+            s.add(
+                Job(
+                    connection_id=1,
+                    subscription_id=sub_id,
+                    target_kind=TargetKind.episode,
+                    series_id=5,
+                    episode_ids=[eid],
+                    target_key=f"episode:5:{eid}",
+                    video_id=vid,
+                    video_url=f"https://y/{vid}",
+                    video_title="Something else",
+                    target_label=f"Show S30E0{eid - 5} - T{eid}",
+                )
+            )
+        s.commit()
+    page = client.get("/matches").text
+    assert 'needs a look<span class="count">3</span>' in page and page.count("not checked") == 3
+
+    r = client.post("/matches/recheck")
+    assert r.status_code == 200, r.text
+    assert (
+        "Checked 3 pairings: 2 video lengths and 3 runtimes fetched; 1 contradict their runtime."
+        in r.text
+    )
+    assert "1 could not be fetched" in r.text
+    assert 'needs a look<span class="count">2</span>' in r.text, "25 min vs 25 min cleared itself"
+    assert "2m00s vs 25 min ✗" in r.text
+    assert "25m00s vs 25 min ✓" in client.get("/matches?view=all").text
+    jobs = {j["video_id"]: j for j in client.get("/api/jobs").json()}
+    assert (jobs["ok"]["video_duration"], jobs["ok"]["target_runtime"]) == (1500, 25)
+    assert client.post("/api/matches/recheck").json()["checked"] == 1, "only the unfetched one"
+
+    short_id = jobs["short"]["id"]
+    r = client.post(f"/matches/{short_id}/confirm")
+    assert "Confirmed: Show S30E07 - T12." in r.text
+    assert 'needs a look<span class="count">1</span>' in r.text
+    assert client.get(f"/api/jobs/{short_id}").json()["reviewed_at"] is not None
+    r = client.post(f"/matches/{short_id}/unconfirm?view=review")
+    assert 'needs a look<span class="count">2</span>' in r.text
+    r = client.post("/matches/confirm-all")
+    assert (
+        "Confirmed 2 pairings." in r.text and 'needs a look<span class="count">0</span>' in r.text
+    )
+    assert client.get("/matches?view=all").text.count(">confirmed</span>") == 2
+    assert client.delete(f"/api/jobs/{short_id}/confirm").json()["reviewed_at"] is None

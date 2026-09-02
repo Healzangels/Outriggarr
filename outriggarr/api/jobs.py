@@ -79,6 +79,7 @@ class JobOut(BaseModel):
     matched_by: str | None = None
     video_duration: int | None = None
     target_runtime: int | None = None
+    reviewed_at: datetime | None = None
     status: JobStatus
     progress_pct: int
     staged_path: str | None
@@ -261,6 +262,26 @@ def cancel_job(session: Session, job_id: int, now: datetime | None = None) -> Jo
     job.finished_at = now or utcnow()
     session.commit()
     return job
+
+
+def confirm_job(
+    session: Session, job_id: int, *, confirmed: bool, now: datetime | None = None
+) -> Job:
+    """The operator looked at a pairing: it leaves (or, undone, rejoins) the review list."""
+    job = _get_or_404(session, job_id)
+    job.reviewed_at = (now or utcnow()) if confirmed else None
+    session.commit()
+    return job
+
+
+@router.post("/{job_id}/confirm", response_model=JobOut)
+def confirm(job_id: int, session: DbSession) -> Job:
+    return confirm_job(session, job_id, confirmed=True)
+
+
+@router.delete("/{job_id}/confirm", response_model=JobOut)
+def unconfirm(job_id: int, session: DbSession) -> Job:
+    return confirm_job(session, job_id, confirmed=False)
 
 
 @router.post("/{job_id}/retry", response_model=JobOut)

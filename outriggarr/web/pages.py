@@ -23,8 +23,17 @@ from outriggarr.api.connections import (
 )
 from outriggarr.api.deps import ArrFactoryDep, DbSession, RunnerDepsDep
 from outriggarr.api.health import staging_writable
-from outriggarr.api.jobs import CANCELLABLE, DELETABLE, RETRYABLE, cancel_job, delete_job, retry_job
+from outriggarr.api.jobs import (
+    CANCELLABLE,
+    DELETABLE,
+    RETRYABLE,
+    cancel_job,
+    confirm_job,
+    delete_job,
+    retry_job,
+)
 from outriggarr.api.library import library_cache
+from outriggarr.api.matches import recheck_evidence
 from outriggarr.api.settings import update_settings
 from outriggarr.api.subscriptions import (
     OverrideByUrlIn,
@@ -39,7 +48,14 @@ from outriggarr.api.subscriptions import (
     update_subscription,
 )
 from outriggarr.arr.base import ArrError
-from outriggarr.db.models import Connection, ConnectionKind, Job, JobStatus, Subscription
+from outriggarr.db.models import (
+    Connection,
+    ConnectionKind,
+    Job,
+    JobStatus,
+    Subscription,
+    utcnow,
+)
 from outriggarr.matcher import OPTIONAL_STRATEGIES, length_mismatch, mmss, normalise_title
 from outriggarr.settings import DEFAULTS, MERGE_CONTAINERS, all_settings, get_setting
 from outriggarr.source import cookies_state, pot_provider_ready
@@ -203,22 +219,36 @@ def _tier_inferred(job: Job) -> str:
 
 
 def review_entry(job: Job) -> dict:
+    """A pairing needs a look while nothing vouches for it: not an exact title or a
+    pin, not a length that agrees with the runtime, and not the operator's confirmation.
+    A length that contradicts the runtime always needs a look until confirmed."""
     tier = job.matched_by or _tier_inferred(job)
     reason = length_mismatch(job.target_runtime, job.video_duration)
+    evidence = job.video_duration is not None and bool(job.target_runtime)
+    if job.reviewed_at is not None:
+        state = "confirmed"
+    elif reason:
+        state = "length mismatch"
+    elif tier in ("exact", "override"):
+        state = "vouched"
+    elif evidence:
+        state = "length ok"
+    elif job.video_duration is None:
+        state = "unchecked"
+    else:
+        state = "no runtime"
     return {
         "job": job,
         "tier": tier,
         "inferred": job.matched_by is None,
         "reason": reason,
+        "state": state,
         "video_length": mmss(job.video_duration) if job.video_duration else None,
-        "needs_look": tier not in ("exact", "override") or reason is not None,
+        "needs_look": state in ("length mismatch", "unchecked", "no runtime"),
     }
 
 
-@router.get("/matches")
-def matches_page(
-    request: Request, session: DbSession, view: Annotated[str, Query()] = "review"
-) -> HTMLResponse:
+def _matches_context(session: Session, view: str, notice: str | None = None) -> dict:
     view = view if view in ("review", "all") else "review"
     jobs = session.scalars(
         select(Job)
@@ -231,14 +261,74 @@ def matches_page(
     counts = {"review": sum(1 for e in entries if e["needs_look"]), "all": len(entries)}
     if view == "review":
         entries = [e for e in entries if e["needs_look"]]
-    entries.sort(
-        key=lambda e: (not e["reason"], RISK_ORDER.index(e["tier"]))
-    )  # stable: newest within
+    entries.sort(key=lambda e: (not e["reason"], RISK_ORDER.index(e["tier"])))  # stable
+    return {
+        "entries": entries,
+        "view": view,
+        "counts": counts,
+        "total": counts[view],
+        "notice": notice,
+    }
+
+
+@router.get("/matches")
+def matches_page(
+    request: Request, session: DbSession, view: Annotated[str, Query()] = "review"
+) -> HTMLResponse:
+    return templates.TemplateResponse(request, "matches.html", _matches_context(session, view))
+
+
+def _matches_partial(request: Request, session: DbSession, view: str, notice: str | None):
     return templates.TemplateResponse(
-        request,
-        "matches.html",
-        {"entries": entries, "view": view, "counts": counts, "total": counts[view]},
+        request, "partials/matches_content.html", _matches_context(session, view, notice)
     )
+
+
+@router.post("/matches/recheck")
+async def matches_recheck(
+    request: Request,
+    session: DbSession,
+    deps: RunnerDepsDep,
+    view: Annotated[str, Query()] = "review",
+) -> HTMLResponse:
+    r = await recheck_evidence(session, deps)
+    notice = (
+        f"Checked {r['checked']} pairings: {r['durations_filled']} video lengths and "
+        f"{r['runtimes_filled']} runtimes fetched; {r['flagged']} contradict their runtime."
+    )
+    if r["error_count"]:
+        notice += f" {r['error_count']} could not be fetched (first: {r['errors'][0]})."
+    if r["checked"] == 0:
+        notice = "Nothing left to check: every pairing already has its length evidence."
+    return _matches_partial(request, session, view, notice)
+
+
+@router.post("/matches/{job_id}/confirm")
+def matches_confirm(
+    request: Request, session: DbSession, job_id: int, view: Annotated[str, Query()] = "review"
+) -> HTMLResponse:
+    job = confirm_job(session, job_id, confirmed=True)
+    return _matches_partial(request, session, view, f"Confirmed: {job.target_label}.")
+
+
+@router.post("/matches/{job_id}/unconfirm")
+def matches_unconfirm(
+    request: Request, session: DbSession, job_id: int, view: Annotated[str, Query()] = "all"
+) -> HTMLResponse:
+    job = confirm_job(session, job_id, confirmed=False)
+    return _matches_partial(request, session, view, f"Back on the list: {job.target_label}.")
+
+
+@router.post("/matches/confirm-all")
+def matches_confirm_all(
+    request: Request, session: DbSession, view: Annotated[str, Query()] = "review"
+) -> HTMLResponse:
+    listed = [e["job"] for e in _matches_context(session, "review")["entries"]]
+    now = utcnow()
+    for job in listed:
+        job.reviewed_at = now
+    session.commit()
+    return _matches_partial(request, session, view, f"Confirmed {len(listed)} pairings.")
 
 
 @router.get("/activity/rows")

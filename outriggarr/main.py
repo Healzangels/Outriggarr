@@ -20,6 +20,7 @@ from outriggarr.api.connections import router as connections_router
 from outriggarr.api.health import router as health_router
 from outriggarr.api.jobs import router as jobs_router
 from outriggarr.api.library import router as library_router
+from outriggarr.api.matches import router as matches_router
 from outriggarr.api.settings import router as settings_router
 from outriggarr.api.subscriptions import router as subscriptions_router
 from outriggarr.arr import ArrFactory, make_client
@@ -115,6 +116,7 @@ def create_app(
     app.include_router(connections_router)
     app.include_router(jobs_router)
     app.include_router(library_router)
+    app.include_router(matches_router)
     app.include_router(subscriptions_router)
     app.include_router(settings_router)
     app.include_router(pages_router)

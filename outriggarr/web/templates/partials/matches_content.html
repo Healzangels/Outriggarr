@@ -1,0 +1,40 @@
+<div id="matches-content">
+<div class="tabs" role="tablist" aria-label="views">
+  {% for f in ("review", "all") %}
+    <a href="/matches?view={{ f }}" role="tab" aria-selected="{{ 'true' if f == view else 'false' }}" {% if f == view %}aria-current="page"{% endif %}>{{ "needs a look" if f == "review" else f }}<span class="count">{{ counts[f] }}</span></a>
+  {% endfor %}
+</div>
+<div class="form-actions">
+  <button class="secondary" hx-post="/matches/recheck?view={{ view }}" hx-target="#matches-content" hx-swap="outerHTML" hx-indicator="#recheck-busy" title="Fetch each unchecked video's length and Sonarr's runtime for the episode; a pairing whose length agrees leaves the list by itself">Recheck lengths</button>
+  {% if view == "review" and entries %}<button class="secondary outline" hx-post="/matches/confirm-all?view={{ view }}" hx-target="#matches-content" hx-swap="outerHTML" hx-confirm="Mark all {{ entries | length }} listed pairings as looked at and right?">Looks right, all {{ entries | length }}</button>{% endif %}
+  <span id="recheck-busy" class="htmx-indicator muted" aria-busy="true">checking… one fetch per unchecked video</span>
+</div>
+{% if notice %}<p class="notice" role="status" aria-live="polite">{{ notice }}</p>{% endif %}
+{% if not entries %}
+<p class="empty">{% if view == "review" %}Nothing needs a look: every pairing is vouched for by an exact title, a pin, a matching length, or you.{% else %}No subscription has matched anything yet.{% endif %}</p>
+{% else %}
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Episode</th><th>Video</th><th>How</th><th>Length</th><th>Status</th><th>When</th><th></th></tr></thead>
+  <tbody>
+  {% for e in entries %}{% set job = e.job %}
+    <tr>
+      <td>{{ job.target_label }}<span class="two-line muted">{{ job.subscription.title if job.subscription else "" }}</span></td>
+      <td><a href="{{ job.video_url }}" target="_blank" rel="noopener" class="truncate" title="{{ job.video_title }}">{{ job.video_title }}</a></td>
+      <td><span class="chip {{ 'ok' if e.tier in ('exact', 'override') else 'warn' }}" title="{% if e.inferred %}Worked out afterwards from the titles, the subscription's strategies and its pins: this job predates Outriggarr recording how it matched{% if e.tier == 'unknown' %}, and both regex and date were on, so it could have been either{% endif %}{% else %}Recorded by the scheduler when it paired them{% endif %}">{{ e.tier }}{% if e.inferred %}?{% endif %}</span></td>
+      <td class="{{ 'warn' if e.reason else 'muted' }}" title="{{ e.reason or e.state }}">{% if job.video_duration and job.target_runtime %}{{ e.video_length }} vs {{ job.target_runtime }} min{% if e.reason %} ✗{% else %} ✓{% endif %}{% elif job.video_duration %}{{ e.video_length }}, no runtime in Sonarr{% else %}not checked{% endif %}</td>
+      <td><span class="badge badge-{{ job.status.value }}">{{ job.status.value }}</span>{% if e.state == "confirmed" %}<span class="two-line"><span class="chip ok" title="You marked this pairing as right">confirmed</span></span>{% endif %}</td>
+      <td class="muted">{{ (job.finished_at or job.created_at) | ago }}</td>
+      <td>
+        {% if e.state == "confirmed" %}<form class="inline" hx-post="/matches/{{ job.id }}/unconfirm?view={{ view }}" hx-target="#matches-content" hx-swap="outerHTML"><button type="submit" class="secondary outline">undo</button></form>
+        {% elif e.needs_look %}<form class="inline" hx-post="/matches/{{ job.id }}/confirm?view={{ view }}" hx-target="#matches-content" hx-swap="outerHTML"><button type="submit" class="secondary" title="You looked and it is the right video">Looks right</button></form>{% endif %}
+        {% if job.subscription_id %}<a href="/subscriptions/{{ job.subscription_id }}" class="muted" title="Open the subscription to pin the right video">wrong? pin</a>{% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% if total > entries | length %}<p class="muted">Showing the newest {{ entries | length }} of {{ total }}.</p>{% endif %}
+{% endif %}
+</div>

@@ -202,6 +202,7 @@ class Job(Base):
     matched_by: Mapped[str | None] = mapped_column(String(20))
     video_duration: Mapped[int | None] = mapped_column(Integer)  # seconds, from the listing
     target_runtime: Mapped[int | None] = mapped_column(Integer)  # minutes, from the *arr
+    reviewed_at: Mapped[datetime | None] = mapped_column(UTCDateTime)  # "looks right" clicked
     status: Mapped[JobStatus] = mapped_column(
         Enum(JobStatus), nullable=False, default=JobStatus.queued, index=True
     )
