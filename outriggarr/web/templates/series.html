@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Series · Outriggarr{% endblock %}
+{% block content %}
+<h2>Series</h2>
+{% if not connection %}
+<p class="warn">No enabled Sonarr connection. Add one via <code>/api/connections</code> first.</p>
+{% else %}
+<p class="muted">Sonarr: {{ connection.name }} · subscribed series get a source attached here; which episodes are wanted still comes from Sonarr.</p>
+<input type="search" name="q" placeholder="Search Sonarr series…" autocomplete="off"
+       hx-get="/series/rows" hx-trigger="keyup changed delay:300ms, search" hx-target="#series-rows">
+<div id="series-rows" hx-get="/series/rows" hx-trigger="load" hx-swap="innerHTML"></div>
+{% endif %}
+
+<h3>Subscriptions</h3>
+{% if not subscriptions %}
+<p class="muted">None yet. Search above and press Subscribe.</p>
+{% else %}
+<table>
+  <thead><tr><th>Series</th><th>Source</th><th>Strategies</th><th>Enabled</th><th>Last scan</th></tr></thead>
+  <tbody>
+  {% for s in subscriptions %}
+    <tr>
+      <td><a href="/subscriptions/{{ s.id }}">{{ s.title or ("series " ~ s.series_id) }}</a></td>
+      <td><a href="{{ s.source_url }}" target="_blank" rel="noopener">{{ s.source_url | truncate(60) }}</a></td>
+      <td>override{% for st in s.strategies %}, {{ st }}{% endfor %}</td>
+      <td>{{ "yes" if s.enabled else "no" }}</td>
+      <td>{% if s.last_scan_at %}{{ s.last_scan_at.strftime("%Y-%m-%d %H:%M") }}Z
+        {% if s.last_scan_result %}<br><span class="muted">{% if s.last_scan_result.error %}<span class="warn">{{ s.last_scan_result.error | truncate(80) }}</span>{% else %}matched {{ s.last_scan_result.matched }} · queued {{ s.last_scan_result.created }} · unmatched {{ s.last_scan_result.unmatched }}{% endif %}</span>{% endif %}
+        {% else %}<span class="muted">never</span>{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

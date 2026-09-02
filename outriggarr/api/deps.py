@@ -21,6 +21,11 @@ def get_source(request: Request) -> VideoSource:
     return request.app.state.source
 
 
+def get_runner_deps(request: Request):
+    return request.app.state.runner_deps
+
+
 DbSession = Annotated[Session, Depends(get_session)]
 SourceDep = Annotated[VideoSource, Depends(get_source)]
+RunnerDepsDep = Annotated[object, Depends(get_runner_deps)]
 ArrFactoryDep = Annotated[ArrFactory, Depends(get_arr_factory)]

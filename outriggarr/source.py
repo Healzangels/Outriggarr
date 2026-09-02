@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -49,6 +50,14 @@ class VideoSource(Protocol):
         """Blocking. A video URL → [that video]; a playlist URL → its videos, flat."""
         ...
 
+    def list_recent(self, url: str, limit: int) -> list[VideoRef]:
+        """Blocking. The newest `limit` videos of a channel/playlist, flat (no dates)."""
+        ...
+
+    def fetch_info(self, url: str) -> VideoRef:
+        """Blocking. One video with its upload date (a per-video fetch)."""
+        ...
+
     def download(
         self,
         url: str,
@@ -80,27 +89,50 @@ class _YtDlpLogger:
         log.error("%s", msg)
 
 
+_FLAT_OPTS: dict[str, Any] = {
+    "extract_flat": "in_playlist",
+    "skip_download": True,
+    "quiet": True,
+    "no_warnings": False,
+    "noprogress": True,
+}
+
+
+def channel_videos_url(url: str) -> str:
+    """A bare YouTube channel URL lists featured shelves; its /videos tab is the flat,
+    newest-first upload list the scheduler wants. Other URLs pass through unchanged."""
+    m = re.match(
+        r"^(https?://(?:www\.|m\.)?youtube\.com/(?:@[^/?#]+|channel/[^/?#]+|c/[^/?#]+|user/[^/?#]+))/?(?:[?#].*)?$",
+        url.strip(),
+    )
+    return f"{m.group(1)}/videos" if m else url.strip()
+
+
 class YtDlpSource:
-    def resolve(self, url: str) -> list[VideoRef]:
+    def _extract(self, url: str, opts: dict[str, Any]) -> dict[str, Any]:
         import yt_dlp
         from yt_dlp.utils import DownloadError
 
-        opts: dict[str, Any] = {
-            "extract_flat": "in_playlist",
-            "skip_download": True,
-            "quiet": True,
-            "no_warnings": False,
-            "noprogress": True,
-            "logger": _YtDlpLogger(),
-        }
         try:
-            with yt_dlp.YoutubeDL(opts) as ydl:
+            with yt_dlp.YoutubeDL({**opts, "logger": _YtDlpLogger()}) as ydl:
                 info = ydl.extract_info(url, download=False)
         except DownloadError as exc:
             raise SourceError(str(exc)) from exc
         if info is None:
             raise SourceError(f"yt-dlp returned no info for {url}")
-        return videos_from_info(info)
+        return info
+
+    def resolve(self, url: str) -> list[VideoRef]:
+        return videos_from_info(self._extract(url, _FLAT_OPTS))
+
+    def list_recent(self, url: str, limit: int) -> list[VideoRef]:
+        info = self._extract(channel_videos_url(url), {**_FLAT_OPTS, "playlistend": limit})
+        return videos_from_info(info)[:limit]
+
+    def fetch_info(self, url: str) -> VideoRef:
+        info = self._extract(url, {"skip_download": True, "quiet": True, "noplaylist": True})
+        (video,) = videos_from_info(info)
+        return video
 
     def download(
         self,

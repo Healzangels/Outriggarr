@@ -26,6 +26,11 @@
     .results li:hover { background: var(--pico-secondary-background); }
     .rel { position: relative; }
     .warn { color: #e8a33d; }
+    .ok { color: #6fbf73; }
+    .strategy { font-size: .75em; padding: .1em .4em; border-radius: .3em; background: #333; }
+    form.inline { display: inline; margin: 0; }
+    form.inline button { padding: .2em .6em; font-size: .85em; margin: 0; }
+    .notice { padding: .5em .8em; background: #1f3b2a; border-radius: .4em; }
   </style>
 </head>
 <body>
@@ -33,6 +38,7 @@
     <ul><li><strong>Outriggarr</strong></li></ul>
     <ul>
       <li><a href="/activity" class="{% if request.url.path.startswith('/activity') %}active{% endif %}">Activity</a></li>
+      <li><a href="/series" class="{% if request.url.path.startswith('/series') or request.url.path.startswith('/subscriptions') %}active{% endif %}">Series</a></li>
       <li><a href="/grab" class="{% if request.url.path.startswith('/grab') %}active{% endif %}">Grab</a></li>
     </ul>
   </nav>

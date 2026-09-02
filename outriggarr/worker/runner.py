@@ -57,6 +57,7 @@ class RunnerDeps:
     staging_dir: Path
     poll_seconds: float = 5.0
     command_poll_seconds: float = 2.0
+    scheduler_tick_seconds: float = 60.0
     now: Callable[[], datetime] = utcnow
     sleep: Callable[[float], object] = field(default=asyncio.sleep)
 
@@ -254,7 +255,7 @@ async def _download_stage(
     except ArrError as exc:
         raise _Retry(str(exc)) from exc
 
-    fmt = get_setting(session, "default_format")
+    fmt = job.format or get_setting(session, "default_format")
     container = get_setting(session, "merge_container")
     last_write = 0.0
 

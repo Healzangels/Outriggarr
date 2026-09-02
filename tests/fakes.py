@@ -203,12 +203,29 @@ class FakeVideoSource:
     videos: list[VideoRef] = field(default_factory=list)
     resolve_error: Exception | None = None
     resolved: list[str] = field(default_factory=list)
+    recent: list[VideoRef] = field(default_factory=list)
+    recent_error: Exception | None = None
+    listed: list[tuple[str, int]] = field(default_factory=list)
+    infos: dict[str, VideoRef] = field(default_factory=dict)  # url → full ref
+    fetched: list[str] = field(default_factory=list)
 
     def resolve(self, url: str) -> list[VideoRef]:
         self.resolved.append(url)
         if self.resolve_error is not None:
             raise self.resolve_error
         return list(self.videos)
+
+    def list_recent(self, url: str, limit: int) -> list[VideoRef]:
+        self.listed.append((url, limit))
+        if self.recent_error is not None:
+            raise self.recent_error
+        return list(self.recent[:limit])
+
+    def fetch_info(self, url: str) -> VideoRef:
+        self.fetched.append(url)
+        if url not in self.infos:
+            raise SourceError(f"ERROR: [youtube] {url}: Video unavailable")
+        return self.infos[url]
 
     def download(self, url, dest_dir: Path, *, fmt, merge_container, progress, should_abort):
         self.calls.append({"url": url, "dest": dest_dir, "fmt": fmt, "container": merge_container})

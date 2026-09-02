@@ -20,6 +20,7 @@ from outriggarr.api.connections import router as connections_router
 from outriggarr.api.health import router as health_router
 from outriggarr.api.jobs import router as jobs_router
 from outriggarr.api.library import router as library_router
+from outriggarr.api.subscriptions import router as subscriptions_router
 from outriggarr.arr import ArrFactory, make_client
 from outriggarr.db.session import make_engine, make_session_factory, run_migrations
 from outriggarr.settings import Settings
@@ -27,6 +28,7 @@ from outriggarr.source import VideoSource, YtDlpSource
 from outriggarr.web.pages import STATIC_DIR
 from outriggarr.web.pages import router as pages_router
 from outriggarr.worker.runner import RunnerDeps, run_worker
+from outriggarr.worker.scheduler import run_scheduler
 
 log = logging.getLogger(__name__)
 
@@ -55,18 +57,21 @@ def create_app(
         app.state.http = httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0))
         app.state.arr_factory = arr_factory or (lambda conn: make_client(conn, app.state.http))
         app.state.source = source
+        app.state.runner_deps = RunnerDeps(
+            session_factory=app.state.session_factory,
+            arr_factory=app.state.arr_factory,
+            source=source,
+            staging_dir=settings.staging_dir,
+        )
 
         stop = asyncio.Event()
         task = None
+        scheduler_task = None
         if start_worker:
             settings.staging_dir.mkdir(parents=True, exist_ok=True)
-            deps = RunnerDeps(
-                session_factory=app.state.session_factory,
-                arr_factory=app.state.arr_factory,
-                source=source,
-                staging_dir=settings.staging_dir,
-            )
+            deps = app.state.runner_deps
             task = asyncio.create_task(run_worker(deps, stop))
+            scheduler_task = asyncio.create_task(run_scheduler(deps, stop))
         log.info("outriggarr %s ready (db=%s)", __version__, settings.database_url)
         try:
             yield
@@ -74,6 +79,8 @@ def create_app(
             stop.set()
             if task is not None:
                 await task
+            if scheduler_task is not None:
+                await scheduler_task
             await app.state.http.aclose()
             engine.dispose()
 
@@ -82,6 +89,7 @@ def create_app(
     app.include_router(connections_router)
     app.include_router(jobs_router)
     app.include_router(library_router)
+    app.include_router(subscriptions_router)
     app.include_router(pages_router)
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
     return app

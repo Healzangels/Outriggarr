@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}{{ sub.title }} · Outriggarr{% endblock %}
+{% block content %}
+<h2>{{ sub.title or ("series " ~ sub.series_id) }} <span class="muted" style="font-size:.6em">subscription {{ sub.id }}{% if not sub.enabled %} · disabled{% endif %}</span></h2>
+{% if error %}<p class="warn">{{ error }}</p>{% endif %}
+<p><a href="{{ sub.source_url }}" target="_blank" rel="noopener">{{ sub.source_url }}</a>
+  · strategies: override{% for st in sub.strategies %}, {{ st }}{% endfor %}
+  {% if sub.last_scan_at %} · last scan {{ sub.last_scan_at.strftime("%Y-%m-%d %H:%M") }}Z{% endif %}</p>
+
+<p>
+  <button hx-post="/subscriptions/{{ sub.id }}/scan" hx-target="#preview" hx-indicator="#scan-busy">Scan now</button>
+  <span id="scan-busy" class="htmx-indicator muted">scanning…</span>
+</p>
+<div id="preview" hx-get="/subscriptions/{{ sub.id }}/preview" hx-trigger="load" hx-swap="innerHTML">
+  <p class="muted" aria-busy="true">Loading match preview…</p>
+</div>
+
+<details>
+  <summary>Settings</summary>
+  <form method="post" action="/subscriptions/{{ sub.id }}/edit">
+    {% include "partials/subscription_fields.html" %}
+    <label><input type="checkbox" name="enabled" value="1" {% if sub.enabled %}checked{% endif %}> Enabled (scanned on the schedule)</label>
+    <button type="submit">Save</button>
+  </form>
+  <form method="post" action="/subscriptions/{{ sub.id }}/delete" onsubmit="return confirm('Delete this subscription? Jobs are kept.')">
+    <button type="submit" class="secondary">Delete subscription</button>
+  </form>
+</details>
+
+<h3>Recent jobs from this subscription</h3>
+{% if not jobs %}<p class="muted">None yet.</p>{% else %}
+<table><thead><tr><th>#</th><th>Status</th><th>Target</th><th>Video</th></tr></thead><tbody>
+{% for job in jobs %}<tr><td><a href="/activity">{{ job.id }}</a></td><td><span class="status status-{{ job.status.value }}">{{ job.status.value }}</span></td><td>{{ job.target_label }}</td><td>{{ job.video_title }}</td></tr>{% endfor %}
+</tbody></table>{% endif %}
+{% endblock %}

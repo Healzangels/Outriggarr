@@ -85,6 +85,53 @@ class Setting(Base):
     value: Mapped[str] = mapped_column(Text, nullable=False)
 
 
+class Subscription(Base):
+    """A Sonarr series with a video source attached. Which episodes are wanted still
+    comes from Sonarr; overrides pin a video to an episode when matching cannot."""
+
+    __tablename__ = "subscription"
+    __table_args__ = (
+        UniqueConstraint("connection_id", "series_id", name="uq_subscription_series"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    connection_id: Mapped[int] = mapped_column(ForeignKey("connection.id"), nullable=False)
+    series_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    tvdb_id: Mapped[int | None] = mapped_column(Integer)
+    title: Mapped[str] = mapped_column(String(300), nullable=False, default="")
+    source_url: Mapped[str] = mapped_column(String(1000), nullable=False)
+    format: Mapped[str | None] = mapped_column(String(500))  # None → global default
+    # Which optional strategies run, in the matcher's fixed order. Override always runs.
+    strategies: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    date_tolerance_days: Mapped[int] = mapped_column(Integer, nullable=False, default=2)
+    date_offset_days: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    title_regex: Mapped[str | None] = mapped_column(String(500))
+    enabled: Mapped[bool] = mapped_column(default=True, nullable=False)
+    last_scan_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    last_scan_result: Mapped[dict | None] = mapped_column(JSON)
+
+    connection: Mapped[Connection] = relationship()
+    overrides: Mapped[list[Override]] = relationship(
+        back_populates="subscription", cascade="all, delete-orphan"
+    )
+    jobs: Mapped[list[Job]] = relationship(back_populates="subscription")
+
+
+class Override(Base):
+    __tablename__ = "override"
+    __table_args__ = (UniqueConstraint("subscription_id", "video_id", name="uq_override_video"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    subscription_id: Mapped[int] = mapped_column(
+        ForeignKey("subscription.id", ondelete="CASCADE"), nullable=False
+    )
+    video_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    season: Mapped[int] = mapped_column(Integer, nullable=False)
+    episode: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    subscription: Mapped[Subscription] = relationship(back_populates="overrides")
+
+
 class Job(Base):
     __tablename__ = "job"
     __table_args__ = (
@@ -105,6 +152,11 @@ class Job(Base):
     # Human label for the target ("Hot Ones S30E09 - …"), supplied by whoever creates the
     # job (the GUI knows it); purely for display.
     target_label: Mapped[str | None] = mapped_column(String(300))
+    # Set by the scheduler; NULL for manual grabs. SET NULL when the subscription goes.
+    subscription_id: Mapped[int | None] = mapped_column(
+        ForeignKey("subscription.id", ondelete="SET NULL")
+    )
+    format: Mapped[str | None] = mapped_column(String(500))  # None → global default
     status: Mapped[JobStatus] = mapped_column(
         Enum(JobStatus), nullable=False, default=JobStatus.queued, index=True
     )
@@ -117,6 +169,7 @@ class Job(Base):
     finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
 
     connection: Mapped[Connection] = relationship(back_populates="jobs")
+    subscription: Mapped[Subscription | None] = relationship(back_populates="jobs")
 
     @staticmethod
     def make_target_key(

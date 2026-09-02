@@ -1,0 +1,17 @@
+{% if error %}<p class="warn">{{ error }}</p>
+{% elif not q %}<p class="muted">Type to search.</p>
+{% elif not rows %}<p class="muted">No series match "{{ q }}".</p>
+{% else %}
+<table>
+  <thead><tr><th>Series</th><th>Year</th><th>TVDB</th><th></th></tr></thead>
+  <tbody>
+  {% for s in rows %}
+    <tr>
+      <td>{{ s.title }}</td><td>{{ s.year or "" }}</td><td>{{ s.tvdb_id or "" }}</td>
+      <td>{% if s.id in subscribed %}<a href="/subscriptions/{{ subscribed[s.id].id }}">subscribed ✓</a>
+          {% else %}<a href="/series/{{ s.id }}/subscribe" role="button" class="outline">Subscribe</a>{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}

@@ -40,6 +40,7 @@ class Settings:
 # Defaults for DB-backed settings. Keys are the only ones the app knows about.
 DEFAULTS: dict[str, str] = {
     "scan_interval_minutes": "30",
+    "scan_video_limit": "50",  # newest N videos listed per subscription scan
     "concurrency": "1",
     # 1080p cap + H.264/AAC preference: every profile on the target stack tops out at
     # WEBDL-1080p and AV1/VP9 forces transcodes on most players. Editable in Settings.
