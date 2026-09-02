@@ -28,15 +28,14 @@
       <button type="button" class="secondary" hx-post="/settings/connections/{{ c.id }}/test" hx-target="#test-{{ c.id }}" hx-swap="innerHTML" hx-indicator="#test-busy-{{ c.id }}">Test</button>
       <span id="test-busy-{{ c.id }}" class="htmx-indicator muted">testing…</span>
       <span id="test-{{ c.id }}" role="status" aria-live="polite"></span>
+      <button type="submit" form="delete-connection-{{ c.id }}" class="secondary outline danger">Delete</button>
     </div>
   </form>
-  <form method="post" action="/settings/connections/{{ c.id }}/delete" data-confirm="Delete connection {{ c.name }}?" onsubmit="return confirm(this.dataset.confirm)">
-    <div class="form-actions"><button type="submit" class="secondary outline">Delete</button></div>
-  </form>
+  <form id="delete-connection-{{ c.id }}" method="post" action="/settings/connections/{{ c.id }}/delete" data-confirm="Delete connection {{ c.name }}?" onsubmit="return confirm(this.dataset.confirm)"></form>
 </article>
 {% endfor %}
-<details {% if not connections %}open{% endif %}>
-  <summary>Add a connection</summary>
+<details class="panel" {% if not connections %}open{% endif %}>
+  <summary>Add a connection <span class="muted">· Sonarr or Radarr</span></summary>
   <article class="card">
   <form method="post" action="/settings/connections">
     <div class="grid">

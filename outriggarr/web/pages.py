@@ -588,8 +588,15 @@ def subscription_page(request: Request, subscription_id: int, session: DbSession
 
 def _preview_response(request: Request, session: DbSession, report, notice: str | None = None):
     sub = session.get(Subscription, report.subscription_id)
+    # "this source may not carry the series" is only a fair reading for a subscription
+    # that has never matched anything: one job on record is enough to drop the hint
+    has_history = bool(
+        session.scalar(select(Job.id).where(Job.subscription_id == report.subscription_id).limit(1))
+    )
     return templates.TemplateResponse(
-        request, "partials/preview.html", {"sub": sub, "report": report, "notice": notice}
+        request,
+        "partials/preview.html",
+        {"sub": sub, "report": report, "notice": notice, "has_history": has_history},
     )
 
 

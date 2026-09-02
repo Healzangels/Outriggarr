@@ -14,7 +14,8 @@
 </div>
 {% if notice %}<p class="notice" role="status" aria-live="polite">{{ notice }}</p>{% endif %}
 {% if report.error %}<p class="notice bad">Scan failed: {{ report.error }}</p>{% endif %}
-{% set nothing_seen = report.unmatched and not report.matches and not report.skipped_existing and (report.unmatched | map(attribute="candidates") | map("dictsort") | map("map", attribute="1") | map("sum", start=[]) | map("length") | sum == 0) %}
+{# "this source may not carry the series" is only a fair reading when the subscription has never matched anything; a fully imported series with a few absent episodes looks the same to the matcher #}
+{% set nothing_seen = report.unmatched and not report.matches and not report.skipped_existing and not has_history and (report.unmatched | map(attribute="candidates") | map("dictsort") | map("map", attribute="1") | map("sum", start=[]) | map("length") | sum == 0) %}
 {% if nothing_seen %}
 <p class="notice warn">None of the {{ report.videos | length }} listed videos resembles any wanted episode. This source may not carry these episodes (a different playlist, an older web series, or a channel that posts under other titles). Try the channel's uploads or another playlist, or pin videos below.</p>
 {% endif %}
@@ -82,10 +83,12 @@
         {% endfor %}
       </td>
       <td>
-        <form class="inline" hx-post="/subscriptions/{{ sub.id }}/overrides" hx-target="#preview">
+        <form hx-post="/subscriptions/{{ sub.id }}/overrides" hx-target="#preview">
           <input type="hidden" name="season" value="{{ u.season }}"><input type="hidden" name="episode" value="{{ u.number }}">
-          <input type="url" name="video_url" list="listed-videos" placeholder="pick a listed video or paste a URL" title="Type part of a title to filter the listed videos, or paste any video URL (it need not be in the listing)" style="max-width:26em; display:inline-block; margin:0 .2em .2em 0">
-          <button type="submit">Set</button>
+          <fieldset role="group" class="pin">
+            <input type="url" name="video_url" list="listed-videos" placeholder="pick a listed video or paste a URL" title="Type part of a title to filter the listed videos, or paste any video URL (it need not be in the listing)">
+            <button type="submit">Set</button>
+          </fieldset>
         </form>
       </td>
     </tr>
@@ -106,11 +109,11 @@
 {% endif %}
 
 {% if report.skipped_existing %}
-<details><summary>{{ report.skipped_existing | length }} wanted episode(s) already have jobs</summary>
+<details class="plain"><summary>{{ report.skipped_existing | length }} wanted episode(s) already have jobs</summary>
 <ul>{% for s in report.skipped_existing %}<li>{{ s.code }} {{ s.title }} → job #{{ s.job_id }} <span class="badge badge-{{ s.job_status }}">{{ s.job_status }}</span></li>{% endfor %}</ul>
 </details>
 {% endif %}
 
-<details><summary>{{ report.videos | length }} video(s) listed from the source</summary>
+<details class="plain"><summary>{{ report.videos | length }} video(s) listed from the source{% if report.sources > 1 %}s{% endif %}</summary>
 <ol>{% for v in report.videos %}<li>{% if v.title == v.id %}<span class="muted">unavailable video</span>{% else %}<a href="{{ v.url }}" target="_blank" rel="noopener">{{ v.title }}</a>{% endif %} <span class="muted mono">{{ v.id }}{% if v.upload_date %} · {{ v.upload_date }}{% endif %}</span></li>{% endfor %}</ol>
 </details>

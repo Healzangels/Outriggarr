@@ -32,21 +32,22 @@
   <header>Recent jobs from this subscription</header>
   {% if not jobs %}<p class="muted">None yet.</p>{% else %}
   <div class="table-wrap"><table><thead><tr><th>#</th><th>Status</th><th>Target</th><th>Video</th><th>When</th></tr></thead><tbody>
-  {% for job in jobs %}<tr><td class="mono"><a href="/activity">{{ job.id }}</a></td><td><span class="badge badge-{{ job.status.value }} status status-{{ job.status.value }}">{{ job.status.value }}</span></td><td>{{ job.target_label }}</td><td><span class="truncate" title="{{ job.video_title }}">{{ job.video_title }}</span></td><td class="muted">{{ (job.finished_at or job.created_at) | ago }}</td></tr>{% endfor %}
+  {% for job in jobs %}<tr><td class="mono"><a href="/activity">{{ job.id }}</a></td><td><span class="badge badge-{{ job.status.value }} status status-{{ job.status.value }}">{{ job.status.value }}</span></td><td>{{ job.target_label }}</td><td><span class="truncate" title="{{ job.video_title }}">{{ job.video_title }}</span></td><td class="muted when">{{ (job.finished_at or job.created_at) | ago }}</td></tr>{% endfor %}
   </tbody></table></div>{% endif %}
 </article>
 
-<details>
-  <summary>Settings</summary>
+<details class="panel">
+  <summary>Subscription settings <span class="muted">· sources, matching, listing depth</span></summary>
   <article class="card">
   <form method="post" action="/subscriptions/{{ sub.id }}/edit">
     {% include "partials/subscription_fields.html" %}
     <label><input type="checkbox" name="enabled" value="1" {% if sub.enabled %}checked{% endif %}> Enabled <span class="muted">(scanned on the schedule)</span></label>
-    <div class="form-actions"><button type="submit">Save</button></div>
+    <div class="form-actions">
+      <button type="submit">Save</button>
+      <button type="submit" form="delete-subscription" class="secondary outline danger">Delete subscription</button>
+    </div>
   </form>
-  <form method="post" action="/subscriptions/{{ sub.id }}/delete" data-confirm="Delete this subscription? Jobs are kept." onsubmit="return confirm(this.dataset.confirm)">
-    <div class="form-actions"><button type="submit" class="secondary outline">Delete subscription</button></div>
-  </form>
+  <form id="delete-subscription" method="post" action="/subscriptions/{{ sub.id }}/delete" data-confirm="Delete this subscription? Jobs are kept." onsubmit="return confirm(this.dataset.confirm)"></form>
   </article>
 </details>
 {% endblock %}

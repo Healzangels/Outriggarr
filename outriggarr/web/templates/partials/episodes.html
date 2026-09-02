@@ -3,7 +3,7 @@
 {% else %}
 <p class="chips">{% for s in seasons %}<span class="chip {{ 'warn' if s.missing else 'ok' }}">S{{ s.season }} {{ s.files }}/{{ s.total }}</span>{% endfor %}</p>
 {% for s in seasons %}
-<details {% if loop.first %}open{% endif %}>
+<details class="plain" {% if loop.first %}open{% endif %}>
   <summary>Season {{ s.season }} <span class="muted">· {{ s.files }}/{{ s.total }} files{% if s.missing %} · <span class="warn">{{ s.missing }} missing</span>{% endif %}</span></summary>
   <div class="table-wrap">
   <table>

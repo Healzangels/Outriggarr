@@ -874,3 +874,71 @@ def test_only_one_recheck_runs_at_a_time(client: TestClient, monkeypatch) -> Non
     assert status["checked"] == 1 and status["durations_filled"] == 1, status
     third = client.post("/api/matches/recheck").json()
     assert third["started_at"] != first["started_at"], "a finished one can be started again"
+
+
+def test_polish_pass_markup(client: TestClient) -> None:
+    _seed_series(client)
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={"connection_id": 1, "series_id": 5, "sources": ["https://www.youtube.com/@x"]},
+    ).json()["id"]
+    # delete buttons sit in the main action row and post through their own form
+    settings = client.get("/settings").text
+    assert 'form="delete-connection-1"' in settings and 'id="delete-connection-1"' in settings
+    assert '<details class="panel"' in settings, "collapsible sections share one look"
+    page = client.get(f"/subscriptions/{sub_id}").text
+    assert 'form="delete-subscription"' in page and 'id="delete-subscription"' in page
+    assert "Subscription settings" in page
+    # the pin form is one input group, not an input with a button wrapped underneath
+    prev = client.get(f"/subscriptions/{sub_id}/preview").text
+    if "Unmatched" in prev:
+        assert '<fieldset role="group" class="pin">' in prev
+    # time cells never wrap
+    assert (
+        'class="muted when"' in client.get("/activity").text
+        or "No jobs" in client.get("/activity").text
+    )
+
+
+def test_source_hint_is_dropped_once_the_subscription_has_history(client: TestClient) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from outriggarr.arr.base import EpisodeRef, SeriesRef
+    from outriggarr.source import VideoRef
+    from tests.fakes import FakeArrClient
+
+    now = datetime.now(UTC)
+    client.app.state.arr_factory.by_url["http://sonarr-host:1234"] = FakeArrClient(
+        series_list=[SeriesRef(5, "Show", 2015, 1, True)],
+        episodes_by_series={
+            5: [EpisodeRef(11, 30, 6, "Six Spicy Wings", False, True, now - timedelta(days=1))]
+        },
+    )
+    source = client.app.state.source
+    source.recent = [VideoRef("z", "Nothing like it", "https://y/z", 1, 1, None)]
+    client.post("/api/connections", json=SONARR)
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={"connection_id": 1, "series_id": 5, "sources": ["https://www.youtube.com/@x"]},
+    ).json()["id"]
+    prev = client.get(f"/subscriptions/{sub_id}/preview").text
+    assert "This source may not carry these episodes" in prev, "never matched: fair warning"
+    client.post(
+        "/api/jobs",
+        json=[
+            {
+                "connection_id": 1,
+                "subscription_id": sub_id,
+                "target": {"kind": "episode", "series_id": 5, "episode_ids": [11], "label": "x"},
+                "video": {"url": "https://y/z", "id": "z", "title": "Nothing like it"},
+            }
+        ],
+    )
+    from outriggarr.db.models import Job
+
+    with client.app.state.session_factory() as s:
+        job = s.query(Job).first()
+        job.subscription_id = sub_id  # a job on record, however it got there
+        s.commit()
+    prev = client.get(f"/subscriptions/{sub_id}/preview").text
+    assert "This source may not carry these episodes" not in prev
