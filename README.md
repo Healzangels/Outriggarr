@@ -44,7 +44,7 @@ services:
 
 Images: every push to `main` runs the tests and pushes `latest` (plus a `sha-…` tag) to Docker Hub; a `vX.Y.Z` git tag also pushes `X.Y.Z` and `X.Y`. Local build: `docker build -t outriggarr .` (needs internet: it fetches ffmpeg, deno and Python packages).
 
-Unraid: `unraid/my-outriggarr.xml` is a ready template (copy it to `/boot/config/plugins/dockerMan/templates-user/`). It maps your data share to `/data` like the *arr templates do, stages under `/data/outriggarr`, and expects `PUID`/`PGID`/`UMASK` matching your Sonarr/Radarr template, a config path under appdata, the same custom network as the *arr containers, and a host port for 8080. YouTube's JavaScript challenges are solved by deno plus the bundled `yt-dlp-ejs` package; nothing is downloaded at runtime for that.
+Unraid: `unraid/my-outriggarr.xml` is a ready template (copy it to `/boot/config/plugins/dockerMan/templates-user/`). It maps your data share to `/data` like the *arr templates do, stages under `/data/outriggarr`, and expects `PUID`/`PGID`/`UMASK` matching your Sonarr/Radarr template, a config path under appdata, the same custom network as the *arr containers, and a host port for 8080. YouTube's JavaScript challenges are solved by deno plus the bundled `yt-dlp-ejs` package, and `curl_cffi` provides browser impersonation for the requests that need it; nothing is downloaded at runtime for either.
 
 Then open the GUI → **Settings** → add Sonarr (and Radarr): URL, API key, and the staging path *as that app sees it*. **Test** checks the API key, that the server really is the kind you said, and that it can see the staging directory.
 
