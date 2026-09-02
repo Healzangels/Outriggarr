@@ -17,10 +17,12 @@ from fastapi import FastAPI
 from outriggarr import __version__
 from outriggarr.api.connections import router as connections_router
 from outriggarr.api.health import router as health_router
+from outriggarr.api.jobs import router as jobs_router
 from outriggarr.arr import ArrFactory, make_client
 from outriggarr.db.session import make_engine, make_session_factory, run_migrations
 from outriggarr.settings import Settings
-from outriggarr.worker.runner import run_worker
+from outriggarr.source import VideoSource, YtDlpSource
+from outriggarr.worker.runner import RunnerDeps, run_worker
 
 log = logging.getLogger(__name__)
 
@@ -30,6 +32,7 @@ def create_app(
     *,
     start_worker: bool = True,
     arr_factory: ArrFactory | None = None,
+    source: VideoSource | None = None,
 ) -> FastAPI:
     settings = settings or Settings.from_env()
     logging.basicConfig(
@@ -48,11 +51,16 @@ def create_app(
         app.state.arr_factory = arr_factory or (lambda conn: make_client(conn, app.state.http))
 
         stop = asyncio.Event()
-        task = (
-            asyncio.create_task(run_worker(app.state.session_factory, stop))
-            if start_worker
-            else None
-        )
+        task = None
+        if start_worker:
+            settings.staging_dir.mkdir(parents=True, exist_ok=True)
+            deps = RunnerDeps(
+                session_factory=app.state.session_factory,
+                arr_factory=app.state.arr_factory,
+                source=source or YtDlpSource(),
+                staging_dir=settings.staging_dir,
+            )
+            task = asyncio.create_task(run_worker(deps, stop))
         log.info("outriggarr %s ready (db=%s)", __version__, settings.database_url)
         try:
             yield
@@ -66,6 +74,7 @@ def create_app(
     app = FastAPI(title="Outriggarr", version=__version__, lifespan=lifespan)
     app.include_router(health_router)
     app.include_router(connections_router)
+    app.include_router(jobs_router)
     return app
 
 

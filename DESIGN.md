@@ -81,6 +81,8 @@ Job status: `queued → downloading → importing → done | failed | cancelled`
 3. The *arr moves and renames the file into the library and fires its own notifications.
 4. Remove the job's staging folder.
 
+**M2 decisions.** The runner asks the *arr for the target first (`target_info`: titles for the staging name, and `hasFile`), then downloads, renames to the parseable name, and asks again right before import: a target that already has a file ends the job as `cancelled` with that reason and the staged file is discarded. The `GET /manualimport` call passes `seriesId` (Sonarr) or `movieId` (Radarr) so the *arr never guesses the series from the filename. Languages come from the candidate, or English when the *arr could only say Unknown. After the command completes the target is read once more; "completed" without `hasFile` is a failure that keeps the staged file. A job whose staged file still exists skips the download on its next run (crash recovery and *arr-side retries).
+
 `DownloadedEpisodesScan` / `DownloadedMoviesScan` (single call, path + importMode) still exist on `/api/v3/command` but depend on the filename parser — keep as a fallback switch only. The un-versioned `/api/command` path is gone in Sonarr v4; everything is `/api/v3/`.
 
 Runner: one download at a time by default (YouTube throttling), configurable. yt-dlp is blocking, so it runs in a thread pool under the asyncio worker.
@@ -134,7 +136,8 @@ GET/POST/PUT/DELETE  /api/subscriptions          POST /api/subscriptions/{id}/sc
 GET                  /api/subscriptions/{id}/preview
 PUT/DELETE           /api/subscriptions/{id}/overrides/{video_id}
 POST                 /api/resolve  {url}  → list of videos (flat)
-POST                 /api/jobs     [{target, video}]        GET /api/jobs?status=
+POST                 /api/jobs     [{connection_id, target:{kind, series_id, episode_ids | movie_id}, video:{url, id, title}}]  (all-or-nothing; 409 lists duplicates)
+GET                  /api/jobs?status=     GET /api/jobs/{id}
 POST                 /api/jobs/{id}/retry   /cancel
 GET/PUT              /api/settings
 ```
@@ -146,11 +149,11 @@ GET/PUT              /api/settings
 | `db/` | SQLAlchemy 2.x models + Alembic migrations. SQLite file in `/config`. |
 | `arr/base.py` | `ArrClient` protocol: `status()`, `wanted(series_id=None)`, `quality_definitions()`, `path_visible(path)` (M1); `manual_import_candidates(folder)`, `manual_import(files)`, `command(id)` (M2). Errors raise `ArrError` whose message carries the request and the verbatim response body. |
 | `arr/sonarr.py`, `arr/radarr.py` | Implementations over a shared `arr/common.py` HTTP base. Differences are confined here (`episodeIds` vs `movieId`, `wanted/missing` shapes). Sonarr v4 has no `seriesId` filter on `wanted/missing`, so the client pages the whole list and filters. |
-| `source.py` | `VideoSource` protocol: `list_recent(url, limit)`, `resolve(url)` (video or playlist → videos), `fetch_info(video_id)`, `download(video_id, dest, opts, progress_cb)`. `YtDlpSource` implements it. |
+| `source.py` | `VideoSource` protocol: `download(url, dest_dir, fmt, merge_container, progress, should_abort)` (M2); `list_recent(url, limit)`, `resolve(url)` (video or playlist → videos), `fetch_info(video_id)` arrive with M3/M4. `YtDlpSource` implements it; yt-dlp writes `<video id>.<ext>` and the runner renames to the staging name once the height is known. |
 | `matcher.py` | Pure functions over episodes + videos + overrides. No I/O. |
 | `naming.py` | Staging filename + quality mapping. |
 | `worker/scheduler.py` | Subscription scans → jobs. |
-| `worker/runner.py` | Job state machine: download → import → cleanup; retry/backoff. |
+| `worker/runner.py` | Job state machine: download → import → cleanup; retry/backoff. `claim_next_jobs` marks due jobs `downloading` in one transaction; `process_job` is the whole pipeline for one job. Progress writes are throttled to one every 2 s. |
 | `api/` | FastAPI routers for the JSON API. |
 | `web/` | Page routes + templates. |
 | `main.py` | App factory; starts the worker as a background task; SIGTERM-clean. |
@@ -175,8 +178,9 @@ Benefit/risk of the GUI vs v0.1's headless daemon: it adds one HTTP port on the 
 
 ## Failure handling
 
-- **yt-dlp errors** (throttle, age gate, geo, extractor breakage): job → `failed` with the message, backoff 1h → 6h → 24h, capped attempts, other jobs continue. Extractor breakage is usually a yt-dlp release away: opt-in `pip install -U yt-dlp` on container start.
-- **Import rejected** (quality not in profile, path not visible): staged file kept; rejection reasons shown on the job; *Retry* after fixing config.
+- **yt-dlp errors** (throttle, age gate, geo, extractor breakage): job → `failed` with the message, backoff 1h → 6h → 24h, capped attempts (4), other jobs continue. A retryable failure is `failed` with `next_retry_at` set; the worker re-claims it when due. *arr transport errors retry the same way; a job whose target lookup fails before download also retries. Extractor breakage is usually a yt-dlp release away: opt-in `pip install -U yt-dlp` on container start.
+- **Import rejected** (quality not in profile, path not visible, no candidate listed, command failed): terminal `failed` with `next_retry_at` null; staged file kept; rejection reasons shown on the job verbatim; *Retry* after fixing config.
+- **Shutdown mid-download**: the yt-dlp progress hook aborts, the partial folder is removed, and the job returns to `queued` without consuming an attempt.
 - **Unmatched**: visible per subscription in the GUI; rescanned each interval (flat listing is cheap).
 - **Idempotency**: job dedupe on `(connection, target, video)`; re-check the wanted list right before import so a file Sonarr got elsewhere is not double-imported.
 

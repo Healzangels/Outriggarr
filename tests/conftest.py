@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from outriggarr.db.session import make_engine, make_session_factory, run_migrations
 from outriggarr.main import create_app
 from outriggarr.settings import Settings
-from tests.fakes import FakeArrFactory
+from tests.fakes import FakeArrFactory, FakeVideoSource
 
 
 @pytest.fixture
@@ -41,6 +41,13 @@ def arr() -> FakeArrFactory:
 
 
 @pytest.fixture
-def client(settings: Settings, arr: FakeArrFactory) -> Iterator[TestClient]:
-    with TestClient(create_app(settings, start_worker=False, arr_factory=arr)) as c:
+def source() -> FakeVideoSource:
+    return FakeVideoSource()
+
+
+@pytest.fixture
+def client(
+    settings: Settings, arr: FakeArrFactory, source: FakeVideoSource
+) -> Iterator[TestClient]:
+    with TestClient(create_app(settings, start_worker=False, arr_factory=arr, source=source)) as c:
         yield c

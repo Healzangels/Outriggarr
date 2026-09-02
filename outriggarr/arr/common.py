@@ -1,4 +1,4 @@
-"""HTTP plumbing shared by the Sonarr and Radarr clients."""
+"""HTTP plumbing and behaviour shared by the Sonarr and Radarr clients."""
 
 from __future__ import annotations
 
@@ -8,11 +8,21 @@ from typing import Any
 
 import httpx
 
-from outriggarr.arr.base import ArrError, QualityDefinition, SystemStatus
+from outriggarr.arr.base import (
+    ArrError,
+    CommandStatus,
+    ImportCandidate,
+    ImportFile,
+    Language,
+    QualityDefinition,
+    SystemStatus,
+    Target,
+)
 
 log = logging.getLogger(__name__)
 
 PAGE_SIZE = 200
+IMPORT_MODE = "move"
 
 
 class ArrHttp:
@@ -21,18 +31,26 @@ class ArrHttp:
         self._headers = {"X-Api-Key": api_key}
         self._http = http
 
-    async def get(self, path: str, params: dict[str, Any] | None = None) -> Any:
+    # -- transport -------------------------------------------------------------------
+
+    async def _request(self, method: str, path: str, **kw: Any) -> Any:
         url = f"{self._base}/api/v3/{path.lstrip('/')}"
         try:
-            r = await self._http.get(url, params=params, headers=self._headers)
+            r = await self._http.request(method, url, headers=self._headers, **kw)
         except httpx.HTTPError as exc:
-            raise ArrError(f"GET {url}: {exc}") from exc
+            raise ArrError(f"{method} {url}: {exc}") from exc
         if r.status_code >= 400:
-            raise ArrError(f"GET {url} -> HTTP {r.status_code}: {r.text}")
+            raise ArrError(f"{method} {url} -> HTTP {r.status_code}: {r.text}")
         try:
             return r.json()
         except ValueError as exc:
-            raise ArrError(f"GET {url}: non-JSON response: {r.text[:500]}") from exc
+            raise ArrError(f"{method} {url}: non-JSON response: {r.text[:500]}") from exc
+
+    async def get(self, path: str, params: dict[str, Any] | None = None) -> Any:
+        return await self._request("GET", path, params=params)
+
+    async def post(self, path: str, body: Any) -> Any:
+        return await self._request("POST", path, json=body)
 
     async def get_all_pages(self, path: str, params: dict[str, Any]) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
@@ -44,6 +62,8 @@ class ArrHttp:
             if not batch or len(records) >= data.get("totalRecords", 0):
                 return records
             page += 1
+
+    # -- shared endpoints ------------------------------------------------------------
 
     async def status(self) -> SystemStatus:
         data = await self.get("system/status")
@@ -79,6 +99,69 @@ class ArrHttp:
         return any(
             str(d.get("path", "")).rstrip("/") == target for d in data.get("directories", [])
         )
+
+    async def command(self, command_id: int) -> CommandStatus:
+        data = await self.get(f"command/{command_id}")
+        return CommandStatus(
+            id=int(data["id"]),
+            name=str(data.get("name", "")),
+            status=str(data.get("status", "")),
+            message=data.get("message"),
+        )
+
+    async def manual_import_candidates(self, folder: str, target: Target) -> list[ImportCandidate]:
+        params: dict[str, Any] = {"folder": folder, "filterExistingFiles": "true"}
+        params.update(self._candidate_hint(target))
+        data = await self.get("manualimport", params)
+        return [_candidate(d) for d in data]
+
+    async def manual_import(self, files: list[ImportFile]) -> int:
+        definitions = await self.quality_definitions()
+        by_name = {q.name: q for q in definitions}
+        payload = []
+        for f in files:
+            q = by_name.get(f.quality_name)
+            if q is None:
+                raise ArrError(
+                    f"quality {f.quality_name!r} is not defined on this server "
+                    f"(known: {sorted(by_name)})"
+                )
+            entry: dict[str, Any] = {
+                "path": f.path,
+                "quality": {
+                    "quality": {"id": q.quality_id, "name": q.name},
+                    "revision": {"version": 1, "real": 0, "isRepack": False},
+                },
+                "languages": [{"id": lang.id, "name": lang.name} for lang in f.languages],
+            }
+            entry.update(self._import_ids(f.target))
+            payload.append(entry)
+        data = await self.post(
+            "command", {"name": "ManualImport", "files": payload, "importMode": IMPORT_MODE}
+        )
+        return int(data["id"])
+
+    # -- per-kind hooks ---------------------------------------------------------------
+
+    def _candidate_hint(self, target: Target) -> dict[str, Any]:  # pragma: no cover
+        raise NotImplementedError
+
+    def _import_ids(self, target: Target) -> dict[str, Any]:  # pragma: no cover
+        raise NotImplementedError
+
+
+def _candidate(d: dict[str, Any]) -> ImportCandidate:
+    return ImportCandidate(
+        path=str(d.get("path", "")),
+        relative_path=str(d.get("relativePath", "")),
+        name=str(d.get("name", "")),
+        size=int(d.get("size", 0) or 0),
+        rejections=tuple(str(r.get("reason", "")) for r in d.get("rejections", []) or []),
+        languages=tuple(
+            Language(int(lang["id"]), str(lang.get("name", "")))
+            for lang in d.get("languages", []) or []
+        ),
+    )
 
 
 def parse_datetime(value: Any) -> datetime | None:

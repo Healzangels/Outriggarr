@@ -125,3 +125,31 @@ def test_in_process_migrations_leave_logging_alone(settings) -> None:
             assert not logging.getLogger(name).disabled, name
     finally:
         root.setLevel(before_level)
+
+
+def test_datetimes_come_back_utc_aware_from_a_fresh_session(session_factory) -> None:
+    from datetime import timedelta, timezone
+
+    plus_two = timezone(timedelta(hours=2))
+    with session_factory() as s:
+        conn = _connection()
+        job = _job(conn)
+        job.next_retry_at = datetime(2026, 9, 1, 14, 0, tzinfo=plus_two)  # 12:00 UTC
+        s.add(job)
+        s.commit()
+        job_id = job.id
+    with session_factory() as s:
+        job = s.get(Job, job_id)
+        assert job.created_at.tzinfo is not None
+        assert job.created_at.utcoffset().total_seconds() == 0
+        assert job.next_retry_at == datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
+        assert job.next_retry_at.tzinfo is not None
+
+
+def test_naive_datetime_is_refused(session_factory) -> None:
+    with session_factory() as s:
+        job = _job(_connection())
+        job.next_retry_at = datetime(2026, 9, 1, 12, 0)
+        s.add(job)
+        with pytest.raises(Exception, match="naive datetime"):
+            s.commit()

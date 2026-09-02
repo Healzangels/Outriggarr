@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from outriggarr.arr.base import Wanted, WantedMovie
+from outriggarr.arr.base import ArrError, Target, TargetInfo, Wanted, WantedMovie
 from outriggarr.arr.common import ArrHttp
 
 
@@ -13,6 +13,26 @@ class RadarrClient(ArrHttp):
             {"sortKey": "title", "sortDirection": "ascending", "monitored": "true"},
         )
         return [_movie(r) for r in records]
+
+    async def target_info(self, target: Target) -> TargetInfo:
+        if not target.is_movie:
+            raise ArrError("Radarr cannot import an episode target")
+        m = await self.get(f"movie/{target.movie_id}")
+        return TargetInfo(
+            title=str(m.get("title", "")),
+            year=int(m["year"]) if m.get("year") else None,
+            season=None,
+            episode_numbers=(),
+            episode_title="",
+            has_file=bool(m.get("hasFile")),
+            monitored=bool(m.get("monitored")),
+        )
+
+    def _candidate_hint(self, target: Target) -> dict[str, Any]:
+        return {"movieId": target.movie_id}
+
+    def _import_ids(self, target: Target) -> dict[str, Any]:
+        return {"movieId": target.movie_id}
 
 
 def _movie(r: dict[str, Any]) -> WantedMovie:

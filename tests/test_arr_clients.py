@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 import httpx
 import pytest
 
-from outriggarr.arr.base import ArrError, WantedEpisode, WantedMovie
+from outriggarr.arr.base import ArrError, CommandStatus, WantedEpisode, WantedMovie
 from outriggarr.arr.common import PAGE_SIZE
 from outriggarr.arr.radarr import RadarrClient
 from outriggarr.arr.sonarr import SonarrClient
@@ -223,3 +223,294 @@ async def test_get_all_pages_passes_page_size() -> None:
     assert seen[0]["pageSize"] == str(PAGE_SIZE)
     assert seen[0]["page"] == "1"
     assert json.loads(json.dumps(seen))  # params are plain strings
+
+
+# ---- M2: manual import ------------------------------------------------------------
+
+from outriggarr.arr.base import ImportFile, Language, Target  # noqa: E402
+
+QUALITY_DEFS = [
+    {"id": 10, "quality": {"id": 3, "name": "WEBDL-1080p"}, "title": "WEB 1080p", "weight": 9},
+    {"id": 11, "quality": {"id": 5, "name": "WEBDL-720p"}, "title": "WEB 720p", "weight": 7},
+]
+
+
+async def test_sonarr_manual_import_candidates_hint_series_and_parse() -> None:
+    body = [
+        {
+            "id": 1,
+            "path": "/data/outriggarr/7/Show - S01E02 [WEBDL-1080p].mkv",
+            "relativePath": "Show - S01E02 [WEBDL-1080p].mkv",
+            "name": "Show - S01E02 [WEBDL-1080p]",
+            "size": 12345,
+            "rejections": [{"reason": "Not an upgrade", "type": "permanent"}],
+            "languages": [{"id": 0, "name": "Unknown"}, {"id": 1, "name": "English"}],
+        }
+    ]
+
+    def handler(r: httpx.Request) -> httpx.Response:
+        assert r.url.path == "/base/api/v3/manualimport"
+        assert r.url.params["folder"] == "/data/outriggarr/7"
+        assert r.url.params["filterExistingFiles"] == "true"
+        assert r.url.params["seriesId"] == "5"
+        assert "movieId" not in r.url.params
+        return httpx.Response(200, json=body)
+
+    client, _ = make(SonarrClient, handler)
+    (c,) = await client.manual_import_candidates(
+        "/data/outriggarr/7", Target(series_id=5, episode_ids=(42,))
+    )
+    assert c.path == "/data/outriggarr/7/Show - S01E02 [WEBDL-1080p].mkv"
+    assert c.relative_path == "Show - S01E02 [WEBDL-1080p].mkv"
+    assert c.size == 12345
+    assert c.rejections == ("Not an upgrade",)
+    assert c.languages == (Language(0, "Unknown"), Language(1, "English"))
+
+
+async def test_radarr_manual_import_candidates_hint_movie() -> None:
+    def handler(r: httpx.Request) -> httpx.Response:
+        assert r.url.params["movieId"] == "77"
+        assert "seriesId" not in r.url.params
+        return httpx.Response(200, json=[])
+
+    client, _ = make(RadarrClient, handler)
+    assert await client.manual_import_candidates("/f", Target(movie_id=77)) == []
+
+
+async def test_sonarr_manual_import_posts_command_with_explicit_ids() -> None:
+    posted: list[dict] = []
+
+    def handler(r: httpx.Request) -> httpx.Response:
+        if r.url.path.endswith("/qualitydefinition"):
+            return httpx.Response(200, json=QUALITY_DEFS)
+        assert r.method == "POST"
+        assert r.url.path == "/base/api/v3/command"
+        assert r.headers["X-Api-Key"] == KEY
+        posted.append(json.loads(r.content))
+        return httpx.Response(201, json={"id": 555, "name": "ManualImport", "status": "queued"})
+
+    client, _ = make(SonarrClient, handler)
+    cmd = await client.manual_import(
+        [
+            ImportFile(
+                path="/data/outriggarr/7/x.mkv",
+                quality_name="WEBDL-1080p",
+                languages=(Language(1, "English"),),
+                target=Target(series_id=5, episode_ids=(42, 43)),
+            )
+        ]
+    )
+    assert cmd == 555
+    assert posted == [
+        {
+            "name": "ManualImport",
+            "importMode": "move",
+            "files": [
+                {
+                    "path": "/data/outriggarr/7/x.mkv",
+                    "quality": {
+                        "quality": {"id": 3, "name": "WEBDL-1080p"},
+                        "revision": {"version": 1, "real": 0, "isRepack": False},
+                    },
+                    "languages": [{"id": 1, "name": "English"}],
+                    "seriesId": 5,
+                    "episodeIds": [42, 43],
+                }
+            ],
+        }
+    ]
+
+
+async def test_radarr_manual_import_uses_movie_id() -> None:
+    posted: list[dict] = []
+
+    def handler(r: httpx.Request) -> httpx.Response:
+        if r.url.path.endswith("/qualitydefinition"):
+            return httpx.Response(200, json=QUALITY_DEFS)
+        posted.append(json.loads(r.content))
+        return httpx.Response(201, json={"id": 9})
+
+    client, _ = make(RadarrClient, handler)
+    await client.manual_import(
+        [ImportFile("/p.mkv", "WEBDL-720p", (Language(1, "English"),), Target(movie_id=77))]
+    )
+    f = posted[0]["files"][0]
+    assert f["movieId"] == 77
+    assert "seriesId" not in f and "episodeIds" not in f
+    assert f["quality"]["quality"] == {"id": 5, "name": "WEBDL-720p"}
+
+
+async def test_manual_import_unknown_quality_is_an_error_before_posting() -> None:
+    posts = 0
+
+    def handler(r: httpx.Request) -> httpx.Response:
+        nonlocal posts
+        if r.method == "POST":
+            posts += 1
+        return httpx.Response(200, json=QUALITY_DEFS)
+
+    client, _ = make(SonarrClient, handler)
+    with pytest.raises(ArrError, match="WEBDL-2160p.*not defined"):
+        await client.manual_import(
+            [ImportFile("/p", "WEBDL-2160p", (), Target(series_id=1, episode_ids=(1,)))]
+        )
+    assert posts == 0
+
+
+async def test_command_status_parse() -> None:
+    client, rec = make(
+        SonarrClient,
+        lambda r: httpx.Response(
+            200, json={"id": 555, "name": "ManualImport", "status": "completed", "message": "ok"}
+        ),
+    )
+    st = await client.command(555)
+    assert str(rec.requests[0].url) == f"{BASE}/api/v3/command/555"
+    assert (st.id, st.status, st.message, st.finished, st.ok) == (
+        555,
+        "completed",
+        "ok",
+        True,
+        True,
+    )
+    for s in ("queued", "started"):
+        assert not CommandStatus(1, "x", s).finished
+    for s in ("failed", "aborted", "cancelled", "orphaned"):
+        assert CommandStatus(1, "x", s).finished and not CommandStatus(1, "x", s).ok
+
+
+async def test_sonarr_target_info_from_episode_endpoint() -> None:
+    def handler(r: httpx.Request) -> httpx.Response:
+        if r.url.path == "/base/api/v3/episode/42":
+            return httpx.Response(
+                200,
+                json={
+                    "id": 42,
+                    "seriesId": 5,
+                    "seasonNumber": 2,
+                    "episodeNumber": 4,
+                    "title": "Four",
+                    "hasFile": False,
+                    "monitored": True,
+                    "series": {"id": 5, "title": "Show"},
+                },
+            )
+        if r.url.path == "/base/api/v3/episode/43":
+            return httpx.Response(
+                200,
+                json={
+                    "id": 43,
+                    "seriesId": 5,
+                    "seasonNumber": 2,
+                    "episodeNumber": 3,
+                    "title": "Three",
+                    "hasFile": True,
+                    "monitored": True,
+                },
+            )
+        raise AssertionError(r.url)
+
+    client, _ = make(SonarrClient, handler)
+    info = await client.target_info(Target(series_id=5, episode_ids=(42, 43)))
+    assert info.title == "Show"
+    assert info.season == 2
+    assert info.episode_numbers == (3, 4)
+    assert info.episode_title == "Three + Four"
+    assert info.has_file is False  # not ALL have a file
+    assert info.monitored is True
+
+
+async def test_sonarr_target_info_falls_back_to_series_endpoint() -> None:
+    def handler(r: httpx.Request) -> httpx.Response:
+        if r.url.path == "/base/api/v3/episode/42":
+            return httpx.Response(
+                200,
+                json={
+                    "id": 42,
+                    "seriesId": 5,
+                    "seasonNumber": 1,
+                    "episodeNumber": 1,
+                    "title": "",
+                    "hasFile": True,
+                    "monitored": False,
+                },
+            )
+        if r.url.path == "/base/api/v3/series/5":
+            return httpx.Response(200, json={"id": 5, "title": "From Series"})
+        raise AssertionError(r.url)
+
+    client, _ = make(SonarrClient, handler)
+    info = await client.target_info(Target(series_id=5, episode_ids=(42,)))
+    assert info.title == "From Series"
+    assert info.has_file is True and info.monitored is False
+
+
+async def test_sonarr_target_info_rejects_foreign_episode_and_mixed_seasons() -> None:
+    eps = {
+        "1": {
+            "id": 1,
+            "seriesId": 5,
+            "seasonNumber": 1,
+            "episodeNumber": 1,
+            "series": {"title": "S"},
+        },
+        "2": {
+            "id": 2,
+            "seriesId": 6,
+            "seasonNumber": 1,
+            "episodeNumber": 2,
+            "series": {"title": "S"},
+        },
+        "3": {
+            "id": 3,
+            "seriesId": 5,
+            "seasonNumber": 2,
+            "episodeNumber": 1,
+            "series": {"title": "S"},
+        },
+    }
+    client, _ = make(
+        SonarrClient, lambda r: httpx.Response(200, json=eps[r.url.path.rsplit("/", 1)[1]])
+    )
+    with pytest.raises(ArrError, match="do not belong to series 5"):
+        await client.target_info(Target(series_id=5, episode_ids=(1, 2)))
+    with pytest.raises(ArrError, match="several seasons"):
+        await client.target_info(Target(series_id=5, episode_ids=(1, 3)))
+    with pytest.raises(ArrError, match="cannot import a movie"):
+        await client.target_info(Target(movie_id=1))
+
+
+async def test_radarr_target_info() -> None:
+    client, rec = make(
+        RadarrClient,
+        lambda r: httpx.Response(
+            200, json={"id": 77, "title": "Film", "year": 2001, "hasFile": True, "monitored": True}
+        ),
+    )
+    info = await client.target_info(Target(movie_id=77))
+    assert str(rec.requests[0].url) == f"{BASE}/api/v3/movie/77"
+    assert (info.title, info.year, info.has_file, info.season) == ("Film", 2001, True, None)
+    with pytest.raises(ArrError, match="cannot import an episode"):
+        await client.target_info(Target(series_id=1, episode_ids=(1,)))
+
+
+def test_languages_for_import_defaults_to_english() -> None:
+    from outriggarr.arr.base import ImportCandidate, languages_for_import
+
+    unknown = ImportCandidate("/p", "p", "p", 1, (), (Language(0, "Unknown"),))
+    assert languages_for_import(unknown) == (Language(1, "English"),)
+    none = ImportCandidate("/p", "p", "p", 1, (), ())
+    assert languages_for_import(none) == (Language(1, "English"),)
+    known = ImportCandidate("/p", "p", "p", 1, (), (Language(0, "Unknown"), Language(4, "French")))
+    assert languages_for_import(known) == (Language(4, "French"),)
+
+
+def test_target_validation() -> None:
+    with pytest.raises(ValueError):
+        Target()
+    with pytest.raises(ValueError):
+        Target(series_id=1)
+    with pytest.raises(ValueError):
+        Target(movie_id=1, series_id=2)
+    assert Target(movie_id=1).is_movie
+    assert not Target(series_id=1, episode_ids=(2,)).is_movie
