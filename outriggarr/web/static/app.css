@@ -203,8 +203,11 @@ footer.container { margin-top: 2.5rem; padding: 1rem 0; border-top: 1px solid va
   /* tables keep readable columns and the wrapper scrolls, instead of every cell
      squeezing to one word per line */
   .table-wrap table { min-width: 640px; }
-  table.matches { min-width: 760px; }  /* the episode label needs room to wrap in two lines, not six */
-  table.matches th:first-child { width: 36%; }
+  /* the other four columns refuse to shrink below ~700px (nowrap evidence, when and
+     actions), so the episode label needs the table wider than the phone to wrap in two
+     lines rather than six; the wrapper scrolls */
+  table.matches { min-width: 900px; }
+  table.matches td.actions { white-space: normal; }
   a.brand strong { display: none; }
   nav.container ul:last-child { gap: 0; }
   nav.container ul:last-child li { padding: .25rem .45rem; }
