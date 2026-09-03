@@ -366,6 +366,16 @@ def review_entry(job: Job) -> dict:
     }
 
 
+def _risk(entry: dict) -> tuple[int, int, int]:
+    """Sort rank: the matches that need a look come first, a contradicting length before
+    a missing one, riskier tiers before safer; everything else, vouched for or confirmed
+    by you, is history and keeps the jobs' own newest-first order. A confirmation must
+    sink a row: the length mismatch it settled is no longer a reason to rank it."""
+    if not entry["needs_look"]:
+        return (1, 0, 0)
+    return (0, int(not entry["reason"]), RISK_ORDER.index(entry["tier"]))
+
+
 def _matches_context(
     session: Session,
     view: str | None,
@@ -388,10 +398,10 @@ def _matches_context(
         view = "review" if counts["review"] else "all"
     if view == "review":
         entries = [e for e in entries if e["needs_look"]]
-    entries.sort(key=lambda e: (not e["reason"], RISK_ORDER.index(e["tier"])))  # stable
+    entries.sort(key=_risk)  # stable: within a rank the jobs stay newest first
     total = len(entries)
     if view == "all" and not show_all:
-        entries = entries[:MATCHES_PAGE]  # the riskiest first, then the newest
+        entries = entries[:MATCHES_PAGE]
     # the recheck summary reads like a notice: shown while it runs, then once when done
     show_progress = progress.running or (progress.finished_at is not None and not progress.reported)
     if show_progress and not progress.running:

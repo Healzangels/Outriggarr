@@ -1861,3 +1861,52 @@ def test_settings_saved_notice_names_the_form(client: TestClient) -> None:
     assert "Downloads saved." in client.get("/settings?saved=downloads").text
     assert "Connection saved." in client.get("/settings?saved=connection").text
     assert "saved" not in client.get("/settings").text.split("<h2>Settings</h2>")[1][:200]
+
+
+def test_matches_rank_needs_a_look_first_and_confirmed_rows_sink(client: TestClient) -> None:
+    # A confirmed length mismatch used to stay pinned at the top of "All" forever: the
+    # contradiction still counted as risk. Once vouched for or confirmed, a row is
+    # history and takes its place by date under the rows that still need a look.
+    from datetime import UTC, datetime, timedelta
+
+    from outriggarr.db.models import Job, TargetKind
+
+    _seed_series(client)
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={"connection_id": 1, "series_id": 5, "source_url": "https://www.youtube.com/@hotones"},
+    ).json()["id"]
+    now = datetime.now(UTC)
+    rows = (  # oldest first
+        ("A", "exact", 1500, None),  # vouched by its title
+        ("B", "contains", None, None),  # length unchecked: needs a look
+        ("C", "contains", 120, now),  # length contradicts the runtime, but confirmed
+        ("D", "exact", 1500, None),  # newest, vouched
+    )
+    with client.app.state.session_factory() as s:
+        for age, (name, tier, duration, reviewed) in zip(range(4, 0, -1), rows, strict=True):
+            s.add(
+                Job(
+                    connection_id=1,
+                    subscription_id=sub_id,
+                    target_kind=TargetKind.episode,
+                    series_id=5,
+                    episode_ids=[10 + age],
+                    target_key=f"episode:5:{10 + age}",
+                    video_id=name.lower(),
+                    video_url=f"https://y/{name.lower()}",
+                    video_title=f"Video {name}",
+                    target_label=f"Show S30E0{age} - Row {name}",
+                    matched_by=tier,
+                    target_runtime=25,
+                    video_duration=duration,
+                    reviewed_at=reviewed,
+                    created_at=now - timedelta(days=age),
+                )
+            )
+        s.commit()
+    page = client.get("/matches?view=all").text
+    order = sorted("ABCD", key=lambda n: page.index(f"Row {n}"))
+    assert order == ["B", "D", "C", "A"], order
+    review = client.get("/matches?view=review").text
+    assert "Row B" in review and not any(f"Row {n}" in review for n in "ACD")
