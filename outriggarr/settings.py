@@ -161,6 +161,8 @@ MERGE_CONTAINERS = ("mkv", "mp4")  # webm cannot hold the default H.264/AAC stre
 # post-processors such as `Exec`).
 RESERVED_YTDLP_KEYS = frozenset(
     {
+        # "verbose" prints yt-dlp's debug header on every probe and every download
+        "verbose",
         "outtmpl",
         "paths",
         "postprocessors",

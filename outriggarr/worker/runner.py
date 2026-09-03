@@ -291,10 +291,13 @@ def acquire_instance_lock(config_dir: Path):
     return fh
 
 
-async def run_worker(deps: RunnerDeps, stop: asyncio.Event) -> None:
-    lock = acquire_instance_lock(
-        deps.staging_dir.parent if deps.lock_dir is None else deps.lock_dir
-    )
+async def run_worker(deps: RunnerDeps, stop: asyncio.Event, lock: object | None = None) -> None:
+    # the app passes a lock it already holds (it covers the scheduler too); standalone
+    # callers (tests) let the worker take its own
+    if lock is None:
+        lock = acquire_instance_lock(
+            deps.staging_dir.parent if deps.lock_dir is None else deps.lock_dir
+        )
     if lock is None:
         log.error(
             "another Outriggarr instance already runs the worker for this database; "

@@ -29,3 +29,15 @@ DbSession = Annotated[Session, Depends(get_session)]
 SourceDep = Annotated[VideoSource, Depends(get_source)]
 RunnerDepsDep = Annotated[object, Depends(get_runner_deps)]
 ArrFactoryDep = Annotated[ArrFactory, Depends(get_arr_factory)]
+
+
+def track_task(app, task) -> None:
+    """Own a background task: keep a reference (asyncio only holds a weak one), drop it
+    when done, and let the lifespan cancel and await what is still running at shutdown
+    instead of tearing the loop down under it."""
+    tasks = getattr(app.state, "tasks", None)
+    if tasks is None:
+        tasks = set()
+        app.state.tasks = tasks
+    tasks.add(task)
+    task.add_done_callback(tasks.discard)

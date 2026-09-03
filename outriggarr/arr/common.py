@@ -26,6 +26,9 @@ PAGE_SIZE = 200
 IMPORT_MODE = "move"
 
 
+MANUAL_IMPORT_LIST_TIMEOUT = 180.0  # seconds; GET /manualimport scans the folder
+
+
 class ArrHttp:
     def __init__(self, base_url: str, api_key: str, http: httpx.AsyncClient) -> None:
         self._base = base_url.rstrip("/")
@@ -44,9 +47,10 @@ class ArrHttp:
         except httpx.HTTPError as exc:
             raise ArrError(f"{method} {url}: {exc}", retryable=True) from exc
         if r.status_code >= 400:
-            raise ArrError(
-                f"{method} {url} -> HTTP {r.status_code}: {r.text}", retryable=r.status_code >= 500
-            )
+            # 5xx and the "come back later" 4xxs (a proxy's 408/429, a 425 mid-restart)
+            # are blips; every other 4xx is deterministic and retrying it hides a mistake
+            retryable = r.status_code >= 500 or r.status_code in (408, 425, 429)
+            raise ArrError(f"{method} {url} -> HTTP {r.status_code}: {r.text}", retryable=retryable)
         if 300 <= r.status_code < 400:
             # a redirect (http:// behind an https proxy, or a login page) is a config
             # problem, not a blip: do not burn the retry ladder on it
@@ -143,7 +147,14 @@ class ArrHttp:
     async def manual_import_candidates(self, folder: str) -> list[ImportCandidate]:
         # Proven live 2026-09-01: adding seriesId (Sonarr) / movieId (Radarr) makes the
         # *arr list the existing series/movie folder and ignore `folder` entirely.
-        data = await self.get("manualimport", {"folder": folder, "filterExistingFiles": "true"})
+        # the *arr runs MediaInfo on every candidate before answering: a large file on a
+        # network mount can take well over the client's 30 s default
+        data = await self._request(
+            "GET",
+            "manualimport",
+            params={"folder": folder, "filterExistingFiles": "true"},
+            timeout=httpx.Timeout(MANUAL_IMPORT_LIST_TIMEOUT, connect=10.0),
+        )
         return [_candidate(d) for d in data]
 
     async def _quality_model(self, quality_name: str) -> dict[str, Any]:

@@ -266,3 +266,11 @@ def test_every_format_preset_is_a_valid_selector_and_the_default_is_one() -> Non
         "YouTube has no H.264 above 1080p: the 4K preset must not ask for it"
     )
     assert "avc1" in by_height["720p-h264"] and "mp4a" in by_height["720p-h264"]
+
+
+def test_noisy_ytdlp_keys_are_reserved() -> None:
+    from outriggarr.settings import validate_setting
+
+    with pytest.raises(ValueError, match="Outriggarr owns those options"):
+        validate_setting("ytdlp_extra_opts", '{"verbose": true}')
+    assert validate_setting("ytdlp_extra_opts", '{"quiet": false}'), "quiet stays the operator's"

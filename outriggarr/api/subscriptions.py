@@ -127,11 +127,28 @@ class SubscriptionIn(BaseModel):
         return v
 
 
-class SubscriptionOut(SubscriptionIn):
+class SubscriptionOut(BaseModel):
+    """A stored row as it is: no input validators, so a cap lowered or a strategy renamed
+    in a later release never makes the listing of existing rows a 500."""
+
     model_config = ConfigDict(from_attributes=True)
     id: int
+    connection_id: int
+    series_id: int
     tvdb_id: int | None
     title: str
+    sources: list[str]
+    format: str | None
+    video_limit: int | None
+    audio_language: str | None
+    auto_download: str
+    strategies: list[str]
+    date_tolerance_days: int
+    date_offset_days: int
+    title_regex: str | None
+    title_require: str | None
+    enabled: bool
+    created_at: datetime
     last_scan_at: datetime | None
     last_scan_result: dict[str, Any] | None
 
@@ -220,7 +237,9 @@ async def update_subscription(
     session: Session, arr_factory: ArrFactory, subscription_id: int, body: SubscriptionIn
 ) -> Subscription:
     sub = _get_or_404(session, subscription_id)
-    if (body.connection_id, body.series_id) != (sub.connection_id, sub.series_id):
+    moved = (body.connection_id, body.series_id) != (sub.connection_id, sub.series_id)
+    old_conn, old_series = sub.connection, sub.series_id
+    if moved:
         _, title, tvdb_id = await _series_lookup(
             session, arr_factory, body.connection_id, body.series_id
         )
@@ -234,6 +253,9 @@ async def update_subscription(
         raise HTTPException(
             status.HTTP_409_CONFLICT, f"series {body.series_id} is already subscribed"
         ) from None
+    if moved:  # the courtesy tag follows the subscription to its new series
+        await _apply_tag(session, arr_factory, old_conn, old_series, present=False)
+        await _apply_tag(session, arr_factory, sub.connection, sub.series_id, present=True)
     return sub
 
 

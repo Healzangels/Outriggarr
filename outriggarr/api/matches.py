@@ -7,6 +7,7 @@ reports progress, and commits in small batches so rows clear as the evidence lan
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -15,6 +16,7 @@ from fastapi import APIRouter, Request
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from outriggarr.api.deps import track_task
 from outriggarr.arr.base import ArrError
 from outriggarr.db.models import Connection, Job, utcnow
 from outriggarr.matcher import length_mismatch
@@ -163,21 +165,30 @@ async def recheck_evidence(
                 return job, info.duration, None
 
         since_commit = 0
-        for fut in asyncio.as_completed([fetch(j) for j in need]):
-            job, duration, err = await fut
-            if duration:
-                job.video_duration = int(duration)
-                progress.durations_filled += 1
-            elif err == SKIPPED:
-                progress.skipped += 1
-            elif err:
-                _note_error(progress, err)
-            progress.done += 1
-            since_commit += 1
-            if since_commit >= COMMIT_EVERY:
+        tasks = [asyncio.create_task(fetch(j)) for j in need]
+        try:
+            for fut in asyncio.as_completed(tasks):
+                job, duration, err = await fut
+                if duration:
+                    job.video_duration = int(duration)
+                    progress.durations_filled += 1
+                elif err == SKIPPED:
+                    progress.skipped += 1
+                elif err:
+                    _note_error(progress, err)
+                progress.done += 1
+                since_commit += 1
+                if since_commit >= COMMIT_EVERY:
+                    session.commit()
+                    since_commit = 0
+        finally:
+            # a consumer failure or a shutdown must not leave the remaining fetches
+            # running unwatched (they burn the rate limit the cool-off protects), and
+            # whatever was fetched is kept
+            for t in tasks:
+                t.cancel()
+            with contextlib.suppress(Exception):
                 session.commit()
-                since_commit = 0
-        session.commit()
     progress.flagged = sum(1 for j in jobs if length_mismatch(j.target_runtime, j.video_duration))
     if progress.error_count:
         log.warning(
@@ -211,7 +222,7 @@ def start_recheck(app) -> RecheckProgress:
         return current
     progress = RecheckProgress(running=True, started_at=utcnow())
     app.state.recheck = progress
-    app.state.recheck_task = asyncio.create_task(run_recheck(app))
+    track_task(app, asyncio.create_task(run_recheck(app)))
     return progress
 
 

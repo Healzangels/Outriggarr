@@ -47,9 +47,29 @@ class ConnectionIn(BaseModel):
         return v.rstrip("/") or "/"
 
 
-class ConnectionOut(ConnectionIn):
+class ConnectionUpdate(ConnectionIn):
+    """PUT body: a blank api_key keeps the stored one, so a client can rename or
+    re-point a connection without ever holding the secret."""
+
+    api_key: str = Field(default="", max_length=200)
+
+    @field_validator("api_key")
+    @classmethod
+    def _key(cls, v: str) -> str:  # type: ignore[override]
+        return v.strip()
+
+
+class ConnectionOut(BaseModel):
+    """What the API says about a connection: never the key itself."""
+
     model_config = ConfigDict(from_attributes=True)
     id: int
+    kind: ConnectionKind
+    name: str
+    url: str
+    staging_path_remote: str
+    enabled: bool
+    has_api_key: bool = True
 
 
 class ConnectionTestResult(BaseModel):
@@ -96,7 +116,7 @@ def _references(session: Session, connection_id: int) -> tuple[int, int]:
 
 
 @router.put("/{connection_id}", response_model=ConnectionOut)
-def update_connection(connection_id: int, body: ConnectionIn, session: DbSession) -> Connection:
+def update_connection(connection_id: int, body: ConnectionUpdate, session: DbSession) -> Connection:
     conn = _get_or_404(session, connection_id)
     if body.kind is not conn.kind:
         subs, jobs = _references(session, connection_id)
@@ -107,6 +127,8 @@ def update_connection(connection_id: int, body: ConnectionIn, session: DbSession
                 f"subscription(s) and {jobs} job(s); its kind cannot change",
             )
     for k, v in body.model_dump().items():
+        if k == "api_key" and not v:
+            continue  # blank keeps the stored key
         setattr(conn, k, v)
     session.commit()
     library_cache.clear()  # a changed URL/key must not serve the old instance's listing

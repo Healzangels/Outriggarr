@@ -761,3 +761,25 @@ async def test_sonarr_series_title_and_partial_satisfaction() -> None:
     assert info.has_file is False and info.partially_satisfied is True
     info = await client.target_info(Target(series_id=5, episode_ids=(2, 3)))
     assert info.partially_satisfied is False
+
+
+@pytest.mark.parametrize(
+    ("status", "retryable"),
+    [(408, True), (425, True), (429, True), (404, False), (400, False), (503, True)],
+)
+async def test_come_back_later_answers_are_retryable(status: int, retryable: bool) -> None:
+    from outriggarr.arr.base import ArrError
+
+    client, _rec = make(SonarrClient, lambda r: httpx.Response(status, json={"message": "later"}))
+    with pytest.raises(ArrError) as info:
+        await client.status()
+    assert info.value.retryable is retryable
+
+
+async def test_manual_import_listing_gets_a_long_read_timeout() -> None:
+    from outriggarr.arr.common import MANUAL_IMPORT_LIST_TIMEOUT
+
+    client, rec = make(SonarrClient, lambda r: httpx.Response(200, json=[]))
+    await client.manual_import_candidates("/data/outriggarr/1")
+    timeout = rec.requests[-1].extensions["timeout"]
+    assert timeout["read"] == MANUAL_IMPORT_LIST_TIMEOUT == 180.0 and timeout["connect"] == 10.0

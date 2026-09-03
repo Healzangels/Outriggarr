@@ -6,6 +6,7 @@ with progress, and caches the dates for good — the next scan can then pair by 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -13,6 +14,7 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
+from outriggarr.api.deps import track_task
 from outriggarr.db.models import Subscription, utcnow
 from outriggarr.settings import get_setting
 from outriggarr.source import SourceError, is_rate_limited
@@ -113,29 +115,37 @@ async def fetch_dates(
             return ref, info.upload_date, None
 
     since_commit = 0
+    tasks = [asyncio.create_task(fetch(r)) for r in need]
     with session.no_autoflush:
-        for fut in asyncio.as_completed([fetch(r) for r in need]):
-            ref, upload_date, err = await fut
-            if err == SKIPPED:
-                progress.skipped += 1
-                progress.done += 1
-                continue
-            if err:
-                progress.error_count += 1
-                progress.first_error = progress.first_error or f"{ref.id}: {err}"
-                _remember_date(session, ref.id, None)  # do not re-ask for a week
-            else:
-                _remember_date(session, ref.id, upload_date)
-                if upload_date:
-                    progress.dated += 1
+        try:
+            for fut in asyncio.as_completed(tasks):
+                ref, upload_date, err = await fut
+                if err == SKIPPED:
+                    progress.skipped += 1
+                    progress.done += 1
+                    continue
+                if err:
+                    progress.error_count += 1
+                    progress.first_error = progress.first_error or f"{ref.id}: {err}"
+                    _remember_date(session, ref.id, None)  # do not re-ask for a week
                 else:
-                    progress.unknown += 1
-            progress.done += 1
-            since_commit += 1
-            if since_commit >= COMMIT_EVERY:
+                    _remember_date(session, ref.id, upload_date)
+                    if upload_date:
+                        progress.dated += 1
+                    else:
+                        progress.unknown += 1
+                progress.done += 1
+                since_commit += 1
+                if since_commit >= COMMIT_EVERY:
+                    session.commit()
+                    since_commit = 0
+        finally:
+            # a consumer failure or a shutdown must not leave the remaining fetches
+            # running unwatched, and the dates already fetched are kept
+            for t in tasks:
+                t.cancel()
+            with contextlib.suppress(Exception):
                 session.commit()
-                since_commit = 0
-        session.commit()
     return progress
 
 
@@ -163,7 +173,7 @@ def start_date_fetch(app, subscription_id: int) -> DateFetchProgress:
         return current
     progress = DateFetchProgress(subscription_id=subscription_id, running=True, started_at=utcnow())
     m[subscription_id] = progress
-    app.state.date_fetch_task = asyncio.create_task(run_date_fetch(app, subscription_id))
+    track_task(app, asyncio.create_task(run_date_fetch(app, subscription_id)))
     return progress
 
 

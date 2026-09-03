@@ -339,3 +339,39 @@ def test_title_require_must_carry_a_letter_or_digit(client, arr, source) -> None
     assert r.status_code == 422 and "letter or digit" in r.text
     r = client.post("/api/subscriptions", json=body(conn_id, title_require=" - Scam School - "))
     assert r.status_code == 201 and r.json()["title_require"] == "- Scam School -"
+
+
+def test_stored_rows_list_even_when_they_break_todays_input_rules(client, arr, source) -> None:
+    from outriggarr.db.models import Subscription
+
+    conn_id = seed(client, arr, source)
+    sid = client.post("/api/subscriptions", json=body(conn_id)).json()["id"]
+    with client.app.state.session_factory() as s:
+        sub = s.get(Subscription, sid)
+        sub.video_limit = 60_000  # above today's cap, as a future release might leave it
+        sub.strategies = ["retired_strategy"]
+        s.commit()
+    assert client.get("/api/subscriptions").status_code == 200
+    out = client.get(f"/api/subscriptions/{sid}")
+    assert out.status_code == 200 and out.json()["video_limit"] == 60_000
+
+
+def test_moving_a_subscription_to_another_series_moves_the_tag(client, arr, source) -> None:
+    from outriggarr.settings import set_setting
+
+    conn_id = seed(client, arr, source)
+    with client.app.state.session_factory() as s:
+        set_setting(s, "sonarr_tag", "outriggarr")
+        s.commit()
+    sid = client.post("/api/subscriptions", json=body(conn_id)).json()["id"]
+    fake = (
+        arr.by_url["http://sonarr-host:1234"]
+        if "http://sonarr-host:1234" in arr.by_url
+        else next(iter(arr.by_url.values()))
+    )
+    tag = fake.tags["outriggarr"]
+    assert ("set_series_tag", (5, tag, True)) in fake.calls
+    r = client.put(f"/api/subscriptions/{sid}", json=body(conn_id, series_id=6))
+    assert r.status_code == 200, r.text
+    assert ("set_series_tag", (5, tag, False)) in fake.calls, "the old series loses the tag"
+    assert ("set_series_tag", (6, tag, True)) in fake.calls, "the new one gains it"

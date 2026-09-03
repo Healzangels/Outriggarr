@@ -32,7 +32,7 @@ from outriggarr.source import VideoSource, YtDlpSource
 from outriggarr.web.middleware import SameOriginGuard, StaticCacheHeaders
 from outriggarr.web.pages import STATIC_DIR
 from outriggarr.web.pages import router as pages_router
-from outriggarr.worker.runner import RunnerDeps, run_worker
+from outriggarr.worker.runner import RunnerDeps, acquire_instance_lock, run_worker
 from outriggarr.worker.scheduler import run_scheduler
 
 log = logging.getLogger(__name__)
@@ -91,17 +91,34 @@ def create_app(
         stop = asyncio.Event()
         task = None
         scheduler_task = None
+        lock = None
+        app.state.tasks = set()  # rechecks and date fetches, owned so shutdown can await them
         settings.staging_dir.mkdir(parents=True, exist_ok=True)
         if start_worker:
             deps = app.state.runner_deps
-            task = asyncio.create_task(run_worker(deps, stop))
-            scheduler_task = asyncio.create_task(run_scheduler(deps, stop))
+            # one lock for both loops: a second instance on the same database must not
+            # scan and queue jobs either, not just refrain from downloading them
+            lock = acquire_instance_lock(settings.config_dir)
+            if lock is None:
+                log.error(
+                    "another Outriggarr instance already runs this database; "
+                    "this one serves the pages only (no worker, no scheduler)"
+                )
+            else:
+                task = asyncio.create_task(run_worker(deps, stop, lock=lock))
+                scheduler_task = asyncio.create_task(run_scheduler(deps, stop))
         app.state.background_tasks = {"worker": task, "scheduler": scheduler_task}
         log.info("outriggarr %s ready (db=%s)", __version__, settings.database_url)
         try:
             yield
         finally:
             stop.set()
+            # background fetches first: cancel, then await, so what they fetched is kept
+            fetches = list(app.state.tasks)
+            for t in fetches:
+                t.cancel()
+            if fetches:
+                await asyncio.gather(*fetches, return_exceptions=True)
             pending = [t for t in (task, scheduler_task) if t is not None]
             if pending:
                 results = await asyncio.gather(*pending, return_exceptions=True)

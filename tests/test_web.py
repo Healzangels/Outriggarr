@@ -306,7 +306,8 @@ def test_settings_connections_forms_and_test(client: TestClient) -> None:
     )
     assert r.status_code == 303
     (conn,) = client.get("/api/connections").json()
-    assert conn["name"] == "Renamed" and conn["api_key"] == "k1" and conn["enabled"] is False
+    assert conn["name"] == "Renamed" and conn["enabled"] is False
+    assert "api_key" not in conn and conn["has_api_key"] is True, "the key never comes back out"
     r = client.post(
         "/settings/connections",
         data={

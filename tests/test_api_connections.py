@@ -158,8 +158,26 @@ def test_test_warns_when_arr_will_not_import_srt(client: TestClient, arr: FakeAr
 
 
 def test_api_key_is_stripped_and_blank_refused(client: TestClient) -> None:
+    from outriggarr.db.models import Connection
+
     r = client.post("/api/connections", json={**SONARR, "api_key": "  k1  "})
-    assert r.status_code == 201 and r.json()["api_key"] == "k1"
+    assert r.status_code == 201 and "api_key" not in r.json() and r.json()["has_api_key"] is True
+    conn_id = r.json()["id"]
+    with client.app.state.session_factory() as s:
+        assert s.get(Connection, conn_id).api_key == "k1", "stripped, stored"
+    # the secret never comes back out
+    assert "k1" not in client.get("/api/connections").text
+    assert "k1" not in client.get(f"/api/connections/{conn_id}").text
+    # an update with a blank key keeps the stored one; a client need never hold the secret
+    r = client.put(f"/api/connections/{conn_id}", json={**SONARR, "name": "Renamed", "api_key": ""})
+    assert r.status_code == 200 and r.json()["name"] == "Renamed" and "api_key" not in r.json()
+    with client.app.state.session_factory() as s:
+        assert s.get(Connection, conn_id).api_key == "k1"
+    r = client.put(
+        f"/api/connections/{conn_id}", json={**SONARR, "name": "Renamed", "api_key": "k2"}
+    )
+    with client.app.state.session_factory() as s:
+        assert s.get(Connection, conn_id).api_key == "k2", "a new key replaces it"
     assert (
         client.post(
             "/api/connections", json={**SONARR, "url": "http://x:1", "api_key": "   "}
