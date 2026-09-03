@@ -2,13 +2,13 @@
 {% block title %}Subscribe · Outriggarr{% endblock %}
 {% block content %}
 <div class="page-header">
-  <div><h2>Subscribe · {{ title or ("series " ~ series_id) }}</h2><p class="sub">Give this series a YouTube source. Episodes stay wanted or not according to Sonarr.</p></div>
+  <div><h1>Subscribe · {{ title or ("series " ~ series_id) }}</h1><p class="sub">Give this series a YouTube source. Episodes stay wanted or not according to Sonarr.</p></div>
 </div>
 {% if error %}<p class="notice bad">{{ error }}</p>{% endif %}
 <article class="card">
 <form method="post" action="/series/{{ series_id }}/subscribe">
   {% include "partials/subscription_fields.html" %}
-  <div class="form-actions"><button type="submit">Subscribe</button> <a href="/series" role="button" class="secondary outline">Cancel</a></div>
+  <div class="form-actions"><button type="submit">Subscribe</button> <a href="/series" role="button" class="secondary outline">Cancel</a> <span class="muted">Next: a preview of what this source matches. Nothing downloads until you press Download there, or the scheduler's next scan finds a new episode.</span></div>
 </form>
 </article>
 {% endblock %}

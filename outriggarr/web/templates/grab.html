@@ -2,7 +2,7 @@
 {% block title %}Grab · Outriggarr{% endblock %}
 {% block content %}
 <div class="page-header">
-  <div><h2>Grab</h2><p class="sub">Queue videos by hand: paste a URL, pick where each one goes, queue.</p></div>
+  <div><h1>Grab</h1><p class="sub">Queue videos by hand: paste a URL, pick where each one goes, queue.</p></div>
 </div>
 {% if not connections %}
 <p class="notice warn">No enabled connections. Add Sonarr or Radarr under <a href="/settings">Settings</a> first.</p>
@@ -10,11 +10,11 @@
 <div x-data="grabApp()" x-init="init()">
   <form @submit.prevent="resolve()">
     <fieldset role="group">
-      <input type="url" x-model="url" placeholder="Video or playlist URL" required>
+      <input type="url" x-model="url" placeholder="Video or playlist URL" aria-label="Video or playlist URL" required>
       <button type="submit" :aria-busy="resolving" :disabled="resolving">List videos</button>
     </fieldset>
   </form>
-  <p class="notice bad" x-show="error" x-text="error"></p>
+  <p class="notice bad" role="alert" x-show="error" x-text="error"></p>
 
   <template x-if="videos.length">
     <div>
@@ -29,11 +29,11 @@
         <template x-if="kind === 'sonarr'">
           <div class="rel">
             <label>Series
-              <input type="search" x-model="seriesQuery" @input.debounce.300ms="searchSeries()" placeholder="type to search Sonarr" autocomplete="off">
+              <input type="search" x-model="seriesQuery" @input.debounce.300ms="searchSeries()" placeholder="type to search Sonarr" autocomplete="off" role="combobox" aria-autocomplete="list" aria-controls="series-results" :aria-expanded="seriesResults.length > 0" :aria-activedescendant="seriesResults.length ? 'series-opt-' + hi : null" @keydown.down.prevent="hi = Math.min(hi + 1, seriesResults.length - 1)" @keydown.up.prevent="hi = Math.max(hi - 1, 0)" @keydown.enter.prevent="seriesResults[hi] && pickSeries(seriesResults[hi])" @keydown.escape="seriesResults = []">
             </label>
-            <ul class="results" x-show="seriesResults.length" @click.outside="seriesResults = []">
-              <template x-for="s in seriesResults" :key="s.id">
-                <li @click="pickSeries(s)"><span x-text="s.title"></span> <span class="muted" x-text="s.year ? '(' + s.year + ')' : ''"></span></li>
+            <ul id="series-results" class="results" role="listbox" x-show="seriesResults.length" @click.outside="seriesResults = []">
+              <template x-for="(s, i) in seriesResults" :key="s.id">
+                <li role="option" :id="'series-opt-' + i" :aria-selected="i === hi" @mouseenter="hi = i" @click="pickSeries(s)"><span x-text="s.title"></span> <span class="muted" x-text="s.year ? '(' + s.year + ')' : ''"></span></li>
               </template>
             </ul>
           </div>
@@ -50,7 +50,7 @@
             </label>
             <div class="form-actions bulk-fill">
               <button type="button" class="secondary" @click="fillSequential()">Fill sequentially</button>
-              <label class="inline-check"><input type="checkbox" x-model="bulk.reverse"> <span class="muted">newest first (fill from the bottom)</span></label>
+              <label class="inline-check" title="Number from the bottom of the list up, for playlists that list the newest video first"><input type="checkbox" x-model="bulk.reverse"> <span class="muted">newest first</span></label>
             </div>
           </div>
           <p class="muted" x-text="series.title + ' · ' + episodes.length + ' episodes in Sonarr'"></p>
@@ -69,17 +69,17 @@
                   <br><span class="muted" x-text="fmtDuration(row.video.duration)"></span></td>
               <td>
                 <template x-if="kind === 'sonarr'">
-                  <fieldset role="group" class="compact">
-                    <input type="number" min="0" placeholder="S" aria-label="season" x-model.number="row.season" :disabled="!series">
-                    <input type="number" min="0" placeholder="E" aria-label="episode" x-model.number="row.number" :disabled="!series">
+                  <fieldset role="group">
+                    <input type="number" min="0" placeholder="S" :aria-label="'season for ' + row.video.title" x-model.number="row.season" :disabled="!series">
+                    <input type="number" min="0" placeholder="E" :aria-label="'episode for ' + row.video.title" x-model.number="row.number" :disabled="!series">
                   </fieldset>
                 </template>
                 <template x-if="kind === 'radarr'">
                   <div class="rel">
-                    <input type="search" x-model="row.movieQuery" @input.debounce.300ms="searchMovies(row)" placeholder="search Radarr" autocomplete="off">
-                    <ul class="results" x-show="row.movieResults.length" @click.outside="row.movieResults = []">
-                      <template x-for="m in row.movieResults" :key="m.id">
-                        <li @click="pickMovie(row, m)"><span x-text="m.title"></span> <span class="muted" x-text="m.year ? '(' + m.year + ')' : ''"></span></li>
+                    <input type="search" x-model="row.movieQuery" @input.debounce.300ms="searchMovies(row)" placeholder="search Radarr" autocomplete="off" :aria-label="'movie for ' + row.video.title" role="combobox" aria-autocomplete="list" :aria-expanded="row.movieResults.length > 0" @keydown.down.prevent="row.hi = Math.min((row.hi ?? 0) + 1, row.movieResults.length - 1)" @keydown.up.prevent="row.hi = Math.max((row.hi ?? 0) - 1, 0)" @keydown.enter.prevent="row.movieResults[row.hi ?? 0] && pickMovie(row, row.movieResults[row.hi ?? 0])" @keydown.escape="row.movieResults = []">
+                    <ul class="results" role="listbox" x-show="row.movieResults.length" @click.outside="row.movieResults = []">
+                      <template x-for="(m, i) in row.movieResults" :key="m.id">
+                        <li role="option" :aria-selected="i === (row.hi ?? 0)" @mouseenter="row.hi = i" @click="pickMovie(row, m)"><span x-text="m.title"></span> <span class="muted" x-text="m.year ? '(' + m.year + ')' : ''"></span></li>
                       </template>
                     </ul>
                   </div>
@@ -109,7 +109,7 @@ function grabApp() {
   return {
     url: '', resolving: false, error: '', videos: [], rows: [],
     connectionId: connections[0] ?? null, kind: connections.length ? kinds[connections[0]] : null,
-    seriesQuery: '', seriesResults: [], series: null, episodes: [], seasons: [],
+    seriesQuery: '', seriesResults: [], hi: 0, series: null, episodes: [], seasons: [],
     bulk: { season: 1, start: 1, reverse: false }, queueing: false, result: '',
     init() {},
     async api(method, path, body) {
@@ -133,6 +133,7 @@ function grabApp() {
     },
     async searchSeries() {
       if (!this.seriesQuery.trim()) { this.seriesResults = []; return; }
+      this.hi = 0;
       try { this.seriesResults = await this.api('GET', `/api/connections/${this.connectionId}/series?q=${encodeURIComponent(this.seriesQuery)}`); }
       catch (e) { this.error = e.message; }
     },
@@ -160,6 +161,7 @@ function grabApp() {
     },
     async searchMovies(row) {
       if (!row.movieQuery.trim()) { row.movieResults = []; return; }
+      row.hi = 0;
       try { row.movieResults = await this.api('GET', `/api/connections/${this.connectionId}/movies?q=${encodeURIComponent(row.movieQuery)}`); }
       catch (e) { this.error = e.message; }
     },

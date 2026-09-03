@@ -2,12 +2,12 @@
 {% block title %}Settings · Outriggarr{% endblock %}
 {% block content %}
 <div class="page-header">
-  <div><h2>Settings</h2></div>
+  <div><h1>Settings</h1></div>
 </div>
 {% set saved = request.query_params.get("saved") %}
 <section id="connections">
 <h3 class="section">Connections</h3>
-{% if saved == "connection" %}<p class="notice" role="status" aria-live="polite">Connection saved.</p>{% endif %}
+{% if saved == "connection" %}<p class="notice" role="status" aria-live="polite">Connection saved{% if request.query_params.get("test") %}; testing it now, the result shows on its card{% endif %}.</p>{% endif %}
 {% if conn_error and failed_connection_id is none %}<p class="notice bad">{{ conn_error }}</p>{% endif %}
 {% for c in connections %}{% set f = (submitted if failed_connection_id == c.id else {}) %}
 <article class="card">
@@ -28,7 +28,7 @@
       <button type="submit">Save connection</button>
       <button type="button" class="secondary" hx-post="/settings/connections/{{ c.id }}/test" hx-target="#test-{{ c.id }}" hx-swap="innerHTML" hx-indicator="#test-busy-{{ c.id }}">Test connection</button>
       <span id="test-busy-{{ c.id }}" class="htmx-indicator muted">testing…</span>
-      <span id="test-{{ c.id }}" role="status" aria-live="polite"></span>
+      <span id="test-{{ c.id }}" role="status" aria-live="polite" {% if request.query_params.get("test") == c.id | string %}hx-post="/settings/connections/{{ c.id }}/test" hx-trigger="load" hx-swap="innerHTML" hx-indicator="#test-busy-{{ c.id }}"{% endif %}></span>
       <button type="submit" form="delete-connection-{{ c.id }}" class="secondary outline danger">Delete</button>
     </div>
   </form>
@@ -46,9 +46,9 @@
     </div>
     <div class="grid">
       <label>URL<input name="url" value="{{ f.get("url", "") }}" required placeholder="http://sonarr:8989"></label>
-      <label>API key<input name="api_key" type="password" autocomplete="new-password" required></label>
+      <label>API key <span class="hint">In Sonarr or Radarr: Settings → General → Security → API Key.</span><input name="api_key" type="password" autocomplete="new-password" required></label>
     </div>
-    <label>Staging path as Sonarr or Radarr sees it<input name="staging_path_remote" value="{{ f.get("staging_path_remote", "") }}" required placeholder="/data/outriggarr"></label>
+    <label>Staging path as Sonarr or Radarr sees it <span class="hint">Outriggarr downloads into its own staging folder. Mount that same folder into Sonarr or Radarr and give the path it has there; Test connection checks it can see it.</span><input name="staging_path_remote" value="{{ f.get("staging_path_remote", "") }}" required placeholder="/data/outriggarr"></label>
     <input type="hidden" name="enabled" value="1">
     <div class="form-actions"><button type="submit">Add connection</button></div>
   </form>
@@ -67,15 +67,15 @@
     <label>Concurrent downloads<input type="number" name="concurrency" min="1" max="8" value="{{ settings.concurrency }}"></label>
     <label>Videos listed per scan<input type="number" name="scan_video_limit" min="1" max="500" value="{{ settings.scan_video_limit }}"></label>
   </div>
-  <label>Default quality <span class="hint">A yt-dlp format selector, used unless a subscription sets its own. Pick a preset for a target quality, or write your own; anything hand-written shows as Custom.</span>
+  <div class="field"><label for="default_format">Default quality <span class="hint">A yt-dlp format selector, used unless a subscription sets its own. Pick a preset for a target quality, or write your own; anything hand-written shows as Custom.</span></label>
     <div class="fill-row">
-      <select data-fills="default_format" aria-label="format preset">
+      <select data-fills="default_format" aria-label="Preset for the default quality">
         {% for p in format_presets %}<option value="{{ p.format }}" title="{{ p.note }}" {% if default_preset and p.key == default_preset.key %}selected{% endif %}>{{ p.label }}</option>{% endfor %}
         <option value="__custom__" {% if not default_preset %}selected{% endif %}>Custom (as typed)</option>
       </select>
-      <input name="default_format" value="{{ settings.default_format }}" required>
+      <input id="default_format" name="default_format" value="{{ settings.default_format }}" required>
     </div>
-  </label>
+  </div>
   <details class="plain"><summary>What the presets mean</summary>
     <ul class="presets">{% for p in format_presets %}<li><strong>{{ p.label }}</strong> <span class="muted">{{ p.note }}</span><br><code>{{ p.format }}</code></li>{% endfor %}</ul>
   </details>

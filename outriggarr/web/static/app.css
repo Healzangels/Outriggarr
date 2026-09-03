@@ -1,19 +1,32 @@
 /* Outriggarr — on top of Pico. Tokens first, primitives second, screens last. */
 :root {
   --o-gap: 1rem;
-  --o-radius: .5rem;
-  --o-badge-radius: .4em;
-  --o-muted: var(--pico-muted-color);
+  --o-radius: var(--pico-border-radius);  /* surfaces match Pico's cards and inputs */
+  --pico-block-spacing-horizontal: 1.25rem;  /* the card gutter: Pico sizes article padding and header bleed from it */
+  --o-muted: #8f98a8;  /* Pico's muted is 4.5:1 at the edge; this has headroom for 12 px text */
+  /* focus rings: Pico's are 2 px at 25–37% alpha, under 2:1 on the dark ground */
+  --pico-primary-focus: rgba(1, 170, 255, .75);
+  --pico-secondary-focus: rgba(144, 158, 190, .75);
+  --pico-outline-width: .1875rem;
   --o-ok: #6fbf73;
   --o-warn: #e8a33d;
   --o-bad: #e06c6c;
-  --o-info: #5b9dd9;
+  /* filled surfaces; dark-only (base.html pins data-theme=dark) */
+  --o-badge-neutral: #555;
+  --o-badge-active: #2a4a7a;
+  --o-badge-ok: #2f6b3a;
+  --o-badge-bad: #7a2a2a;
+  --o-badge-kind: #3b3b5c;
+  --o-notice-bg: #1f3b2a;
+  --o-notice-warn-bg: #4a3a1c;
+  --o-notice-bad-bg: #4a2222;
+  --o-row-hover: rgba(255, 255, 255, .03);
   --o-card: var(--pico-card-background-color);
   --o-border: var(--pico-muted-border-color);
   --pico-font-size: 95%;
 }
 main.container { max-width: 1200px; padding-top: 1.25rem; }
-nav.container { padding-top: .75rem; padding-bottom: .35rem; flex-wrap: wrap; gap: 0 .5rem; border-bottom: 1px solid var(--o-border); }
+nav.container { padding-top: .75rem; padding-bottom: .25rem; flex-wrap: wrap; gap: 0 .5rem; border-bottom: 1px solid var(--o-border); }
 nav.container ul { flex-wrap: wrap; }
 nav a.active { text-decoration: underline; text-underline-offset: .35em; }
 a.brand { display: inline-flex; align-items: center; gap: .5em; text-decoration: none; color: inherit; }
@@ -21,133 +34,129 @@ a.brand svg { border-radius: 6px; flex: none; }
 
 /* page header */
 .page-header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .5rem var(--o-gap); margin-bottom: 1rem; }
-.page-header h2 { margin: 0; }
+.page-header h1 { margin: 0; font-size: var(--pico-h2-font-size, 1.75rem); }  /* the page title is the h1; sized like Pico's h2 */
 .page-header .sub { color: var(--o-muted); margin: 0; }
-.page-header .actions { display: flex; gap: .5rem; flex-wrap: wrap; }
 /* key: value facts in a page header ("Matching  pins → title", "Last scan  21 min ago") */
-.page-header dl.meta { display: flex; flex-wrap: wrap; gap: .25rem 1.5rem; margin: 0; font-size: .9em; }
-.page-header dl.meta > div { display: flex; gap: .45em; align-items: baseline; }
+.page-header dl.meta { display: flex; flex-wrap: wrap; gap: .25rem 1.5rem; margin: 0; font-size: .88em; }
+.page-header dl.meta > div { display: flex; gap: .5em; align-items: baseline; }
 .page-header dl.meta dt { color: var(--o-muted); font-weight: 400; margin: 0; }
 .page-header dl.meta dd { margin: 0; }
 
 /* cards & sections */
-article.card { padding: 1rem 1.25rem; margin-bottom: var(--o-gap); }
-article.card > header { margin: -1rem -1.25rem .75rem; padding: .6rem 1.25rem; font-weight: 600; font-size: 1.05rem; }
-article.card > header .muted { font-weight: 400; }
+article.card > header { margin-bottom: .75rem; padding-block: .5rem; font-weight: 600; font-size: 1rem; }
 section + section { margin-top: 1.5rem; }
 h3.section { margin-bottom: .5rem; }
-article.card h4 { margin: 1.1rem 0 .5rem; font-size: 1rem; }  /* under the card's own title */
-article.card h4 .muted { font-size: .8em; }
+article.card h4 { margin: 1rem 0 .5rem; font-size: 1rem; }
 
 /* badges & chips */
-.badge { display: inline-block; font-size: .78rem; line-height: 1.6; padding: 0 .55em; border-radius: var(--o-badge-radius); white-space: nowrap; color: #fff; background: #555; vertical-align: middle; }
-.badge-queued, .badge-downloading, .badge-importing { background: #2a4a7a; }
-.badge-done, .badge-ok { background: #2f6b3a; }
-.badge-failed { background: #7a2a2a; }
-.badge-cancelled, .badge-off { background: #555; }
-.badge-kind { background: #3b3b5c; }
-.badge-outline { background: transparent; border: 1px solid var(--o-border); color: var(--o-muted); }
-.chips { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; }
-.chip { font-size: .78rem; padding: .05em .55em; border: 1px solid var(--o-border); border-radius: 1em; color: var(--o-muted); white-space: nowrap; }
+/* badges (filled: a job's state) and chips (outlined: a fact or a count) share one box */
+.badge, .chip { display: inline-block; font-size: .78rem; line-height: 1.5; padding: 0 .55em; border: 1px solid transparent; white-space: nowrap; vertical-align: middle; }
+.badge { border-radius: var(--pico-border-radius); color: #fff; background: var(--o-badge-neutral); }
+.badge-queued, .badge-downloading, .badge-importing { background: var(--o-badge-active); }
+.badge-done { background: var(--o-badge-ok); }
+.badge-failed { background: var(--o-badge-bad); }
+.badge-cancelled, .badge-off { background: var(--o-badge-neutral); }
+.badge-kind { background: var(--o-badge-kind); }
+.chips { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+.chip { border-radius: 1em; border-color: var(--o-border); color: var(--o-muted); }
 .chip.ok { border-color: var(--o-ok); color: var(--o-ok); }
 .chip.warn { border-color: var(--o-warn); color: var(--o-warn); }
 .chip.bad { border-color: var(--o-bad); color: var(--o-bad); }
-.chip.zero { opacity: .7; }  /* a count of nothing: present for completeness, not for attention */
+.chip.zero { border-style: dashed; }  /* a count of nothing: present for completeness, not for attention; dashed, not dimmed, so it still reads */
 
 .nowrap { white-space: nowrap; }
-.strategy-order { color: var(--o-muted); font-size: .9em; }
 
 /* status text */
 .ok { color: var(--o-ok); } .warn { color: var(--o-warn); } .bad { color: var(--o-bad); }
-.muted { color: var(--o-muted); font-size: .88em; }
-.mono { font-family: var(--pico-font-family-monospace); font-size: .85em; }
+.muted { color: var(--o-muted); font-size: .88em; font-weight: 400; }
+.mono, .job-id, .job-ref { font-family: var(--pico-font-family-monospace); font-size: .88em; }
 
 /* tables */
 .table-wrap { overflow-x: auto; }
 table { margin-bottom: .5rem; }
-table td, table th { vertical-align: top; padding: .5rem .6rem; }
+table td, table th { vertical-align: top; padding: .5rem; }
 .table-wrap table { font-size: .95em; }
 /* long lists read as a diary: a quiet divider where the day changes */
-tr.day-group td { padding: .9rem .6rem .25rem; border-bottom: 0; color: var(--o-muted); font-size: .78em; letter-spacing: .06em; text-transform: uppercase; background: transparent; }
+tr.day-group td { padding: .75rem .5rem .25rem; border-bottom: 0; color: var(--o-muted); font-size: .78rem; letter-spacing: .06em; text-transform: uppercase; background: transparent; }
 tr.day-group + tr td { border-top: 1px solid var(--o-border); }
 /* job references keep one width so the badge after them lines up whatever the digits */
-.job-id, .job-ref { display: inline-block; min-width: 4.5ch; font-family: var(--pico-font-family-monospace); font-size: .85em; }
+.job-id, .job-ref { display: inline-block; min-width: 4.5ch; }
 .job-id { color: var(--o-muted); margin-right: .35em; }
 tr.quiet .job-id { opacity: .85; }
 /* a settled row (done, cancelled) keeps its badge as an outline: two hundred filled green
    badges would be the loudest thing on the page, and only work in progress needs the fill */
-tr.quiet .badge { background: transparent; border: 1px solid #2f6b3a; color: var(--o-ok); line-height: 1.45; }
-tr.quiet .badge-cancelled { border-color: #555; color: var(--o-muted); }
-td.evidence .chip { vertical-align: middle; }
+tr.quiet .badge { background: transparent; border-color: var(--o-badge-ok); color: var(--o-ok); }
+tr.quiet .badge-cancelled { border-color: var(--o-badge-neutral); color: var(--o-muted); }
 td.evidence .length { font-size: .88em; margin: 0 .35em; white-space: nowrap; }  /* "6:54 vs 10:00 ✓" is one fact */
+td.evidence .why { display: block; font-size: .82em; color: var(--o-warn); }  /* the reason behind a ✗, visible, not a tooltip */
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 table.matches th:first-child { width: 30%; }  /* episode labels mostly fit one line */
 table.matches td.when { width: 6.5rem; }
-#matches-content .form-actions { margin: 0 0 .75rem; }
+.tabs + .form-actions { margin: 0 0 .75rem; }
 tr.attention td:first-child { box-shadow: inset 3px 0 0 var(--o-warn); }
 details.explainer { margin: -.5rem 0 1rem; }
-details.explainer > summary { color: var(--o-muted); font-size: .9em; padding: .2rem 0; }
 details.explainer p { margin: .25rem 0 0; max-width: 80ch; }
-details.explainer > summary::after, details.plain > summary::after { float: none; display: inline-block; vertical-align: middle; margin-inline-start: .35em; }
+details:is(.plain, .error) > summary::after { float: none; display: inline-block; vertical-align: middle; margin-inline-start: .35em; }  /* the chevron sits by its label */
 /* links in tables are the norm, not the exception: underline only on hover/focus */
 table a:not([role=button]) { text-decoration: none; }
 table a:not([role=button]):hover, table a:not([role=button]):focus-visible { text-decoration: underline; }
 @media (hover: hover) {
-  tbody tr:hover { background: rgba(255, 255, 255, .03); }
+  tbody tr:hover { background: var(--o-row-hover); }
   /* per-row buttons recede until the row is in play */
-  td.actions button, td.actions a[role=button], td.actions form.inline button, td.actions a.muted { opacity: .65; }
-  tbody tr:hover td.actions button, tbody tr:hover td.actions a[role=button], tbody tr:hover td.actions a.muted, td.actions button:focus-visible { opacity: 1; }
+  td.actions :is(button, a[role=button], a.muted) { opacity: .85; }  /* still AA at this size */
+  tbody tr:is(:hover, :focus-within) td.actions :is(button, a[role=button], a.muted), td.actions :is(button, a):focus-visible { opacity: 1; }
 }
 td.actions, th.actions { white-space: nowrap; text-align: right; }
-td.actions button, td.actions a[role=button], td.actions form.inline button { margin: 0 0 0 .3em; padding: .15em .6em; font-size: .82em; display: inline-block; width: auto; }
+/* Pico makes [type=submit] block-level with a bottom margin; every button here sits in a row */
+button[type=submit], button[type=button] { width: auto; margin-bottom: 0; }
+/* compact: inside table rows and inline forms */
+td.actions :is(button, a[role=button]), form.inline button { display: inline-block; padding: .2em .6em; font-size: .88em; }
+td.actions :is(button, a[role=button]) { margin-left: .35em; }
 td.actions a.muted { margin-left: .5em; }
-td.actions .two-line { margin-top: .25em; }
 td.num { text-align: right; white-space: nowrap; }
 td.when { white-space: nowrap; }
 .truncate { display: inline-block; max-width: 34ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: text-bottom; }
 table.jobs .truncate, table.recent .truncate { max-width: 48ch; }  /* fewer columns than Matches: room for the whole title */
 .two-line { display: block; }
 .two-line > progress { width: 6rem; vertical-align: middle; }  /* the bar and its percentage share a line */
-progress { margin: 0; height: .5rem; }
+progress { margin: 0; }
 
 /* tabs (filters) */
 .tabs { display: flex; flex-wrap: wrap; justify-content: flex-start; gap: .25rem; margin-bottom: .75rem; }  /* Pico spreads a nav's children apart; tabs sit together */
-.tabs a { padding: .3em .8em; border-radius: var(--o-radius); text-decoration: none; color: var(--o-muted); border: 1px solid transparent; }
-.tabs a[aria-current=page] { color: var(--pico-color); border-color: var(--o-border); background: var(--o-card); }
-.tabs a .count { font-size: .8em; opacity: .8; margin-left: .35em; }
-button .count { font-size: .8em; opacity: .8; margin-left: .35em; font-weight: 400; }
+.tabs a { padding: .3em .8em; border-radius: var(--pico-border-radius); text-decoration: none; color: var(--o-muted); border: 1px solid transparent; }
+.tabs a[aria-current=page] { color: var(--pico-color); border-color: var(--pico-secondary); background: var(--o-card); font-weight: 600; }  /* not colour alone */
+.count { font-size: .78rem; opacity: .9; margin-left: .35em; font-weight: 400; }
 
 /* collapsible sections: one look everywhere */
 details.panel { border: 1px solid var(--o-border); border-radius: var(--o-radius); background: var(--o-card); margin-bottom: var(--o-gap); }
-details.panel > summary { padding: .6rem 1.25rem; font-weight: 600; cursor: pointer; }
-details.panel > summary .muted { font-weight: 400; }
+details.panel > summary { padding: .5rem var(--pico-block-spacing-horizontal); font-weight: 600; }
 details.panel[open] > summary { border-bottom: 1px solid var(--o-border); }
-details.panel > *:not(summary) { padding: .75rem 1.25rem 1rem; }
-details.panel > article.card { margin: 0; border: 0; border-radius: 0 0 var(--o-radius) var(--o-radius); }
-details.panel > article.card > header { display: none; }
-details.plain > summary { cursor: pointer; color: var(--o-muted); padding: .35rem 0; }
+details.panel > *:not(summary) { padding: .75rem var(--pico-block-spacing-horizontal) 1rem; }
+details.panel > article.card { margin: 0; border-radius: 0 0 var(--o-radius) var(--o-radius); }
+details.plain > summary { color: var(--o-muted); padding: .25rem 0; }
 article.card > details.plain { margin: .75rem 0 0; }
 
 /* notices */
-.notice { padding: .55em .9em; border-radius: var(--o-radius); background: #1f3b2a; margin: .5rem 0; }
-.notice.warn { background: #4a3a1c; }
-.notice.bad { background: #4a2222; }
+/* .notice.warn/.bad take their text colour from the .warn/.bad utilities: the names coincide on purpose */
+.notice { padding: .55em .9em; border-radius: var(--o-radius); background: var(--o-notice-bg); margin: .5rem 0; }
+.notice.warn { background: var(--o-notice-warn-bg); }
+.notice.bad { background: var(--o-notice-bad-bg); }
+.notice a { color: #fff; text-decoration: underline; }  /* a link inside a coloured bar keeps its contrast */
 .empty { color: var(--o-muted); padding: 1.5rem 1rem; text-align: center; border: 1px dashed var(--o-border); border-radius: var(--o-radius); }
 
 /* forms */
 form.inline { display: inline; margin: 0; }
-form.inline button { padding: .2em .6em; font-size: .85em; width: auto; display: inline-block; margin: 0; }
-button.x-clear { background: none; border: 0; color: var(--o-bad); padding: 0 .3em; font-size: .9em; line-height: 1; vertical-align: middle; cursor: pointer; opacity: .75; }
-button.x-clear:hover, button.x-clear:focus { opacity: 1; background: none; }
-fieldset[role=group].compact { margin: 0; }
-label .hint { display: block; color: var(--o-muted); font-size: .82em; font-weight: 400; max-width: 80ch; }
+form.inline button.x-clear { background: none; border: 0; color: var(--o-bad); padding: 0 .3em; font-size: .88em; line-height: 1; vertical-align: middle; opacity: .9; }  /* form.inline button would win otherwise */
+form.inline button.x-clear:hover, form.inline button.x-clear:focus { opacity: 1; background: none; }
+table fieldset[role=group] { margin: 0; }
+label .hint { display: block; color: var(--o-muted); font-size: .88em; max-width: 80ch; }
 /* Side-by-side fields: hints differ in length, so without this the controls sit at
    different depths and a row of inputs looks jumbled. Each label becomes a column with
    its control pinned to the bottom of the (equal-height) grid cell; checkbox labels are
    left alone, their control comes first. */
-.grid > label:has(> input:not([type=checkbox]):not([type=radio]), > select, > textarea, > .fill-row) { display: flex; flex-direction: column; justify-content: flex-end; }
-.grid > label > .hint { margin-bottom: .35rem; }
+.grid > label:has(> input:not([type=checkbox]):not([type=radio]), > select, > textarea), .grid > .field:has(> .fill-row) { display: flex; flex-direction: column; justify-content: flex-end; }
+.grid > label > .hint { margin-bottom: .25rem; }
 .form-actions { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; margin-top: .5rem; }
-.form-actions button { width: auto; margin: 0; }
 [role=group] > button { white-space: nowrap; }  /* a two-word button beside a wide input stays on one line */
 .form-actions .danger, .form-actions .push-right { margin-left: auto; }
 .form-actions [role=status]:not(:empty) { flex-basis: 100%; order: 99; }
@@ -156,12 +165,10 @@ label .hint { display: block; color: var(--o-muted); font-size: .82em; font-weig
    the row, its progress line takes a full row underneath */
 .form-actions > .date-fetch { display: contents; }
 .form-actions .date-fetch .notice { flex-basis: 100%; order: 99; margin: .25rem 0 0; }
-.scan-summary { margin: 0 0 .6rem; }
-fieldset[role=group].pin { margin: 0; }
+.scan-summary { margin: 0 0 .5rem; }
 ul.pins { list-style: none; padding-left: 0; }
-ul.pins li { display: flex; flex-wrap: wrap; gap: .5em; align-items: baseline; margin-bottom: .35rem; }
+ul.pins li { display: flex; flex-wrap: wrap; gap: .5em; align-items: baseline; margin-bottom: .25rem; }
 details.season > summary { color: inherit; }
-details.season > summary .muted { font-weight: 400; }
 .bulk-fill { align-self: end; margin: 0 0 var(--pico-spacing); }
 label.inline-check { display: inline-flex; align-items: center; gap: .35em; margin: 0; }
 
@@ -170,49 +177,48 @@ label.inline-check { display: inline-flex; align-items: center; gap: .35em; marg
 .fill-row select, .fill-row input { margin-bottom: 0; }
 ul.presets { padding-left: 1.2rem; }
 ul.presets li { margin-bottom: .5rem; }
-ul.presets code { font-size: .78em; word-break: break-all; }
+ul.presets code { word-break: break-all; }
 fieldset[role=group].pin input { min-width: 16em; }
 table.grab fieldset[role=group] input { max-width: 5em; }
-details.error { margin: .15rem 0 0; }
-details.error[open] > summary { margin-bottom: .3rem; }
-details.error pre { white-space: pre-wrap; font-size: .8em; max-width: 60ch; margin: .3rem 0 0; }
-details.error summary { cursor: pointer; display: block; max-width: 48ch; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-details.error summary::after { float: none; display: inline-block; vertical-align: middle; margin-inline-start: .35em; }
+details.error { margin: .25rem 0 0; }
+details.error[open] > summary { margin-bottom: .25rem; }
+details.error pre { white-space: pre-wrap; max-width: 60ch; margin: .25rem 0 0; }
+details.error summary { display: block; max-width: 48ch; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* the plain-words reading of a failed job's error, under the verbatim text */
-.cause { display: block; color: var(--o-muted); font-size: .82em; max-width: 60ch; margin-top: .1rem; }
+.cause { display: block; color: var(--o-muted); font-size: .88em; max-width: 60ch; margin-top: .25rem; }
 .cause::before { content: "Likely cause: "; color: var(--pico-color); }
-.htmx-indicator { opacity: 0; transition: opacity .2s; }
-.htmx-request .htmx-indicator, .htmx-request.htmx-indicator { opacity: 1; }
+/* an idle indicator takes no room: with opacity alone it still held a gap in a button
+   row, which showed once the row wrapped on a phone */
+.htmx-indicator { display: none; }
+.htmx-request .htmx-indicator, .htmx-request.htmx-indicator { display: inline; }
 
 /* grab */
 .results { position: absolute; z-index: 10; background: var(--o-card); border: 1px solid var(--o-border); max-height: 16em; overflow-y: auto; margin: 0; padding: 0; list-style: none; width: 100%; border-radius: var(--o-radius); }
 .results li { padding: .3em .6em; cursor: pointer; }
-.results li:hover { background: var(--pico-secondary-background); }
+.results li:hover, .results li[aria-selected=true] { background: rgba(255, 255, 255, .08); }
 .rel { position: relative; }
-.sticky-bar { position: sticky; bottom: 0; background: var(--pico-background-color); border-top: 1px solid var(--o-border); padding: .6rem 0; display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; margin-top: .5rem; }
-.sticky-bar button { width: auto; margin: 0; }
+.sticky-bar { position: sticky; bottom: 0; background: var(--pico-background-color); border-top: 1px solid var(--o-border); padding: .5rem 0; display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; margin-top: .5rem; }
+.sticky-bar .notice { margin: 0; }
 
 /* footer */
 footer .ok { color: var(--o-muted); }
-footer [title] { text-decoration: underline dotted; text-underline-offset: .2em; }
-footer.container { margin-top: 2.5rem; padding: 1rem 0; border-top: 1px solid var(--o-border); color: var(--o-muted); font-size: .82em; display: flex; flex-wrap: wrap; justify-content: center; text-align: center; gap: .5rem 1.25rem; align-items: center; }
+footer [data-tooltip] { border-bottom: 1px dotted; cursor: help; }  /* Pico's tooltip opens on hover and on focus, so a tap or Tab reaches it too */
+footer .muted { font-size: inherit; }
+footer.container { margin-top: 2.5rem; padding: 1rem 0; border-top: 1px solid var(--o-border); color: var(--o-muted); font-size: .88em; display: flex; flex-wrap: wrap; justify-content: center; text-align: center; gap: .5rem 1.25rem; align-items: center; }
 
-@media (max-width: 720px) {
-  .truncate { max-width: 20ch; }
-  .page-header .actions { width: 100%; }
-  /* tables keep readable columns and the wrapper scrolls, instead of every cell
-     squeezing to one word per line */
-  .table-wrap table { min-width: 640px; }
-  /* the other four columns refuse to shrink below ~700px (nowrap evidence, when and
-     actions), so the episode label needs the table wider than the phone to wrap in two
-     lines rather than six; the wrapper scrolls */
-  table.matches { min-width: 900px; }
+/* tables keep readable columns at any width and the wrapper scrolls, instead of every
+   cell squeezing to one word per line; Matches' four nowrap columns need ~700px alone */
+.table-wrap table { min-width: 640px; }
+table.matches { min-width: 900px; }
+
+@media (max-width: 767px) {  /* Pico's own breakpoint: .grid stacks here too */
+  .truncate, details.error summary { max-width: 20ch; }
   table.matches td.actions { white-space: normal; }
   a.brand strong { display: none; }
   nav.container ul:last-child { gap: 0; }
   nav.container ul:last-child li { padding: .25rem .45rem; }
   .form-actions .danger, .form-actions .push-right { margin-left: 0; }
   .fill-row { grid-template-columns: 1fr; }
-  td.actions button, td.actions form.inline button { padding: .45em .8em; font-size: .9em; }
+  td.actions :is(button, a[role=button]), form.inline button { padding: .45em .8em; }
   table [type=checkbox] { width: 1.4em; height: 1.4em; }
 }

@@ -8,6 +8,9 @@
       <span class="muted">{% if st == "title" %}the same title once tidied, else the episode title inside the video title{% elif st == "date" %}upload date near the air date (fetched per video, only for episodes nothing else matched){% else %}season and episode numbers captured by the regex below{% endif %}</span></label>
   {% endfor %}
 </fieldset>
+{% set expert = sub and (sub.title_regex or sub.title_require or sub.video_limit or sub.audio_language or sub.format or sub.date_offset_days or (sub.date_tolerance_days is not none and sub.date_tolerance_days != 2)) %}
+<details class="plain more" {% if expert or "regex" in chosen or "date" in chosen %}open{% endif %}>
+<summary>More options <span class="muted">· date tolerance, regex, title scope, listing depth, audio, quality</span></summary>
 <div class="grid">
   <label>Date tolerance (days)<input type="number" name="date_tolerance_days" min="0" max="60" value="{{ sub.date_tolerance_days if sub else 2 }}"></label>
   <label>Date offset (days)<span class="hint">Positive if videos land after the air date.</span><input type="number" name="date_offset_days" min="-60" max="60" value="{{ sub.date_offset_days if sub else 0 }}"></label>
@@ -23,6 +26,20 @@
 <label>Videos to list per scan <span class="hint">Blank = the global setting ({{ scan_video_limit }}). Raise it for a channel whose episodes sit behind hundreds of newer uploads; a deep listing costs a few seconds per scan. Playlists are always listed whole.</span>
   <input type="number" name="video_limit" min="1" max="5000" value="{{ sub.video_limit or '' if sub else '' }}" placeholder="{{ scan_video_limit }}">
 </label>
+<label>Audio language <span class="hint">Three-letter ISO 639-2 code, e.g. <code>jpn</code>. Blank = the language the source declares for the audio track (YouTube sets one per track), then the global default.</span>
+  <input type="text" name="audio_language" maxlength="3" value="{{ sub.audio_language or '' if sub else '' }}" placeholder="declared by the source">
+</label>
+<div class="field"><label for="format">Quality for this series <span class="hint">Blank = the global default from Settings{% if global_format_preset %} ({{ global_format_preset.label }}){% endif %}. Pick a preset for this series alone, or write your own yt-dlp format selector.</span></label>
+  <div class="fill-row">
+    <select data-fills="format" aria-label="Preset for this series' quality">
+      <option value="" {% if not (sub and sub.format) %}selected{% endif %}>Global default</option>
+      {% for p in format_presets %}<option value="{{ p.format }}" title="{{ p.note }}" {% if format_preset and p.key == format_preset.key %}selected{% endif %}>{{ p.label }}</option>{% endfor %}
+      <option value="__custom__" {% if sub and sub.format and not format_preset %}selected{% endif %}>Custom (as typed)</option>
+    </select>
+    <input id="format" type="text" name="format" value="{{ sub.format or '' if sub else '' }}">
+  </div>
+</div>
+</details>
 <fieldset>
   <legend>Automatic downloads <span class="muted">(what the scheduler queues by itself; the Download buttons in the preview are always yours)</span></legend>
   {% set mode = sub.auto_download if sub else "future" %}
@@ -30,16 +47,3 @@
   <label><input type="radio" name="auto_download" value="all" {% if mode == "all" %}checked{% endif %}> Everything Sonarr wants <span class="muted">— backlog included; a big series means a big queue</span></label>
   <label><input type="radio" name="auto_download" value="none" {% if mode == "none" %}checked{% endif %}> Nothing automatic <span class="muted">— scans only refresh the preview; you pick what to download</span></label>
 </fieldset>
-<label>Audio language <span class="hint">Three-letter ISO 639-2 code, e.g. <code>jpn</code>. Blank = the language the source declares for the audio track (YouTube sets one per track), then the global default.</span>
-  <input type="text" name="audio_language" maxlength="3" value="{{ sub.audio_language or '' if sub else '' }}" placeholder="declared by the source">
-</label>
-<label>Quality for this series <span class="hint">Blank = the global default from Settings{% if global_format_preset %} ({{ global_format_preset.label }}){% endif %}. Pick a preset for this series alone, or write your own yt-dlp format selector.</span>
-  <div class="fill-row">
-    <select data-fills="format" aria-label="format preset">
-      <option value="" {% if not (sub and sub.format) %}selected{% endif %}>Global default</option>
-      {% for p in format_presets %}<option value="{{ p.format }}" title="{{ p.note }}" {% if format_preset and p.key == format_preset.key %}selected{% endif %}>{{ p.label }}</option>{% endfor %}
-      <option value="__custom__" {% if sub and sub.format and not format_preset %}selected{% endif %}>Custom (as typed)</option>
-    </select>
-    <input type="text" name="format" value="{{ sub.format or '' if sub else '' }}">
-  </div>
-</label>

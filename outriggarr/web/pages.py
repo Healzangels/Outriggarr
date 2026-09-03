@@ -5,7 +5,7 @@ from __future__ import annotations
 import contextlib
 import html
 import shutil
-from datetime import UTC, datetime, tzinfo
+from datetime import UTC, datetime, timedelta, tzinfo
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Annotated
@@ -161,8 +161,46 @@ TIER_LABELS = {
 }
 
 
+# The plain-words reading behind each tier, for the chip's tooltip: this is the whole
+# basis of a trust decision on the Matches page, so it must not need the docs.
+TIER_HELP = {
+    "override": "You pinned this video to the episode",
+    "exact": "The video and episode titles are the same once tidied",
+    "numbered": "Both titles carry the same show number, and the episode title is inside the "
+    "video title",
+    "contains": "The episode title appears inside the video title",
+    "title": "Matched on the title, exact or contained",
+    "date": "Uploaded within the date tolerance of the air date: the weakest tier",
+    "regex": "Season and episode captured from the video title by the subscription's regex",
+    "unknown": "Recorded before the app noted how it matched; could have been regex or date",
+}
+
+
 def tier_label(tier: str | None) -> str:
     return TIER_LABELS.get(tier or "unknown", tier or "unknown")
+
+
+def tier_help(tier: str | None) -> str:
+    return TIER_HELP.get(tier or "unknown", TIER_HELP["unknown"])
+
+
+def next_scan_text(
+    last_scan_at: datetime | None, interval_minutes: int, now: datetime | None = None
+) -> str:
+    """When the scheduler will look at a subscription again, in the words of the Series
+    list: "next in ~11 hr", "due now", or for a fresh subscription "first scan due soon"."""
+    now = now or datetime.now(UTC)
+    if last_scan_at is None:
+        return "first scan due soon"
+    due = last_scan_at + timedelta(minutes=interval_minutes)
+    left = (due - now).total_seconds()
+    if left <= 60:
+        return "next scan due now"
+    if left < 3600:
+        return f"next in ~{int(left // 60)} min"
+    if left < 36 * 3600:
+        return f"next in ~{int(left / 3600 + 0.5) or 1} hr"  # half up, like the ago filter
+    return f"next in ~{int(left // 86400)} d"
 
 
 def _code(season: int, episode: int) -> str:
@@ -170,6 +208,9 @@ def _code(season: int, episode: int) -> str:
 
 
 templates.env.globals["tier_label"] = tier_label
+templates.env.globals["tier_help"] = tier_help
+# pages re-rendered on a form error do not recompute the scan timing; the header simply omits it
+templates.env.globals.update(next_scan=None, next_scans={})
 
 
 def _tooling(request: Request) -> dict:
@@ -235,6 +276,10 @@ def _jobs(session: DbSession, view: str) -> list[Job]:
     return list(session.scalars(q.limit(ACTIVITY_LIMIT)))
 
 
+def _has_connections(session: Session) -> bool:
+    return session.scalars(select(Connection.id).limit(1)).first() is not None
+
+
 def _rows(
     request: Request,
     session: DbSession,
@@ -255,6 +300,7 @@ def _rows(
             "total": total,
             "limit": ACTIVITY_LIMIT,
             "causes": _causes(session, jobs),
+            "has_connections": _has_connections(session),
         },
     )
 
@@ -298,6 +344,7 @@ def activity(
             "counts": counts,
             "total": counts.get(view, len(jobs)),
             "limit": ACTIVITY_LIMIT,
+            "has_connections": _has_connections(session),
             "causes": _causes(session, jobs),
         },
     )
@@ -589,8 +636,12 @@ async def _series_list(conn: Connection, arr_factory) -> list:
 def series_page(request: Request, session: DbSession) -> HTMLResponse:
     conn = _sonarr(session)
     subs = list(session.scalars(select(Subscription).order_by(Subscription.title)))
+    interval = int(get_setting(session, "scan_interval_minutes"))
+    next_scans = {s.id: next_scan_text(s.last_scan_at, interval) for s in subs if s.enabled}
     return templates.TemplateResponse(
-        request, "series.html", {"connection": conn, "subscriptions": subs}
+        request,
+        "series.html",
+        {"connection": conn, "subscriptions": subs, "next_scans": next_scans},
     )
 
 
@@ -818,10 +869,29 @@ def subscription_page(request: Request, subscription_id: int, session: DbSession
     if sub is None:
         return RedirectResponse("/series", status_code=302)
     jobs = _recent_jobs(session, subscription_id)
+    interval = int(get_setting(session, "scan_interval_minutes"))
     return templates.TemplateResponse(
         request,
         "subscription.html",
-        {"jobs": jobs, "error": None, **_subscription_form_context(sub, session)},
+        {
+            "jobs": jobs,
+            "error": None,
+            "next_scan": next_scan_text(sub.last_scan_at, interval) if sub.enabled else None,
+            **_subscription_form_context(sub, session),
+        },
+    )
+
+
+@router.get("/subscriptions/{subscription_id}/recent")
+def subscription_recent(request: Request, subscription_id: int, session: DbSession) -> HTMLResponse:
+    """The Recent jobs card, refreshed after a download queues jobs (jobs-changed)."""
+    sub = session.get(Subscription, subscription_id)
+    if sub is None:
+        raise HTTPException(status_code=404, detail="no such subscription")
+    return templates.TemplateResponse(
+        request,
+        "partials/recent_jobs.html",
+        {"sub": sub, "jobs": _recent_jobs(session, subscription_id)},
     )
 
 
@@ -1043,9 +1113,17 @@ async def subscription_download(
     if not report.error:
         n = len(report.created_job_ids)
         notice = (
-            f"Queued {n} job{'' if n == 1 else 's'}." if n else "Nothing to queue: no new matches."
+            f"Queued {n} job{'' if n == 1 else 's'}; they show under Recent jobs below and on "
+            "Activity."
+            if n
+            else "Nothing to queue: no new matches."
         )
-    return _preview_response(request, session, report, notice)
+    response = _preview_response(request, session, report, notice)
+    if report.created_job_ids:
+        response.headers["HX-Trigger"] = (
+            "jobs-changed"  # the Episodes and Recent jobs cards refresh
+        )
+    return response
 
 
 @router.post("/subscriptions/{subscription_id}/overrides")
@@ -1161,7 +1239,7 @@ async def subscription_edit(
             {"jobs": _recent_jobs(session, subscription_id), "error": detail, **ctx},
             status_code=400,
         )
-    return RedirectResponse(f"/subscriptions/{subscription_id}", status_code=303)
+    return RedirectResponse(f"/subscriptions/{subscription_id}?saved=1", status_code=303)
 
 
 @router.post("/subscriptions/{subscription_id}/delete")
@@ -1268,7 +1346,7 @@ async def settings_notify_test(request: Request, session: DbSession, deps: Runne
 async def settings_connection_create(request: Request, session: DbSession) -> HTMLResponse:
     data = await _read_form(request)
     try:
-        create_connection(_connection_body(data), session)
+        created = create_connection(_connection_body(data), session)
     except Exception as exc:
         session.rollback()
         detail = getattr(exc, "detail", None) or str(exc)
@@ -1278,7 +1356,10 @@ async def settings_connection_create(request: Request, session: DbSession) -> HT
             _settings_context(session, submitted=_without_key(data), conn_error=detail),
             status_code=400,
         )
-    return RedirectResponse("/settings?saved=connection#connections", status_code=303)
+    new_id = getattr(created, "id", None)
+    return RedirectResponse(
+        f"/settings?saved=connection&test={new_id}#connections", status_code=303
+    )
 
 
 @router.post("/settings/connections/{connection_id}")

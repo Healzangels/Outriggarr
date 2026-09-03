@@ -1,10 +1,10 @@
-{% if notice %}<p id="jobs-notice" hx-swap-oob="true" class="notice{{ ' bad' if notice_bad else '' }}" role="{{ 'alert' if notice_bad else 'status' }}" aria-live="polite">{{ notice }}</p>{% endif %}
+{% if notice %}<div id="jobs-notice" hx-swap-oob="innerHTML"><p class="notice{{ ' bad' if notice_bad else '' }}"{% if notice_bad %} role="alert"{% endif %}>{{ notice }}</p></div>{% endif %}
 {% if not jobs %}
-<p class="empty">{% if view == "failed" %}No failed jobs.{% elif view == "active" %}Nothing running.{% elif view == "done" %}Nothing finished yet.{% else %}No jobs yet. Queue one from <a href="/grab">Grab</a> or subscribe to a series under <a href="/series">Series</a>.{% endif %}</p>
+<p class="empty">{% if has_connections is defined and not has_connections %}Nothing here yet. Start by connecting Sonarr or Radarr under <a href="/settings">Settings</a>.{% elif view == "failed" %}No failed jobs.{% elif view == "active" %}Nothing running.{% elif view == "done" %}Nothing finished yet.{% else %}No jobs yet. Queue one from <a href="/grab">Grab</a> or subscribe to a series under <a href="/series">Series</a>.{% endif %}</p>
 {% else %}
 <div class="table-wrap">
 <table class="jobs">
-  <thead><tr><th>Job</th><th>Episode / movie</th><th>Video</th><th>When</th><th class="actions"></th></tr></thead>
+  <thead><tr><th scope="col">Job</th><th scope="col">Episode / movie</th><th scope="col">Video</th><th scope="col">When</th><th class="actions" scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
   <tbody>
   {% set ns = namespace(day=None) %}
   {% for job in jobs %}
@@ -29,11 +29,11 @@
       <td><a href="{{ job.video_url }}" target="_blank" rel="noopener" class="truncate" title="{{ job.video_title or job.video_id }}">{{ job.video_title or job.video_id }}</a>
         {% if job.error %}<details class="error" id="err-{{ job.id }}-{{ job.attempts }}" hx-preserve><summary class="{{ 'warn' if job.status.value == 'done' else 'bad' }}">{{ job.error.splitlines()[0] | truncate(60) }}</summary><pre>{{ job.error }}</pre></details>{% if causes is defined and causes.get(job.id) %}<span class="cause">{{ causes[job.id] }}</span>{% endif %}{% endif %}
       </td>
-      <td class="muted when" title="created {{ job.created_at.strftime('%Y-%m-%d %H:%M') }}Z{% if job.finished_at %} · finished {{ job.finished_at.strftime('%Y-%m-%d %H:%M') }}Z{% endif %}">{{ when | ago }}</td>
+      <td class="muted when"><time datetime="{{ when.isoformat() }}" title="created {{ job.created_at.strftime('%Y-%m-%d %H:%M') }}Z{% if job.finished_at %} · finished {{ job.finished_at.strftime('%Y-%m-%d %H:%M') }}Z{% endif %}">{{ when | ago }}</time></td>
       <td class="actions">
-        {% if job.status in RETRYABLE %}<button hx-post="/activity/jobs/{{ job.id }}/retry?view={{ view }}" hx-target="#jobs">Retry</button>{% endif %}
-        {% if job.status in CANCELLABLE %}<button class="secondary outline" hx-post="/activity/jobs/{{ job.id }}/cancel?view={{ view }}" hx-target="#jobs" hx-confirm="Cancel job #{{ job.id }}?">Cancel</button>{% endif %}
-        {% if job.status in DELETABLE and not (job.status.value == "failed" and job.next_retry_at) %}<button class="secondary outline" hx-post="/activity/jobs/{{ job.id }}/delete?view={{ view }}" hx-target="#jobs" hx-confirm="Delete job #{{ job.id }} and its staged files?" title="Delete this job and its staged files">Delete</button>{% endif %}
+        {% if job.status in RETRYABLE %}<button id="retry-{{ job.id }}" hx-post="/activity/jobs/{{ job.id }}/retry?view={{ view }}" hx-target="#jobs">Retry</button>{% endif %}
+        {% if job.status in CANCELLABLE %}<button id="cancel-{{ job.id }}" class="secondary outline" hx-post="/activity/jobs/{{ job.id }}/cancel?view={{ view }}" hx-target="#jobs" hx-confirm="Stop job #{{ job.id }} and mark it cancelled?">Cancel</button>{% endif %}
+        {% if job.status in DELETABLE and not (job.status.value == "failed" and job.next_retry_at) %}<button id="delete-{{ job.id }}" class="secondary outline" hx-post="/activity/jobs/{{ job.id }}/delete?view={{ view }}" hx-target="#jobs" hx-confirm="Delete job #{{ job.id }}? Only its staging folder goes; a file already imported into {{ job.connection.name }} stays." title="Delete this job and its staging folder">Delete</button>{% endif %}
       </td>
     </tr>
   {% endfor %}

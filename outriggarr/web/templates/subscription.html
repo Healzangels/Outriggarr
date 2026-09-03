@@ -3,16 +3,17 @@
 {% block content %}
 <div class="page-header">
   <div>
-    <h2>{{ sub.title or ("series " ~ sub.series_id) }} {% if not sub.enabled %}<span class="badge badge-off">disabled</span>{% endif %}</h2>
+    <h1>{{ sub.title or ("series " ~ sub.series_id) }} {% if not sub.enabled %}<span class="badge badge-off">disabled</span>{% endif %}</h1>
     <p class="sub">{% for u in sub.sources %}<a href="{{ u }}" target="_blank" rel="noopener" title="{{ u }}">{{ u | replace("https://www.youtube.com/", "youtube.com/") }}</a>{% if not loop.last %} <span class="muted">·</span> {% endif %}{% endfor %}</p>
   </div>
   <dl class="meta" title="Subscription {{ sub.id }}">
     <div><dt>Match order</dt><dd title="Videos you pin to an episode always win, then the automatic strategies in this order">pins{% for st in sub.strategies %} → {{ st }}{% endfor %}</dd></div>
-    <div><dt>Auto-download</dt><dd title="What the scheduler queues by itself; set under Subscription settings">{% if sub.auto_download == "future" %}future episodes only{% elif sub.auto_download == "all" %}everything it matches{% else %}nothing{% endif %}</dd></div>
-    <div><dt>Last scan</dt><dd>{% if sub.last_scan_at %}<span title="{{ sub.last_scan_at.strftime('%Y-%m-%d %H:%M') }}Z">{{ sub.last_scan_at | ago }}</span>{% else %}never{% endif %}</dd></div>
+    <div><dt>Auto-download</dt><dd title="What the scheduler queues by itself; set under Subscription settings">{% if sub.auto_download == "future" %}episodes airing from {{ sub.created_at.strftime('%-d %b %Y') }}{% elif sub.auto_download == "all" %}everything it matches{% else %}nothing{% endif %}</dd></div>
+    <div><dt>Last scan</dt><dd>{% if sub.last_scan_at %}<span title="{{ sub.last_scan_at.strftime('%Y-%m-%d %H:%M') }}Z">{{ sub.last_scan_at | ago }}</span>{% else %}never{% endif %}{% if next_scan %} <span class="muted">· {{ next_scan }}</span>{% endif %}</dd></div>
   </dl>
 </div>
-{% if error %}<p class="notice bad">{{ error }}</p>{% endif %}
+{% if error %}<p class="notice bad">Settings not saved: <a href="#settings">see the form below</a>.</p>{% endif %}
+{% if request.query_params.get("saved") %}<p class="notice" role="status" aria-live="polite">Subscription saved.</p>{% endif %}
 
 <article class="card">
   <header>Match preview <span class="muted">· what the next scan would do</span></header>
@@ -23,22 +24,22 @@
 
 <article class="card">
   <header>Episodes in Sonarr</header>
-  <div id="episodes" hx-get="/subscriptions/{{ sub.id }}/episodes" hx-trigger="load" hx-swap="innerHTML">
+  <div id="episodes" hx-get="/subscriptions/{{ sub.id }}/episodes" hx-trigger="load, jobs-changed from:body" hx-swap="innerHTML">
     <p class="muted" aria-busy="true">Loading episodes…</p>
   </div>
 </article>
 
 <article class="card">
   <header>Recent jobs from this subscription</header>
-  {% if not jobs %}<p class="empty">No jobs yet. Download from the preview above, or leave it to the scheduler and the auto-download setting.</p>{% else %}
-  <div class="table-wrap"><table class="recent"><thead><tr><th>Job</th><th>Episode</th><th>Video</th><th>When</th></tr></thead><tbody>
-  {% for job in jobs %}<tr><td class="nowrap"><a href="/activity" class="job-ref">#{{ job.id }}</a> <span class="badge badge-{{ job.status.value }} status status-{{ job.status.value }}">{{ job.status.value }}</span></td><td>{% set label = job.target_label | replace(sub.title ~ " ", "", 1) %}{% if " - " in label %}<strong>{{ label.split(" - ", 1)[0] }}</strong> {{ label.split(" - ", 1)[1] }}{% else %}{{ label }}{% endif %}</td><td><span class="truncate" title="{{ job.video_title }}">{{ job.video_title }}</span></td><td class="muted when">{{ (job.finished_at or job.created_at) | ago }}</td></tr>{% endfor %}
-  </tbody></table></div>{% endif %}
+  <div id="recent-jobs" hx-get="/subscriptions/{{ sub.id }}/recent" hx-trigger="jobs-changed from:body" hx-swap="innerHTML">
+  {% include "partials/recent_jobs.html" %}
+  </div>
 </article>
 
-<details class="panel" {% if error %}open{% endif %}>
+<details class="panel" id="settings" {% if error %}open{% endif %}>
   <summary>Subscription settings <span class="muted">· sources, matching, listing depth · #{{ sub.id }}</span></summary>
   <article class="card">
+  {% if error %}<p class="notice bad">{{ error }}</p>{% endif %}
   <form method="post" action="/subscriptions/{{ sub.id }}/edit">
     {% include "partials/subscription_fields.html" %}
     <label><input type="checkbox" name="enabled" value="1" {% if sub.enabled %}checked{% endif %}> Enabled <span class="muted">(scanned on the schedule)</span></label>

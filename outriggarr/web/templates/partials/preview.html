@@ -7,11 +7,11 @@
   <span class="chip {{ 'warn' if report.unmatched else 'zero' }}">{{ report.unmatched | length }} unmatched</span>
   {% if report.held %}<span class="chip warn" title="Matched, but something contradicts it: the video's length against the episode's runtime, or the video is one part of a split upload">{{ report.held | length }} held</span>{% endif %}
   <span class="chip {{ '' if report.skipped_existing else 'zero' }}">{{ report.skipped_existing | length }} already have jobs</span>
-  {% if sub.auto_download == "future" and queueable %}<span class="chip" title="Auto-download is set to future episodes only (see the page header); the rest wait for you">{{ auto_count }} of {{ queueable }} would queue by itself</span>{% endif %}
+  {% if sub.auto_download == "future" and queueable %}<span class="chip" title="Only episodes airing from {{ sub.created_at.strftime('%-d %b %Y') }} queue by themselves (auto-download: future episodes only); the other {{ queueable - auto_count }} aired before that, so use Download all or Download selected">{{ auto_count }} of {{ queueable }} would queue by itself</span>{% endif %}
 </p>
 <div class="form-actions">
-  <button hx-post="/subscriptions/{{ sub.id }}/download" hx-vals='{"all": "1"}' hx-target="#preview" hx-indicator="#scan-busy" {% if not queueable %}disabled{% endif %} title="Queue every current match, whatever the auto-download setting">Download all{% if queueable %} {{ queueable }}{% endif %}</button>
-  <button id="download-selected" class="secondary" hx-post="/subscriptions/{{ sub.id }}/download" hx-include="#match-picks" hx-vals='{"selected": "1"}' hx-target="#preview" hx-indicator="#scan-busy" disabled title="Queue only the selected matches">Download selected <span class="count" id="selected-count" hidden>0</span></button>
+  {% if queueable %}<button hx-post="/subscriptions/{{ sub.id }}/download" hx-vals='{"all": "1"}' hx-target="#preview" hx-indicator="#scan-busy" title="Queue every current match, whatever the auto-download setting">Download all {{ queueable }}</button>
+  <button id="download-selected" class="secondary" hx-post="/subscriptions/{{ sub.id }}/download" hx-include="#match-picks" hx-vals='{"selected": "1"}' hx-target="#preview" hx-indicator="#scan-busy" disabled title="Tick episodes in the Matches table first">Download selected <span class="count" id="selected-count" hidden>0</span></button>{% else %}<span class="muted">Nothing to queue{% if report.matches %}: every match already has a job{% endif %}.</span>{% endif %}
   {% include "partials/date_fetch.html" %}
   <span id="scan-busy" class="htmx-indicator muted" aria-busy="true">working…</span>
   <button class="secondary outline push-right" hx-post="/subscriptions/{{ sub.id }}/scan" hx-target="#preview" hx-indicator="#scan-busy" title="List the sources again and re-match; nothing is queued">Refresh preview</button>
@@ -108,7 +108,7 @@
     <tr>
       <td><strong>{{ u.code }}</strong> {{ u.title }}<span class="two-line muted">{{ u.air_date or "" }}</span></td>
       <td>
-        {% if not (u.candidates.values() | map("length") | sum) %}<span class="muted">no candidate from {% for strategy in u.candidates %}{{ "pins" if strategy == "override" else strategy }}{% if not loop.last %}{{ " or " if loop.revindex == 2 else ", " }}{% endif %}{% endfor %}</span>
+        {% if not (u.candidates.values() | map("length") | sum) %}{% set names = [] %}{% for strategy in u.candidates if strategy != "override" or sub.overrides %}{% set _ = names.append("pins" if strategy == "override" else strategy) %}{% endfor %}<span class="muted">no candidate by {{ names[:-1] | join(", ") ~ (" or " if names | length > 1 else "") ~ names[-1] }}</span>
         {% else %}{% for strategy, cands in u.candidates.items() %}
           <span class="nowrap"><span class="chip">{{ "pins" if strategy == "override" else strategy }}</span>
           {% if not cands %}<span class="muted">no candidate</span>{% else %}<span class="warn">{{ cands | length }} candidates:</span>{% endif %}</span>
