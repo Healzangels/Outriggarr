@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from fastapi.testclient import TestClient
 
 from outriggarr.db.models import Job, JobStatus
@@ -484,7 +486,7 @@ def test_error_details_survive_polling_and_confirm_strings_are_data_attrs(
         job.error = "boom"
         s.commit()
     rows = client.get("/activity/rows?view=failed").text
-    assert f'id="err-{job_id}" hx-preserve' in rows
+    assert re.search(rf'id="err-{job_id}-\d+" hx-preserve', rows), "keyed by job and attempt"
     page = client.get("/settings").text
     assert 'onsubmit="return confirm(this.dataset.confirm)"' in page
     assert "return confirm('" not in page, "no user text inside an inline JS string"
@@ -516,7 +518,7 @@ def test_activity_delete_button_and_cap_note(client: TestClient) -> None:
     r = client.post(f"/activity/jobs/{job_id}/delete?view=all")
     assert r.status_code == 200 and f"Job {job_id} deleted" in r.text
     assert client.get("/api/jobs").json() == []
-    assert 'role="tab"' in client.get("/activity").text
+    assert 'aria-current="page"' in client.get("/activity").text
 
 
 def test_preview_hints_when_the_source_cannot_carry_the_episodes(client: TestClient) -> None:
@@ -1551,3 +1553,252 @@ def test_subscription_page_labels_its_facts_and_orders_the_preview(client: TestC
         '<a href="/activity" class="job-ref">#'
         in client.get(f"/subscriptions/{sub_id}/episodes").text
     )
+
+
+def test_notify_test_result_is_escaped(client: TestClient) -> None:
+    from outriggarr.settings import set_setting
+
+    with client.app.state.session_factory() as s:
+        set_setting(s, "apprise_urls", "discord://webhook_id/webhook_token")
+        s.commit()
+    client.app.state.runner_deps.notifier.error = RuntimeError("<img src=x onerror=alert(1)>")
+    r = client.post("/settings/notify/test")
+    assert r.status_code == 200 and "<img" not in r.text and "&lt;img" in r.text
+    client.app.state.runner_deps.notifier.error = None
+
+
+def test_subscribe_validation_error_keeps_what_was_typed(client: TestClient) -> None:
+    _seed_series(client)
+    r = client.post(
+        "/series/5/subscribe",
+        data={
+            "sources": "https://www.youtube.com/@typed",
+            "strategies": ["regex", "title"],
+            "date_tolerance_days": "3",
+            "date_offset_days": "0",
+            "title_regex": "#(?P<episode>\\d+)",
+            "title_require": "Typed Show",
+            "video_limit": "250",
+            "audio_language": "nope",  # the one bad field
+            "format": "",
+        },
+    )
+    assert r.status_code == 400 and "audio_language" in r.text
+    assert "Subscribe: Hot Ones" in r.text, "the header keeps the series title"
+    assert "https://www.youtube.com/@typed</textarea>" in r.text
+    assert 'value="regex" checked' in r.text and 'value="title" checked' in r.text
+    assert 'name="title_require" maxlength="100" value="Typed Show"' in r.text
+    assert 'name="video_limit" min="1" max="5000" value="250"' in r.text
+    assert 'name="date_tolerance_days" min="0" max="60" value="3"' in r.text
+
+
+def test_edit_validation_error_keeps_what_was_typed_and_opens_the_panel(client: TestClient) -> None:
+    from outriggarr.db.models import Job, TargetKind
+
+    _seed_series(client)
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={"connection_id": 1, "series_id": 5, "sources": ["https://www.youtube.com/@stored"]},
+    ).json()["id"]
+    with client.app.state.session_factory() as s:
+        s.add(
+            Job(
+                connection_id=1,
+                subscription_id=sub_id,
+                target_kind=TargetKind.episode,
+                series_id=5,
+                episode_ids=[11],
+                target_key="episode:5:11",
+                video_id="j",
+                video_url="https://y/j",
+                video_title="Recent",
+                target_label="Show S30E06 - Six",
+            )
+        )
+        s.commit()
+    r = client.post(
+        f"/subscriptions/{sub_id}/edit",
+        data={
+            "sources": "https://www.youtube.com/@typed",
+            "strategies": ["title"],
+            "date_tolerance_days": "x",  # the bad field: not a number
+            "date_offset_days": "0",
+            "title_regex": "",
+            "title_require": "",
+            "format": "",
+        },
+    )
+    assert r.status_code == 400 and "Date tolerance must be a whole number" in r.text
+    assert (
+        "@typed</textarea>" in r.text
+        and "@stored" not in r.text.split("<textarea")[1].split("</textarea>")[0]
+    )
+    assert '<details class="panel" open>' in r.text, "the form the user filled stays open"
+    assert "Recent" in r.text, "the recent jobs are still shown"
+
+
+def test_activity_action_notices_survive_the_poll(client: TestClient) -> None:
+    from outriggarr.db.models import Job, JobStatus, TargetKind
+
+    client.post("/api/connections", json=SONARR)
+    with client.app.state.session_factory() as s:
+        s.add(
+            Job(
+                connection_id=1,
+                target_kind=TargetKind.episode,
+                series_id=5,
+                episode_ids=[11],
+                target_key="episode:5:11",
+                video_id="q",
+                video_url="https://y/q",
+                video_title="x",
+                target_label="Show S30E06",
+                status=JobStatus.queued,
+            )
+        )
+        s.commit()
+    r = client.post("/activity/jobs/1/retry?view=all")  # queued: not retryable
+    assert 'id="jobs-notice" hx-swap-oob="true" class="notice bad"' in r.text
+    assert "jobs-notice" not in client.get("/activity/rows?view=all").text, (
+        "the poll does not carry (and so cannot erase) the notice"
+    )
+    assert '<div id="jobs-notice"></div>' in client.get("/activity").text
+    ok = client.post("/activity/jobs/1/cancel?view=all")
+    assert 'class="notice" role="status"' in ok.text and "Job 1 cancelled." in ok.text
+
+
+def test_preview_query_count_does_not_grow_with_the_listing(client: TestClient) -> None:
+    from sqlalchemy import event
+
+    from outriggarr.source import VideoRef
+
+    _seed_series(client)
+    source = client.app.state.source
+    source.recent = [
+        VideoRef(f"v{i}", f"Video {i}", f"https://y/v{i}", 100, i, None) for i in range(300)
+    ]
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={
+            "connection_id": 1,
+            "series_id": 5,
+            "sources": ["https://www.youtube.com/@x"],
+            "strategies": ["title", "date"],
+        },
+    ).json()["id"]
+    statements: list[str] = []
+
+    def spy(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    engine = client.app.state.engine
+    event.listen(engine, "before_cursor_execute", spy)
+    try:
+        client.get(f"/subscriptions/{sub_id}/preview")
+    finally:
+        event.remove(engine, "before_cursor_execute", spy)
+    selects = [s for s in statements if s.lstrip().upper().startswith("SELECT")]
+    assert len(selects) < 40, f"{len(selects)} SELECTs for 300 listed videos"
+
+
+def test_day_labels_follow_the_local_clock() -> None:
+    from datetime import UTC, datetime, timedelta, timezone
+
+    from outriggarr.web.pages import day_label
+
+    new_york = timezone(timedelta(hours=-4))
+    now = datetime(2026, 9, 3, 0, 30, tzinfo=UTC)  # 20:30 in New York
+    an_hour_ago = now - timedelta(hours=1)
+    assert day_label(an_hour_ago, now=now, tz=new_york) == "Today"
+    assert day_label(an_hour_ago, now=now, tz=UTC) == "Yesterday", "UTC would cut the day here"
+    assert day_label(now - timedelta(days=1), now=now, tz=new_york) == "Yesterday"
+
+
+def test_matches_show_all_survives_an_action(client: TestClient, monkeypatch) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from outriggarr.db.models import Job, TargetKind
+    from outriggarr.web import pages
+
+    monkeypatch.setattr(pages, "MATCHES_PAGE", 1)
+    _seed_series(client)
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={"connection_id": 1, "series_id": 5, "sources": ["https://www.youtube.com/@x"]},
+    ).json()["id"]
+    now = datetime.now(UTC)
+    with client.app.state.session_factory() as s:
+        for i in range(2):
+            s.add(
+                Job(
+                    connection_id=1,
+                    subscription_id=sub_id,
+                    target_kind=TargetKind.episode,
+                    series_id=5,
+                    episode_ids=[20 + i],
+                    target_key=f"episode:5:{20 + i}",
+                    video_id=f"m{i}",
+                    video_url=f"https://y/m{i}",
+                    video_title=f"Match {i}",
+                    target_label=f"Show S31E0{i}",
+                    matched_by="contains",
+                    created_at=now - timedelta(minutes=i),
+                )
+            )
+        s.commit()
+    with client.app.state.session_factory() as s:
+        job_id = s.query(Job).first().id
+    r = client.post(f"/matches/{job_id}/confirm?view=all&limit=all")
+    assert r.text.count('title="Match ') == 2 and "limit=all" in r.text and "Show all" not in r.text
+    r = client.post(f"/matches/{job_id}/unconfirm?view=all")
+    assert r.text.count('title="Match ') == 1 and "Show all 2" in r.text
+
+
+def test_error_details_are_keyed_by_attempt_and_tabs_are_links(client: TestClient) -> None:
+    from outriggarr.db.models import Job, JobStatus, TargetKind
+
+    client.post("/api/connections", json=SONARR)
+    with client.app.state.session_factory() as s:
+        s.add(
+            Job(
+                connection_id=1,
+                target_kind=TargetKind.episode,
+                series_id=5,
+                episode_ids=[11],
+                target_key="episode:5:11",
+                video_id="e",
+                video_url="https://y/e",
+                video_title="x",
+                target_label="Show S30E06",
+                status=JobStatus.failed,
+                attempts=2,
+                error="ERROR: second try",
+            )
+        )
+        s.commit()
+    page = client.get("/activity?view=failed").text
+    assert 'id="err-1-2" hx-preserve' in page, "a new attempt's text replaces the preserved node"
+    assert 'role="tab"' not in page and 'aria-current="page"' in page
+
+
+def test_listed_videos_panel_is_capped(client: TestClient) -> None:
+    from outriggarr.source import VideoRef
+    from outriggarr.web.pages import templates
+
+    _seed_series(client)
+    source = client.app.state.source
+    source.recent = [
+        VideoRef(f"v{i}", f"Video {i}", f"https://y/v{i}", 100, i, None) for i in range(7)
+    ]
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={"connection_id": 1, "series_id": 5, "sources": ["https://www.youtube.com/@x"]},
+    ).json()["id"]
+    templates.env.globals["LISTED_VIDEOS_SHOWN"] = 5
+    try:
+        prev = client.get(f"/subscriptions/{sub_id}/preview").text
+    finally:
+        templates.env.globals["LISTED_VIDEOS_SHOWN"] = 100
+    listed = prev.split("<summary>7 videos listed")[1]
+    assert listed.count("<li>") == 5 and "…and 2 more" in listed
+    assert prev.count('<option value="https://y/v') == 7, "the pin picker still offers every one"

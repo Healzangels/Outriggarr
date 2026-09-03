@@ -35,7 +35,7 @@
   </tbody></table></div>{% endif %}
 </article>
 
-<details class="panel">
+<details class="panel" {% if error %}open{% endif %}>
   <summary>Subscription settings <span class="muted">· sources, matching, listing depth · #{{ sub.id }}</span></summary>
   <article class="card">
   <form method="post" action="/subscriptions/{{ sub.id }}/edit">

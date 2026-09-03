@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import contextlib
+import html
 import shutil
-from datetime import UTC, datetime
+from datetime import UTC, datetime, tzinfo
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Annotated
 
 from fastapi import APIRouter, Form, HTTPException, Query, Request, status
@@ -69,7 +72,7 @@ from outriggarr.settings import (
     preset_for,
 )
 from outriggarr.source import cookies_state, pot_provider_ready
-from outriggarr.worker.scheduler import _date_known
+from outriggarr.worker.scheduler import known_date_ids
 
 router = APIRouter(include_in_schema=False)
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
@@ -86,24 +89,28 @@ def static_url(name: str) -> str:
     return f"/static/{name}?v={STATIC_TOKEN}"
 
 
+LISTED_VIDEOS_SHOWN = 100  # the preview's listed-videos panel; the pin picker keeps them all
 templates.env.globals.update(
     static=static_url,
     RETRYABLE=RETRYABLE,
     CANCELLABLE=CANCELLABLE,
     DELETABLE=DELETABLE,
     JobStatus=JobStatus,
+    LISTED_VIDEOS_SHOWN=LISTED_VIDEOS_SHOWN,
     app_version=__version__,
 )
 
 
-def day_label(dt: datetime | None) -> str:
+def day_label(dt: datetime | None, now: datetime | None = None, tz: tzinfo | None = None) -> str:
     """'Today' / 'Yesterday' / 'Mon 1 Sep' (with the year once it is not this one), for
-    grouping a long list by day so it reads as a diary, not a wall."""
+    grouping a long list by day so it reads as a diary, not a wall. Days are the
+    container's local days (TZ), not UTC's: an evening job west of Greenwich is today."""
     if dt is None:
         return ""
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=UTC)
-    today = datetime.now(UTC).date()
+    dt = dt.astimezone(tz)
+    today = (now or datetime.now(UTC)).astimezone(tz).date()
     day = dt.date()
     if day == today:
         return "Today"
@@ -198,7 +205,11 @@ def _jobs(session: DbSession, view: str) -> list[Job]:
 
 
 def _rows(
-    request: Request, session: DbSession, view: str, notice: str | None = None
+    request: Request,
+    session: DbSession,
+    view: str,
+    notice: str | None = None,
+    notice_bad: bool = False,
 ) -> HTMLResponse:
     jobs = _jobs(session, view)
     total = counts_for(session).get(view, len(jobs))
@@ -209,6 +220,7 @@ def _rows(
             "jobs": jobs,
             "view": view,
             "notice": notice,
+            "notice_bad": notice_bad,
             "total": total,
             "limit": ACTIVITY_LIMIT,
             "causes": _causes(session, jobs),
@@ -404,38 +416,58 @@ def matches_content(
 
 @router.post("/matches/recheck")
 async def matches_recheck(
-    request: Request, session: DbSession, view: Annotated[str | None, Query()] = None
+    request: Request,
+    session: DbSession,
+    view: Annotated[str | None, Query()] = None,
+    limit: Annotated[str | None, Query()] = None,
 ) -> HTMLResponse:
     start_recheck(request.app)
-    return _matches_partial(request, session, view, None)
+    return _matches_partial(request, session, view, None, show_all=limit == "all")
 
 
 @router.post("/matches/{job_id}/confirm")
 def matches_confirm(
-    request: Request, session: DbSession, job_id: int, view: Annotated[str | None, Query()] = None
+    request: Request,
+    session: DbSession,
+    job_id: int,
+    view: Annotated[str | None, Query()] = None,
+    limit: Annotated[str | None, Query()] = None,
 ) -> HTMLResponse:
     job = confirm_job(session, job_id, confirmed=True)
-    return _matches_partial(request, session, view, f"Confirmed: {job.target_label}.")
+    return _matches_partial(
+        request, session, view, f"Confirmed: {job.target_label}.", show_all=limit == "all"
+    )
 
 
 @router.post("/matches/{job_id}/unconfirm")
 def matches_unconfirm(
-    request: Request, session: DbSession, job_id: int, view: Annotated[str | None, Query()] = None
+    request: Request,
+    session: DbSession,
+    job_id: int,
+    view: Annotated[str | None, Query()] = None,
+    limit: Annotated[str | None, Query()] = None,
 ) -> HTMLResponse:
     job = confirm_job(session, job_id, confirmed=False)
-    return _matches_partial(request, session, view, f"Back on the list: {job.target_label}.")
+    return _matches_partial(
+        request, session, view, f"Back on the list: {job.target_label}.", show_all=limit == "all"
+    )
 
 
 @router.post("/matches/confirm-all")
 def matches_confirm_all(
-    request: Request, session: DbSession, view: Annotated[str | None, Query()] = None
+    request: Request,
+    session: DbSession,
+    view: Annotated[str | None, Query()] = None,
+    limit: Annotated[str | None, Query()] = None,
 ) -> HTMLResponse:
     listed = [e["job"] for e in _matches_context(session, "review")["entries"]]
     now = utcnow()
     for job in listed:
         job.reviewed_at = now
     session.commit()
-    return _matches_partial(request, session, view, f"Confirmed {len(listed)} pairings.")
+    return _matches_partial(
+        request, session, view, f"Confirmed {len(listed)} pairings.", show_all=limit == "all"
+    )
 
 
 @router.get("/activity/rows")
@@ -452,8 +484,8 @@ def activity_retry(
     try:
         retry_job(session, job_id)
     except HTTPException as exc:
-        return _rows(request, session, view, notice=str(exc.detail))
-    return _rows(request, session, view)
+        return _rows(request, session, view, notice=str(exc.detail), notice_bad=True)
+    return _rows(request, session, view, notice=f"Job {job_id} queued again.")
 
 
 @router.post("/activity/jobs/{job_id}/delete")
@@ -467,7 +499,7 @@ def activity_delete(
     try:
         delete_job(session, job_id, deps.staging_dir)
     except HTTPException as exc:
-        return _rows(request, session, view, notice=str(exc.detail))
+        return _rows(request, session, view, notice=str(exc.detail), notice_bad=True)
     return _rows(request, session, view, notice=f"Job {job_id} deleted.")
 
 
@@ -478,8 +510,8 @@ def activity_cancel(
     try:
         cancel_job(session, job_id)
     except HTTPException as exc:
-        return _rows(request, session, view, notice=str(exc.detail))
-    return _rows(request, session, view)
+        return _rows(request, session, view, notice=str(exc.detail), notice_bad=True)
+    return _rows(request, session, view, notice=f"Job {job_id} cancelled.")
 
 
 # ---- Series / subscriptions -------------------------------------------------------
@@ -582,14 +614,38 @@ async def subscribe_form(
     )
 
 
+def _whole_number(label: str, raw: str, default: int) -> int:
+    raw = (raw or "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        raise ValueError(f"{label} must be a whole number") from None
+
+
+def _submitted(base, **fields) -> SimpleNamespace:
+    """The form as the user filled it, laid over the stored subscription (or the
+    defaults), so a validation error re-renders what they typed, not what was saved."""
+    stored = {k: getattr(base, k) for k in dir(base) if not k.startswith("_")} if base else {}
+    stored.setdefault("created_at", datetime.now(UTC))
+    stored.setdefault("enabled", True)
+    stored.setdefault("last_scan_at", None)
+    stored.setdefault("last_scan_result", None)
+    stored.setdefault("id", None)
+    stored.setdefault("title", "")
+    stored.setdefault("overrides", [])
+    return SimpleNamespace(**{**stored, **fields})
+
+
 def _form_to_body(
     connection_id: int,
     series_id: int,
     sources: str,
     format: str,
     strategies: list[str],
-    date_tolerance_days: int,
-    date_offset_days: int,
+    date_tolerance_days: str,
+    date_offset_days: str,
     title_regex: str,
     enabled: bool,
     video_limit: str = "",
@@ -600,6 +656,8 @@ def _form_to_body(
     video_limit = video_limit.strip()
     if video_limit and not video_limit.isdigit():
         raise ValueError("Videos to list must be a whole number, or blank for the global setting")
+    date_tolerance_days = _whole_number("Date tolerance", date_tolerance_days, 2)
+    date_offset_days = _whole_number("Date offset", date_offset_days, 0)
     return SubscriptionIn(
         video_limit=int(video_limit) if video_limit else None,
         audio_language=audio_language,
@@ -626,8 +684,8 @@ async def subscribe_submit(
     sources: Annotated[str, Form()] = "",
     format: Annotated[str, Form()] = "",
     strategies: Annotated[list[str] | None, Form()] = None,
-    date_tolerance_days: Annotated[int, Form()] = 2,
-    date_offset_days: Annotated[int, Form()] = 0,
+    date_tolerance_days: Annotated[str, Form()] = "2",
+    date_offset_days: Annotated[str, Form()] = "0",
     title_regex: Annotated[str, Form()] = "",
     video_limit: Annotated[str, Form()] = "",
     audio_language: Annotated[str, Form()] = "",
@@ -654,21 +712,53 @@ async def subscribe_submit(
             title_require,
         )
         sub = await create_subscription(session, arr_factory, body)
-    except Exception as exc:  # validation / 409 / 502: show it on the form
+    except Exception as exc:  # validation / 409 / 502: show it on the form, as filled
         detail = getattr(exc, "detail", None) or str(exc)
+        typed = _submitted(
+            None,
+            sources=[x for x in sources.splitlines() if x.strip()],
+            format=format,
+            strategies=strategies or [],
+            date_tolerance_days=date_tolerance_days,
+            date_offset_days=date_offset_days,
+            title_regex=title_regex,
+            title_require=title_require,
+            video_limit=video_limit or None,
+            audio_language=audio_language,
+            auto_download=auto_download,
+        )
+        title = ""
+        with contextlib.suppress(ArrError):
+            hit = next(
+                (x for x in await _series_list(conn, arr_factory) if x.id == series_id), None
+            )
+            title = hit.title if hit else ""
+        ctx = _subscription_form_context(typed, session)
+        ctx["chosen"] = set(typed.strategies)
         return templates.TemplateResponse(
             request,
             "subscribe.html",
             {
                 "connection": conn,
                 "series_id": series_id,
-                "title": "",
+                "title": title,
                 "error": detail,
-                **_subscription_form_context(None, session),
+                **ctx,
             },
             status_code=400,
         )
     return RedirectResponse(f"/subscriptions/{sub.id}", status_code=303)
+
+
+def _recent_jobs(session: Session, subscription_id: int) -> list[Job]:
+    return list(
+        session.scalars(
+            select(Job)
+            .where(Job.subscription_id == subscription_id)
+            .order_by(Job.created_at.desc())
+            .limit(20)
+        )
+    )
 
 
 @router.get("/subscriptions/{subscription_id}")
@@ -676,14 +766,7 @@ def subscription_page(request: Request, subscription_id: int, session: DbSession
     sub = session.get(Subscription, subscription_id)
     if sub is None:
         return RedirectResponse("/series", status_code=302)
-    jobs = list(
-        session.scalars(
-            select(Job)
-            .where(Job.subscription_id == sub.id)
-            .order_by(Job.created_at.desc())
-            .limit(20)
-        )
-    )
+    jobs = _recent_jobs(session, subscription_id)
     return templates.TemplateResponse(
         request,
         "subscription.html",
@@ -699,17 +782,13 @@ def _date_fetch_context(request: Request, session: Session, sub: Subscription, r
     # The button counts exactly what a fetch would fetch: an undated video whose date the
     # source already said it does not have (remembered for a week) is not "undated" here,
     # or the button would come back after every fetch offering the same three videos.
-    undated = (
-        sum(
-            1
-            for v in report.videos
-            if not v.get("upload_date")
-            and v["title"] != v["id"]
-            and not _date_known(session, v["id"])
-        )
-        if report is not None
-        else None
-    )
+    undated = None
+    if report is not None and "date" in (sub.strategies or ()):
+        candidates = [
+            v["id"] for v in report.videos if not v.get("upload_date") and v["title"] != v["id"]
+        ]
+        known = known_date_ids(session, candidates)
+        undated = sum(1 for vid in candidates if vid not in known)
     return {
         "date_progress": p,
         "date_progress_text": p.summary() if show and p else "",
@@ -717,7 +796,13 @@ def _date_fetch_context(request: Request, session: Session, sub: Subscription, r
     }
 
 
-def _preview_response(request: Request, session: DbSession, report, notice: str | None = None):
+def _preview_response(
+    request: Request,
+    session: DbSession,
+    report,
+    notice: str | None = None,
+    notice_bad: bool = False,
+):
     sub = session.get(Subscription, report.subscription_id)
     # "this source may not carry the series" is only a fair reading for a subscription
     # that has never matched anything: one job on record is enough to drop the hint
@@ -731,6 +816,7 @@ def _preview_response(request: Request, session: DbSession, report, notice: str 
             "sub": sub,
             "report": report,
             "notice": notice,
+            "notice_bad": notice_bad,
             "has_history": has_history,
             **_date_fetch_context(request, session, sub, report),
         },
@@ -806,6 +892,7 @@ async def subscription_clear_job(
         notice = f"Cleared job #{job_id}."
     except HTTPException as exc:
         notice = f"Job #{job_id} not cleared: {exc.detail}"
+        return await _episodes_response(request, sub, session, arr_factory, notice, notice_bad=True)
     return await _episodes_response(request, sub, session, arr_factory, notice)
 
 
@@ -815,6 +902,7 @@ async def _episodes_response(
     session: Session,
     arr_factory,
     notice: str | None = None,
+    notice_bad: bool = False,
 ) -> HTMLResponse:
     error = None
     try:
@@ -858,7 +946,13 @@ async def _episodes_response(
     return templates.TemplateResponse(
         request,
         "partials/episodes.html",
-        {"sub": sub, "seasons": ordered, "error": error, "notice": notice},
+        {
+            "sub": sub,
+            "seasons": ordered,
+            "error": error,
+            "notice": notice,
+            "notice_bad": notice_bad,
+        },
     )
 
 
@@ -915,6 +1009,7 @@ async def subscription_add_override(
     video_url: Annotated[str, Form()] = "",
 ) -> HTMLResponse:
     video_url, video_id = video_url.strip(), video_id.strip()
+    failed = False
     try:
         if video_url:
             row = await set_override_by_url(
@@ -933,8 +1028,9 @@ async def subscription_add_override(
             notice = "Pick a video or paste a URL."
     except Exception as exc:
         notice = "Override not set: " + str(getattr(exc, "detail", None) or exc)
+        failed = True
     report = await run_scan(deps, subscription_id, dry_run=True)
-    return _preview_response(request, session, report, notice)
+    return _preview_response(request, session, report, notice, notice_bad=failed)
 
 
 @router.post("/subscriptions/{subscription_id}/overrides/{video_id}/delete")
@@ -959,8 +1055,8 @@ async def subscription_edit(
     sources: Annotated[str, Form()] = "",
     format: Annotated[str, Form()] = "",
     strategies: Annotated[list[str] | None, Form()] = None,
-    date_tolerance_days: Annotated[int, Form()] = 2,
-    date_offset_days: Annotated[int, Form()] = 0,
+    date_tolerance_days: Annotated[str, Form()] = "2",
+    date_offset_days: Annotated[str, Form()] = "0",
     title_regex: Annotated[str, Form()] = "",
     enabled: Annotated[str | None, Form()] = None,
     video_limit: Annotated[str, Form()] = "",
@@ -990,10 +1086,26 @@ async def subscription_edit(
         await update_subscription(session, arr_factory, subscription_id, body)
     except Exception as exc:
         detail = getattr(exc, "detail", None) or str(exc)
+        typed = _submitted(
+            sub,
+            sources=[x for x in sources.splitlines() if x.strip()],
+            format=format,
+            strategies=strategies or [],
+            date_tolerance_days=date_tolerance_days,
+            date_offset_days=date_offset_days,
+            title_regex=title_regex,
+            title_require=title_require,
+            video_limit=video_limit or None,
+            audio_language=audio_language,
+            auto_download=auto_download,
+            enabled=enabled is not None,
+        )
+        ctx = _subscription_form_context(typed, session)
+        ctx["chosen"] = set(typed.strategies)
         return templates.TemplateResponse(
             request,
             "subscription.html",
-            {"jobs": [], "error": detail, **_subscription_form_context(sub, session)},
+            {"jobs": _recent_jobs(session, subscription_id), "error": detail, **ctx},
             status_code=400,
         )
     return RedirectResponse(f"/subscriptions/{subscription_id}", status_code=303)
@@ -1082,7 +1194,8 @@ async def settings_notify_test(request: Request, session: DbSession, deps: Runne
         )
     except Exception as exc:
         text = "✗ " + str(getattr(exc, "detail", None) or exc)
-    return HTMLResponse(f'<span class="{"ok" if text.startswith("✓") else "warn"}">{text}</span>')
+    css = "ok" if text.startswith("✓") else "warn"
+    return HTMLResponse(f'<span class="{css}">{html.escape(text)}</span>')
 
 
 @router.post("/settings/connections")

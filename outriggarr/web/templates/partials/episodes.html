@@ -1,4 +1,4 @@
-{% if notice %}<p class="notice" role="status" aria-live="polite">{{ notice }}</p>{% endif %}
+{% if notice %}<p class="notice{{ ' bad' if notice_bad else '' }}" role="{{ 'alert' if notice_bad else 'status' }}" aria-live="polite">{{ notice }}</p>{% endif %}
 {% if error %}<p class="notice bad">{{ error }}</p>
 {% elif not seasons %}<p class="muted">Sonarr lists no episodes for this series.</p>
 {% else %}

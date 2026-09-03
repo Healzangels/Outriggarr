@@ -1,10 +1,10 @@
 {% set qs = "view=" ~ view ~ ("&limit=all" if show_all else "") %}
 <div id="matches-content"{% if progress.running %} hx-get="/matches/content?{{ qs }}" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
-<div class="tabs" role="tablist" aria-label="views">
+<nav class="tabs" aria-label="views">
   {% for f in ("review", "all") %}
-    <a href="/matches?view={{ f }}" role="tab" aria-selected="{{ 'true' if f == view else 'false' }}" {% if f == view %}aria-current="page"{% endif %}>{{ "needs a look" if f == "review" else f }}<span class="count">{{ counts[f] }}</span></a>
+    <a href="/matches?view={{ f }}" {% if f == view %}aria-current="page"{% endif %}>{{ "needs a look" if f == "review" else f }}<span class="count">{{ counts[f] }}</span></a>
   {% endfor %}
-</div>
+</nav>
 <div class="form-actions">
   <button class="secondary" hx-post="/matches/recheck?{{ qs }}" hx-target="#matches-content" hx-swap="outerHTML" {% if progress.running or not unchecked %}disabled{% endif %} title="{% if unchecked %}Fetch each unchecked video's length and Sonarr's runtime for the episode; a pairing whose length agrees leaves the list by itself. Runs in the background; you can leave the page.{% else %}Every pairing already has its length evidence{% endif %}">Recheck lengths{% if unchecked %} <span class="count">{{ unchecked }} unchecked</span>{% endif %}</button>
   {% if view == "review" and entries %}<button class="secondary outline" hx-post="/matches/confirm-all?{{ qs }}" hx-target="#matches-content" hx-swap="outerHTML" hx-confirm="Mark all {{ entries | length }} listed pairings as looked at and right?">Looks right, all {{ entries | length }}</button>{% endif %}

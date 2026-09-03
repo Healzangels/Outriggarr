@@ -9,7 +9,7 @@
 {% else %}
 <article class="card">
   <header>Find a series <span class="muted">· searches {{ connection.name }}</span></header>
-  <input type="search" name="q" placeholder="Search Sonarr series…" autocomplete="off"
+  <input type="search" name="q" placeholder="Search Sonarr series…" aria-label="Search Sonarr series" autocomplete="off"
          hx-get="/series/rows" hx-trigger="input changed delay:300ms, search" hx-target="#series-rows">
   <div id="series-rows" hx-get="/series/rows" hx-trigger="load" hx-swap="innerHTML"></div>
 </article>

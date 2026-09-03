@@ -34,7 +34,7 @@
   <form id="delete-connection-{{ c.id }}" method="post" action="/settings/connections/{{ c.id }}/delete" data-confirm="Delete connection {{ c.name }}?" onsubmit="return confirm(this.dataset.confirm)"></form>
 </article>
 {% endfor %}
-<details class="panel" {% if not connections %}open{% endif %}>
+<details class="panel" {% if not connections or conn_error %}open{% endif %}>
   <summary>Add a connection <span class="muted">· Sonarr or Radarr</span></summary>
   <article class="card">
   <form method="post" action="/settings/connections">

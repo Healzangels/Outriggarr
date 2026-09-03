@@ -16,7 +16,7 @@
   {% include "partials/date_fetch.html" %}
   <span id="scan-busy" class="htmx-indicator muted" aria-busy="true">working…</span>
 </div>
-{% if notice %}<p class="notice" role="status" aria-live="polite">{{ notice }}</p>{% endif %}
+{% if notice %}<p class="notice{{ ' bad' if notice_bad else '' }}" role="{{ 'alert' if notice_bad else 'status' }}" aria-live="polite">{{ notice }}</p>{% endif %}
 {% if report.error %}<p class="notice bad">Scan failed: {{ report.error }}</p>{% endif %}
 {# "this source may not carry the series" is only a fair reading when the subscription has never matched anything; a fully imported series with a few absent episodes looks the same to the matcher #}
 {% set nothing_seen = report.unmatched and not report.matches and not report.skipped_existing and not has_history and (report.unmatched | map(attribute="candidates") | map("dictsort") | map("map", attribute="1") | map("sum", start=[]) | map("length") | sum == 0) %}
@@ -111,7 +111,7 @@
         <form hx-post="/subscriptions/{{ sub.id }}/overrides" hx-target="#preview">
           <input type="hidden" name="season" value="{{ u.season }}"><input type="hidden" name="episode" value="{{ u.number }}">
           <fieldset role="group" class="pin">
-            <input type="url" name="video_url" list="listed-videos" placeholder="pick a listed video or paste a URL" title="Type part of a title to filter the listed videos, or paste any video URL (it need not be in the listing)">
+            <input type="url" name="video_url" list="listed-videos" placeholder="pick a listed video or paste a URL" aria-label="video to pin to {{ u.code }}" title="Type part of a title to filter the listed videos, or paste any video URL (it need not be in the listing)">
             <button type="submit">Set</button>
           </fieldset>
         </form>
@@ -140,5 +140,7 @@
 {% endif %}
 
 <details class="plain"><summary>{% set n = report.videos | length %}{{ n }} video{{ '' if n == 1 else 's' }} listed from the source{% if report.sources > 1 %}s{% endif %}</summary>
-<ol>{% for v in report.videos %}<li>{% if v.title == v.id %}<span class="muted">unavailable video</span>{% else %}<a href="{{ v.url }}" target="_blank" rel="noopener">{{ v.title }}</a>{% endif %} <span class="muted mono">{{ v.id }}{% if v.upload_date %} · {{ v.upload_date }}{% elif v.approx_age %} · <span title="What the listing page says; the exact date needs a per-video fetch (Fetch upload dates)">~{{ v.approx_age }}</span>{% endif %}</span></li>{% endfor %}</ol>
+{% set shown_videos = report.videos[:LISTED_VIDEOS_SHOWN] %}
+<ol>{% for v in shown_videos %}<li>{% if v.title == v.id %}<span class="muted">unavailable video</span>{% else %}<a href="{{ v.url }}" target="_blank" rel="noopener">{{ v.title }}</a>{% endif %} <span class="muted mono">{{ v.id }}{% if v.upload_date %} · {{ v.upload_date }}{% elif v.approx_age %} · <span title="What the listing page says; the exact date needs a per-video fetch (Fetch upload dates)">~{{ v.approx_age }}</span>{% endif %}</span></li>{% endfor %}</ol>
+{% if report.videos | length > shown_videos | length %}<p class="muted">…and {{ report.videos | length - shown_videos | length }} more; the pin picker above still offers every one.</p>{% endif %}
 </details>

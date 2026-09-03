@@ -1,4 +1,4 @@
-{% if notice %}<p class="notice warn" role="status" aria-live="polite">{{ notice }}</p>{% endif %}
+{% if notice %}<p id="jobs-notice" hx-swap-oob="true" class="notice{{ ' bad' if notice_bad else '' }}" role="{{ 'alert' if notice_bad else 'status' }}" aria-live="polite">{{ notice }}</p>{% endif %}
 {% if total is defined and total > jobs | length %}<p class="muted">Showing the newest {{ jobs | length }} of {{ total }}.</p>{% endif %}
 {% if not jobs %}
 <p class="empty">No jobs{% if view != "all" %} in "{{ view }}"{% endif %}. Queue one from <a href="/grab">Grab</a> or subscribe to a series under <a href="/series">Series</a>.</p>
@@ -28,7 +28,7 @@
         {% if not job.subscription_id %} <span class="chip" title="Queued from Grab, not by a subscription">grab</span>{% endif %}
       </td>
       <td><a href="{{ job.video_url }}" target="_blank" rel="noopener" class="truncate" title="{{ job.video_title or job.video_id }}">{{ job.video_title or job.video_id }}</a>
-        {% if job.error %}<details class="error" id="err-{{ job.id }}" hx-preserve><summary class="{{ 'warn' if job.status.value == 'done' else 'bad' }}">{{ job.error.splitlines()[0] | truncate(60) }}</summary><pre>{{ job.error }}</pre></details>{% if causes is defined and causes.get(job.id) %}<span class="cause">{{ causes[job.id] }}</span>{% endif %}{% endif %}
+        {% if job.error %}<details class="error" id="err-{{ job.id }}-{{ job.attempts }}" hx-preserve><summary class="{{ 'warn' if job.status.value == 'done' else 'bad' }}">{{ job.error.splitlines()[0] | truncate(60) }}</summary><pre>{{ job.error }}</pre></details>{% if causes is defined and causes.get(job.id) %}<span class="cause">{{ causes[job.id] }}</span>{% endif %}{% endif %}
       </td>
       <td class="muted when" title="created {{ job.created_at.strftime('%Y-%m-%d %H:%M') }}Z{% if job.finished_at %} · finished {{ job.finished_at.strftime('%Y-%m-%d %H:%M') }}Z{% endif %}">{{ when | ago }}</td>
       <td class="actions">

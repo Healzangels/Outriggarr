@@ -317,7 +317,8 @@ async def _scan(
     need = videos_needing_dates(result, videos, cfg, overrides)
     if need and not any(x.episode.air_date for x in (*result.unmatched, *result.held)):
         need = []  # nothing to compare a date against
-    need = [v for v in need if not _date_known(session, v.id)][:DATE_FETCH_LIMIT]
+    known = known_date_ids(session, [v.id for v in need], now)
+    need = [v for v in need if v.id not in known][:DATE_FETCH_LIMIT]
     if need:
         by_id = {v.id: v for v in videos}
         learned: dict[str, str | None] = {}
@@ -387,6 +388,16 @@ def _apply_cached_dates(session: Session, videos: list[Video]) -> None:
                     duration=v.duration,
                     upload_date=datetime.strptime(m.upload_date, "%Y%m%d").date(),
                 )
+
+
+def known_date_ids(session: Session, video_ids: list[str], now: datetime | None = None) -> set[str]:
+    """The subset of `video_ids` whose date is known (cached, or asked recently enough
+    that a fetch would skip it) — one query, for pages that count hundreds at a time."""
+    if not video_ids:
+        return set()
+    at = now or datetime.now(UTC)
+    rows = session.scalars(select(VideoMeta).where(VideoMeta.video_id.in_(video_ids)))
+    return {m.video_id for m in rows if m.upload_date or at - m.fetched_at < DATE_RETRY_AFTER}
 
 
 def _date_known(session: Session, video_id: str, now: datetime | None = None) -> bool:

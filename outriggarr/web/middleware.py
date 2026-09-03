@@ -29,8 +29,12 @@ def cross_site(request: Request) -> str | None:
     host = request.headers.get("host", "")
     for header in ("origin", "referer"):
         value = request.headers.get(header)
-        if not value or value == "null":
+        if not value:
             continue
+        if value == "null":
+            # a sandboxed iframe, a data:/file: page or a no-referrer form: never a
+            # same-origin page of ours, and non-browser clients send no Origin at all
+            return f"{header.title()} null"
         other = urlsplit(value).netloc
         if other and other.lower() != host.lower():
             return f"{header.title()} {other} does not match Host {host}"

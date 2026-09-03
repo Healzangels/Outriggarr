@@ -53,3 +53,48 @@ def test_same_origin_and_non_browser_requests_pass(client: TestClient) -> None:
     assert client.get("/activity", headers={"Sec-Fetch-Site": "cross-site"}).status_code == 200, (
         "GETs are never blocked"
     )
+
+
+SONARR_BODY = {
+    "kind": "sonarr",
+    "name": "Sonarr",
+    "url": "http://sonarr-host:1234",
+    "api_key": "k1",
+    "staging_path_remote": "/data/outriggarr",
+}
+
+
+def test_origin_null_is_cross_site(client) -> None:
+    # a sandboxed iframe / data: page / no-referrer form: never one of our pages, and a
+    # non-browser client sends no Origin at all
+    from outriggarr.db.models import Connection
+
+    r = client.post("/api/connections", json=SONARR_BODY)
+    conn_id = r.json()["id"]
+    attack = client.post(
+        f"/settings/connections/{conn_id}",
+        data={
+            "kind": "sonarr",
+            "name": "Sonarr",
+            "url": "http://attacker:9",
+            "api_key": "",
+            "staging_path_remote": "/data/outriggarr",
+        },
+        headers={"Origin": "null"},
+    )
+    assert attack.status_code == 403, attack.text
+    with client.app.state.session_factory() as s:
+        assert s.get(Connection, conn_id).url == SONARR_BODY["url"], "not re-pointed"
+    same = client.post(
+        f"/settings/connections/{conn_id}",
+        data={
+            "kind": "sonarr",
+            "name": "Sonarr",
+            "url": SONARR_BODY["url"],
+            "api_key": "",
+            "staging_path_remote": "/data/outriggarr",
+        },
+        headers={"Origin": "http://testserver", "Sec-Fetch-Site": "same-origin"},
+        follow_redirects=False,
+    )
+    assert same.status_code in (200, 303), "an HTMX-style same-origin post passes"
