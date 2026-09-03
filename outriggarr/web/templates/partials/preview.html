@@ -12,7 +12,7 @@
 <div class="form-actions">
   <button class="secondary" hx-post="/subscriptions/{{ sub.id }}/scan" hx-target="#preview" hx-indicator="#scan-busy" title="List the sources again and re-match; nothing is queued">Refresh preview</button>
   <button hx-post="/subscriptions/{{ sub.id }}/download" hx-vals='{"all": "1"}' hx-target="#preview" hx-indicator="#scan-busy" {% if not queueable %}disabled{% endif %} title="Queue every current match, whatever the auto-download setting">Download all{% if queueable %} {{ queueable }}{% endif %}</button>
-  <button id="download-selected" class="secondary" hx-post="/subscriptions/{{ sub.id }}/download" hx-include="#match-picks" hx-vals='{"selected": "1"}' hx-target="#preview" hx-indicator="#scan-busy" disabled title="Queue only the selected matches">Download selected <span class="count" id="selected-count">0</span></button>
+  <button id="download-selected" class="secondary" hx-post="/subscriptions/{{ sub.id }}/download" hx-include="#match-picks" hx-vals='{"selected": "1"}' hx-target="#preview" hx-indicator="#scan-busy" disabled title="Queue only the selected matches">Download selected <span class="count" id="selected-count" hidden>0</span></button>
   {% include "partials/date_fetch.html" %}
   <span id="scan-busy" class="htmx-indicator muted" aria-busy="true">working…</span>
 </div>
@@ -44,6 +44,7 @@
 </div>
 <script>
   // "Download selected N" follows the ticks; HTMX re-runs this after every preview swap.
+  // The count starts hidden (a "0" on a disabled button says nothing) and shows with the first tick.
   (function () {
     const picks = document.getElementById('match-picks');
     const count = document.getElementById('selected-count');

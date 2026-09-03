@@ -139,6 +139,7 @@ label .hint { display: block; color: var(--o-muted); font-size: .82em; font-weig
 .grid > label > .hint { margin-bottom: .35rem; }
 .form-actions { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; margin-top: .5rem; }
 .form-actions button { width: auto; margin: 0; }
+[role=group] > button { white-space: nowrap; }  /* a two-word button beside a wide input stays on one line */
 .form-actions .danger { margin-left: auto; }
 .form-actions form { margin: 0; }
 /* the date-fetch partial is swapped as one unit but lays out as two: its button joins

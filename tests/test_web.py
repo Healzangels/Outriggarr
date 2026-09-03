@@ -1022,7 +1022,9 @@ def test_subscribe_form_defaults_to_future_and_preview_downloads_selected(
         "auto-download: future only · 0 of 1 would queue" in prev and "select to download" in prev
     )
     assert 'name="episode_id" value="11"' in prev and "Download selected" in prev
-    assert 'id="selected-count">0</span>' in prev and 'id="tick-all"' in prev, "a live count"
+    assert 'id="selected-count" hidden>0</span>' in prev and 'id="tick-all"' in prev, (
+        "a live count, hidden while nothing is ticked"
+    )
     untouched = 'name="episode_id" value="11" aria-label="download S30E06">'
     assert untouched in prev, "unselected by default"
     assert "picks.addEventListener('change', update)" in prev
