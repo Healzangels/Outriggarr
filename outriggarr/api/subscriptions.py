@@ -107,6 +107,13 @@ class SubscriptionIn(BaseModel):
         v = (v or "").strip()
         return v or None
 
+    @field_validator("title_require")
+    @classmethod
+    def _require(cls, v: str | None) -> str | None:
+        if v is not None and not any(c.isalnum() for c in v):
+            raise ValueError("title_require needs at least one letter or digit")
+        return v
+
     @field_validator("title_regex")
     @classmethod
     def _regex(cls, v: str | None) -> str | None:

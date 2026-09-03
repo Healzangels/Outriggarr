@@ -265,6 +265,7 @@ async def _scan(
     title = await client.series_title(sub.series_id)
     if title and title != sub.title:
         sub.title = title
+        session.commit()  # a pending UPDATE would hold SQLite's write lock across the listing
     all_episodes = await client.episodes(sub.series_id)
     pinned = {(o.season, o.episode) for o in sub.overrides}
     wanted = [
@@ -313,7 +314,7 @@ async def _scan(
             listed.add(o.video_id)
 
     result = match(todo, videos, overrides, cfg)
-    need = videos_needing_dates(result, videos, cfg)
+    need = videos_needing_dates(result, videos, cfg, overrides)
     if need and not any(x.episode.air_date for x in (*result.unmatched, *result.held)):
         need = []  # nothing to compare a date against
     need = [v for v in need if not _date_known(session, v.id)][:DATE_FETCH_LIMIT]
@@ -383,17 +384,18 @@ def _apply_cached_dates(session: Session, videos: list[Video]) -> None:
                     id=v.id,
                     title=v.title,
                     url=v.url,
+                    duration=v.duration,
                     upload_date=datetime.strptime(m.upload_date, "%Y%m%d").date(),
                 )
 
 
-def _date_known(session: Session, video_id: str) -> bool:
+def _date_known(session: Session, video_id: str, now: datetime | None = None) -> bool:
     m = session.get(VideoMeta, video_id)
     if m is None:
         return False
     if m.upload_date:
         return True
-    return datetime.now(UTC) - m.fetched_at < DATE_RETRY_AFTER
+    return (now or datetime.now(UTC)) - m.fetched_at < DATE_RETRY_AFTER
 
 
 def _remember_date(session: Session, video_id: str, upload_date: str | None) -> None:
@@ -420,7 +422,11 @@ def _fill_report(report: ScanReport, result: MatchResult, videos: list[Video]) -
                 "job_id": None,
             }
         )
+    shown: set[int] = set()
     for h in result.held:
+        if h.episode.id in shown:
+            continue  # two strategies can hold one episode; the first hold is the one shown
+        shown.add(h.episode.id)
         report.held.append(
             {
                 **_episode_dict(h.episode),
@@ -529,8 +535,8 @@ async def run_scheduler(deps: RunnerDeps, stop: asyncio.Event) -> None:
                 log.exception("scheduler: listing due subscriptions failed")
                 ids = []
         for sub_id in ids:
-            if stop.is_set():
-                break
+            if stop.is_set() or deps.cooloff.active():
+                break  # rate-limited mid-batch: the rest would fail the same way
             try:
                 report = await scan_subscription(deps, sub_id)
                 log.info("subscription %d scanned: %s", sub_id, report.summary())

@@ -8,11 +8,16 @@ import pytest
 
 from outriggarr.arr.base import ArrError, EpisodeRef
 from outriggarr.db.models import Connection, ConnectionKind, Job, JobStatus, Override, Subscription
+from outriggarr.matcher import Episode, MatchConfig, Video, match
 from outriggarr.settings import set_setting
 from outriggarr.source import SourceError, VideoRef
 from outriggarr.worker.runner import RunnerDeps
 from outriggarr.worker.scheduler import (
+    ScanReport,
     SubscriptionNotFound,
+    _apply_cached_dates,
+    _fill_report,
+    _remember_date,
     due_subscription_ids,
     run_scheduler,
     scan_subscription,
@@ -733,3 +738,100 @@ async def test_rate_limited_listing_pauses_the_scans(deps, session_factory) -> N
     with session_factory() as s:
         result = s.get(Subscription, sub_id).last_scan_result
     assert result is not None and result.get("error") is None and result["created"] == 2
+
+
+def test_report_shows_one_held_row_per_episode() -> None:
+    from datetime import date
+
+    ep = Episode(1, 1, 1, "Alpha Beta", date(2026, 1, 8), runtime_minutes=60)
+    videos = [
+        Video("a", "Alpha Beta (Part 1)", "https://x/a"),
+        Video("b", "Unrelated", "https://x/b", date(2026, 1, 8), duration=120),
+    ]
+    result = match([ep], videos, [], MatchConfig(("title", "date"), date_tolerance_days=0))
+    assert len(result.held) == 2, "the matcher keeps both holds for accounting"
+    report = ScanReport(subscription_id=1, scanned_at=NOW, dry_run=True)
+    _fill_report(report, result, videos)
+    assert [(h["video_id"], h["strategy"]) for h in report.held] == [("a", "title")], (
+        "the preview shows the hold that took the video, once"
+    )
+
+
+def test_cached_dates_keep_the_duration_so_the_length_check_still_holds(session_factory) -> None:
+    from datetime import date
+
+    with session_factory() as s:
+        _remember_date(s, "clip", "20260108")
+        s.commit()
+        videos = [Video("clip", "Unrelated clip", "https://x/clip", None, duration=100)]
+        _apply_cached_dates(s, videos)
+    assert videos[0].upload_date == date(2026, 1, 8) and videos[0].duration == 100
+    ep = Episode(1, 1, 1, "Some Episode", date(2026, 1, 8), runtime_minutes=30)
+    r = match([ep], videos, [], MatchConfig(("date",), date_tolerance_days=0))
+    assert r.matches == () and [h.video.id for h in r.held] == ["clip"], (
+        "a 100 s clip against a 30 min episode is held whether its date came from the "
+        "listing or from the cache"
+    )
+
+
+async def test_a_series_rename_does_not_hold_the_write_lock_across_the_listing(
+    deps, session_factory
+) -> None:
+    from sqlalchemy import text
+
+    sub_id, conn_id = make_sub(session_factory)
+    client = fake_client(deps, conn_id)
+    client.series_titles[5] = "Show (Renamed)"
+    blocked: list[str] = []
+    real = deps.source.list_recent
+
+    def spy(url, limit):
+        # an independent writer during the listing must not hit the write lock
+        try:
+            with session_factory() as s:
+                s.execute(text("UPDATE setting SET value=value WHERE key='x'"))
+                s.commit()
+        except Exception as exc:  # OperationalError: database is locked
+            blocked.append(repr(exc))
+        return real(url, limit)
+
+    deps.source.list_recent = spy
+    report = await scan_subscription(deps, sub_id)
+    assert report.error is None and blocked == [], blocked
+    with session_factory() as s:
+        assert s.get(Subscription, sub_id).title == "Show (Renamed)"
+
+
+async def test_scheduler_stops_its_batch_when_the_source_rate_limits(deps, session_factory) -> None:
+    ids = [make_sub(session_factory)[0]]
+    with session_factory() as s:
+        conn_id = s.get(Subscription, ids[0]).connection_id
+        for series_id in (6, 7):
+            sub = Subscription(
+                connection_id=conn_id,
+                series_id=series_id,
+                tvdb_id=series_id,
+                title=f"Show {series_id}",
+                sources=[f"https://www.youtube.com/@show{series_id}"],
+                strategies=["title"],
+                auto_download="all",
+            )
+            s.add(sub)
+            s.commit()
+            ids.append(sub.id)
+    fake_client(deps, conn_id)
+    t = [0.0]
+    deps.cooloff.clock = lambda: t[0]
+    deps.source.recent_error = SourceError(
+        "ERROR: [youtube] tab: This content isn't available, try again later. "
+        "The current session has been rate-limited by YouTube for up to an hour."
+    )
+    stop = asyncio.Event()
+    task = asyncio.create_task(run_scheduler(deps, stop))
+    await asyncio.sleep(0.15)
+    stop.set()
+    await asyncio.wait_for(task, 2)
+    assert len(deps.source.listed) == 1, "one listing hit the wall; the rest waited"
+    with session_factory() as s:
+        stamped = [s.get(Subscription, i).last_scan_at is not None for i in ids]
+    assert stamped.count(True) == 1, "only the subscription that hit the wall carries the error"

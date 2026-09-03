@@ -331,3 +331,11 @@ def test_title_require_round_trip_and_validation(client, arr, source) -> None:
     assert r.status_code == 200 and r.json()["title_require"] is None
     r = client.post("/api/subscriptions", json={**body(conn_id), "series_id": 6})
     assert r.status_code == 201 and r.json()["title_require"] is None, "off by default"
+
+
+def test_title_require_must_carry_a_letter_or_digit(client, arr, source) -> None:
+    conn_id = seed(client, arr, source)
+    r = client.post("/api/subscriptions", json=body(conn_id, title_require="!!!"))
+    assert r.status_code == 422 and "letter or digit" in r.text
+    r = client.post("/api/subscriptions", json=body(conn_id, title_require=" - Scam School - "))
+    assert r.status_code == 201 and r.json()["title_require"] == "- Scam School -"

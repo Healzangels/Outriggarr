@@ -82,3 +82,40 @@ def test_stem_is_capped_by_utf8_bytes_for_linux_name_max() -> None:
     assert "�" not in name, "never split a character"
     movie = movie_filename("🍿" * 300, 2020, "WEBDL-1080p", "mkv")
     assert len(movie.encode("utf-8")) <= 240
+
+
+def test_episode_code_survives_a_long_series_title() -> None:
+    from outriggarr.naming import MAX_STEM, MAX_STEM_BYTES, episode_filename
+
+    name = episode_filename("S" * 300, 1, [1], "Title", "WEBDL-1080p", "mkv")
+    stem = name.rsplit(" [", 1)[0]
+    assert "S01E01" in name and len(stem) <= MAX_STEM and len(stem.encode()) <= MAX_STEM_BYTES
+    assert stem.endswith("S01E01") or " - S01E01 - " in stem
+    cjk = episode_filename("剧" * 300, 2, [3, 4], "标题" * 100, "WEBDL-720p", "mp4")
+    assert "S02E03-E04" in cjk and len(cjk.rsplit(" [", 1)[0].encode()) <= MAX_STEM_BYTES
+
+
+def test_year_survives_a_long_movie_title_and_an_empty_title_gets_a_name() -> None:
+    from outriggarr.naming import movie_filename
+
+    name = movie_filename("🍿" * 300, 2020, "WEBDL-720p", "mkv")
+    assert "(2020) [WEBDL-720p].mkv" in name
+    assert movie_filename("...", 2020, "WEBDL-720p", "mkv") == "untitled (2020) [WEBDL-720p].mkv"
+    assert movie_filename("///", None, "WEBDL-720p", "mkv") == "--- [WEBDL-720p].mkv"
+
+
+def test_quality_tag_is_read_from_the_tail_only() -> None:
+    from outriggarr.naming import quality_from_filename
+
+    assert (
+        quality_from_filename("Show - S01E01 - Old cut [WEBDL-720p] remux [WEBDL-1080p].mkv")
+        == "WEBDL-1080p"
+    )
+    assert quality_from_filename("Show - S01E01 - Old cut [WEBDL-720p].mkv") == "WEBDL-720p"
+    assert quality_from_filename("Show - S01E01 - no tag.mkv") is None
+
+
+def test_sanitize_drops_del_too() -> None:
+    from outriggarr.naming import sanitize
+
+    assert sanitize("a\x7fb") == "a-b"

@@ -262,7 +262,15 @@ def activity(
 
 REVIEW_LIMIT = 500
 MATCHES_PAGE = 100  # the "all" view shows this many unless asked for everything
-RISK_ORDER = ("date", "regex", "unknown", "contains", "exact", "override")  # riskiest first
+RISK_ORDER = (
+    "date",
+    "regex",
+    "unknown",
+    "contains",
+    "numbered",
+    "exact",
+    "override",
+)  # riskiest first
 
 
 def _tier_inferred(job: Job) -> str:

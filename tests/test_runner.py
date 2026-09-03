@@ -1305,3 +1305,108 @@ async def test_permanent_download_failure_is_not_retried(deps, session_factory) 
     deps.source.error = SourceError("ERROR: [youtube] v2: Sign in to confirm you're not a bot")
     await process_job(deps, other)
     assert get_job(deps, other).next_retry_at == NOW + BACKOFF[0]
+
+
+def test_stall_guard_counts_a_restart_at_zero_as_progress() -> None:
+    from outriggarr.worker.runner import _StallGuard
+
+    guard = _StallGuard(idle=250.0, cap=100_000.0, clock=scripted_clock(0, 100, 200, 300, 400))
+    guard.advanced(100.0)  # the video stream finished (clock 100)
+    guard.advanced(0.0)  # the audio stream starts over (clock 200): bytes are still moving
+    assert guard.last_advance == 200, "a drop to 0% is a new stream, not a stall"
+    guard.advanced(0.0)  # the same value again is not progress (no clock call)
+    assert guard.last_advance == 200
+    assert not guard.tripped(), "300 - 200 < 250"  # clock 300
+    guard.advanced(1.0)  # clock 400
+    assert guard.last_advance == 400
+
+
+async def test_abort_check_treats_a_vanished_row_as_cancelled(deps, session_factory) -> None:
+    from outriggarr.worker.runner import abort_check
+
+    conn_id = add_connection(session_factory)
+    job_id = add_job(session_factory, conn_id)
+    check = abort_check(deps, job_id, lambda: False)
+    assert check() is False
+    with session_factory() as s:
+        s.delete(s.get(Job, job_id))
+        s.commit()
+    check = abort_check(deps, job_id, lambda: False)
+    assert check() is True, "a deleted job must stop writing into its folder"
+
+
+async def test_internal_error_on_a_job_cancelled_meanwhile_sends_nothing(
+    deps, session_factory
+) -> None:
+    from outriggarr.worker.runner import _guarded
+
+    conn_id = add_connection(session_factory)
+    job_id = add_job(session_factory, conn_id)
+    fake_for(deps, conn_id)
+    with session_factory() as s:
+        set_setting(s, "notify_on_failed", "1")
+        s.commit()
+
+    def download_then_crash(*a, **k):
+        with session_factory() as s:  # the user cancels while the download runs
+            s.get(Job, job_id).status = JobStatus.cancelled
+            s.commit()
+        raise RuntimeError("boom")
+
+    deps.source.download = download_then_crash
+    await _guarded(deps, job_id, lambda: False)
+    job = get_job(deps, job_id)
+    assert job.status is JobStatus.cancelled, "the cancel outranks a failure that landed later"
+    assert deps.notifier.sent == [], "nothing to announce: the user cancelled it"
+
+
+async def test_partially_satisfied_target_is_refused_on_the_staged_retry_path(
+    deps, session_factory
+) -> None:
+    from outriggarr.arr.base import TargetInfo
+
+    conn_id = add_connection(session_factory)
+    job_id = add_job(session_factory, conn_id, episode_ids=[42, 43])
+    client = fake_for(deps, conn_id)
+    # attempt 1 staged the file; a later attempt must not import over a target that has
+    # since gained one of its files elsewhere
+    dest = deps.staging_dir / str(job_id)
+    dest.mkdir(parents=True)
+    staged = dest / "Show - S01E42-E43 - Two [WEBDL-1080p].mkv"
+    staged.write_bytes(b"x")
+    with session_factory() as s:
+        s.get(Job, job_id).staged_path = str(staged)
+        s.commit()
+    from tests.fakes import EPISODE_INFO
+
+    client.info = TargetInfo(
+        **{**EPISODE_INFO.__dict__, "has_file": False, "partially_satisfied": True}
+    )
+    await process_job(deps, job_id)
+    job = get_job(deps, job_id)
+    assert job.status is JobStatus.failed and job.next_retry_at is None
+    assert "already have a file" in job.error and staged.exists(), "refused; the file is kept"
+    assert not any(c[0] == "manual_import" for c in client.calls)
+
+
+def test_claim_loses_to_a_cancel_that_lands_between_its_select_and_update(
+    session_factory, monkeypatch
+) -> None:
+    from outriggarr.worker import runner
+
+    conn_id = add_connection(session_factory)
+    job_id = add_job(session_factory, conn_id)
+    real_update = runner.update
+
+    def update_after_a_cancel(*args, **kwargs):
+        # runs when the UPDATE is built, i.e. after the SELECT chose the row
+        with session_factory() as s:
+            s.get(Job, job_id).status = JobStatus.cancelled
+            s.commit()
+        return real_update(*args, **kwargs)
+
+    monkeypatch.setattr(runner, "update", update_after_a_cancel)
+    with session_factory() as s:
+        assert claim_next_jobs(s, 1, NOW) == [], "the cancel is the user's word"
+    with session_factory() as s:
+        assert s.get(Job, job_id).status is JobStatus.cancelled

@@ -5,6 +5,9 @@ from datetime import date
 import pytest
 
 from outriggarr.matcher import (
+    LENGTH_RATIO,
+    LENGTH_SLACK_SECONDS,
+    MIN_CONTAINMENT_LEN,
     Episode,
     Match,
     MatchConfig,
@@ -17,6 +20,7 @@ from outriggarr.matcher import (
     match,
     normalise_title,
     parse_with_regex,
+    show_number,
     videos_needing_dates,
 )
 
@@ -335,7 +339,7 @@ def test_show_number_in_titles_is_a_guard_and_a_vouch() -> None:
     ]
     r = match(eps, videos, [], MatchConfig(("title",)))
     assert {(m.episode.id, m.video.id, m.tier) for m in r.matches} == {
-        (1, "a", "exact"),
+        (1, "a", "numbered"),
         (2, "d", "exact"),
     }
     # the same number with no shared name is still not a candidate
@@ -404,7 +408,7 @@ def test_part_upload_is_held_unless_the_episode_names_a_part() -> None:
     reason = "video is one part of a split upload; the episode is whole in Sonarr"
     assert {(h.episode.id, h.video.id, h.strategy, h.tier) for h in r.held} == {
         (1, "a", "title", "contains"),
-        (3, "c", "title", "exact"),  # the show-number promotion is still containment
+        (3, "c", "title", "numbered"),  # the show-number promotion is still containment
         (4, "d", "date", "date"),
     }
     assert all(h.reason == reason for h in r.held)
@@ -461,3 +465,139 @@ def test_title_scope_hides_other_shows_on_a_shared_channel_but_never_a_pin() -> 
     assert r2.unmatched[0].candidates["date"] == (), "an out-of-scope video is invisible to it"
     r3 = match(eps, videos, [Override("bydate", 1, 2)], scoped)
     assert (2, "bydate") in {(m.episode.id, m.video.id) for m in r3.matches}, "pins are exempt"
+
+
+def test_numbered_containment_settles_claims_but_still_faces_the_length_check() -> None:
+    # "KT #751 - JOE ROGAN (clip)" contains "#751 - JOE ROGAN" with the number agreeing:
+    # good enough to win a claim against a plain containment, but it is still
+    # containment, so a 2-minute clip against a 3-hour episode is held, not filed
+    ep = Episode(1, 1, 1, "#751 - JOE ROGAN + SHANE GILLIS", date(2026, 1, 8), runtime_minutes=180)
+    clip = Video("c", "KT #751 - JOE ROGAN + SHANE GILLIS (clip)", "https://x/c", duration=120)
+    r = match([ep], [clip], [], MatchConfig(("title",)))
+    assert r.matches == () and [(h.video.id, h.tier) for h in r.held] == [("c", "numbered")]
+    assert r.held[0].reason.startswith("video runs 2m00s")
+    full = Video("f", "KT #751 - JOE ROGAN + SHANE GILLIS", "https://x/f", duration=180 * 60)
+    r2 = match([ep], [full], [], MatchConfig(("title",)))
+    assert [(m.video.id, m.tier) for m in r2.matches] == [("f", "numbered")]
+    # and it beats a plain containment claim on the same video
+    other = Episode(2, 1, 2, "JOE ROGAN + SHANE GILLIS", date(2026, 1, 9))
+    r3 = match([other, ep], [full], [], MatchConfig(("title",)))
+    assert [(m.episode.id, m.tier) for m in r3.matches] == [(1, "numbered")]
+
+
+@pytest.mark.parametrize(
+    ("title", "number"),
+    [
+        ("#751 - JOE ROGAN", 751),
+        ("KT #751 - JOE ROGAN", 751),
+        ("  #12 Foo", 12),
+        ("Foo Bar | Best of #2024", None),  # a hashtag in the tail is not a show number
+        ("Kill Tony Live #7 - Foo", None),  # more than one word before it: not the head
+    ],
+)
+def test_show_number_reads_the_head_only(title: str, number: int | None) -> None:
+    assert show_number(title) == number
+
+
+def test_hashtag_in_a_tail_does_not_veto_a_candidate() -> None:
+    r = match(
+        [Episode(1, 1, 1, "#12 - Foo Bar Baz", date(2026, 1, 8))],
+        [Video("v", "Foo Bar Baz | Best of #2024", "https://x/v")],
+        [],
+        MatchConfig(("title",)),
+    )
+    assert [(m.video.id, m.tier) for m in r.matches] == [("v", "contains")]
+
+
+@pytest.mark.parametrize("phrase", ["!!!", " - ", "…"])
+def test_scope_phrase_that_normalises_to_nothing_requires_nothing(phrase: str) -> None:
+    assert in_scope("anything", phrase) is True
+
+
+@pytest.mark.parametrize(
+    ("title", "marked"),
+    [
+        ("Interview Part One", True),
+        ("Interview (Part II)", True),
+        ("Interview Part Two of Three", True),
+        ("Interview pt. IV", True),
+        ("Interview Part Eleven", False),  # beyond the words we read
+        ("Partial recall", False),
+        ("Party of Five", False),
+    ],
+)
+def test_part_marker_reads_words_and_roman_numerals(title: str, marked: bool) -> None:
+    assert has_part_marker(title) is marked
+
+
+def test_two_strategies_can_hold_one_episode_and_both_videos_stay_off_the_table() -> None:
+    # the matcher keeps every hold (accounting: both videos are taken); the scan report
+    # shows one row per episode, which test_scheduler pins
+    ep = Episode(1, 1, 1, "Alpha Beta", date(2026, 1, 8), runtime_minutes=60)
+    videos = [
+        Video("a", "Alpha Beta (Part 1)", "https://x/a"),  # title: part hold
+        Video("b", "Unrelated", "https://x/b", date(2026, 1, 8), duration=120),  # date: length hold
+    ]
+    r = match([ep], videos, [], MatchConfig(("title", "date"), date_tolerance_days=0))
+    assert [(h.video.id, h.strategy) for h in r.held] == [("a", "title"), ("b", "date")]
+    assert r.matched_video_ids == frozenset({"a", "b"}), "both videos are off the table"
+
+
+def test_duplicate_video_ids_do_not_disable_a_pin() -> None:
+    ep = Episode(1, 1, 1, "Whatever", date(2026, 1, 8))
+    twins = [Video("x", "Copy one", "https://x/1"), Video("x", "Copy two", "https://x/2")]
+    r = match([ep], twins, [Override("x", 1, 1)], MatchConfig(("title",)))
+    assert [(m.video.id, m.strategy) for m in r.matches] == [("x", "override")]
+
+
+def test_videos_needing_dates_skip_out_of_scope_and_pinned_videos() -> None:
+    eps = [
+        Episode(1, 1, 1, "Some Title", date(2026, 1, 8)),
+        Episode(2, 1, 2, "Other", date(2026, 1, 9)),
+    ]
+    videos = [
+        Video("out", "Other Show ep", "https://x/out"),
+        Video("in", "My Show ep", "https://x/in"),
+        Video("pin", "My Show pinned", "https://x/pin"),
+    ]
+    cfg = MatchConfig(("title", "date"), title_require="My Show")
+    pins = [Override("pin", 9, 9)]  # pinned to an episode Sonarr does not list as wanted
+    r = match(eps, videos, pins, cfg)
+    assert "pin" not in r.matched_video_ids, "the pin found no episode: still a pin"
+    assert [v.id for v in videos_needing_dates(r, videos, cfg, pins)] == ["in"]
+
+
+@pytest.mark.parametrize(
+    ("runtime", "duration", "held"),
+    [
+        (60, 60 * 60 // LENGTH_RATIO, False),  # exactly half: passes
+        (60, 60 * 60 // LENGTH_RATIO - 1, True),  # a second under: held
+        (60, 60 * 60 * LENGTH_RATIO, False),  # exactly double: passes
+        (60, 60 * 60 * LENGTH_RATIO + 1, True),  # a second over: held
+        (5, 5 * 60 + LENGTH_SLACK_SECONDS, False),  # within the slack whatever the ratio
+        (5, 5 * 60 + LENGTH_SLACK_SECONDS + 1, True),
+    ],
+)
+def test_length_mismatch_boundaries(runtime: int, duration: int, held: bool) -> None:
+    assert (length_mismatch(runtime, duration) is not None) is held
+
+
+def test_date_tolerance_is_inclusive_at_the_edge() -> None:
+    ep = Episode(1, 1, 1, "Zzz", date(2026, 1, 10))
+    cfg = MatchConfig(("date",), date_tolerance_days=2)
+    edge = match([ep], [Video("e", "x", "https://x/e", date(2026, 1, 12))], [], cfg)
+    beyond = match([ep], [Video("b", "x", "https://x/b", date(2026, 1, 13))], [], cfg)
+    assert [m.video.id for m in edge.matches] == ["e"] and beyond.matches == ()
+
+
+def test_containment_length_floor_is_a_boundary() -> None:
+    long_enough = Episode(1, 1, 1, "Ab Cde", date(2026, 1, 8))  # 6 chars, two tokens
+    too_short = Episode(2, 1, 2, "Ab Cd", date(2026, 1, 9))  # 5 chars
+    assert len(normalise_title(long_enough.title)) == MIN_CONTAINMENT_LEN
+    r = match(
+        [long_enough, too_short],
+        [Video("a", "Ab Cde tonight", "https://x/a"), Video("b", "Ab Cd tonight", "https://x/b")],
+        [],
+        MatchConfig(("title",)),
+    )
+    assert [(m.episode.id, m.tier) for m in r.matches] == [(1, "contains")]

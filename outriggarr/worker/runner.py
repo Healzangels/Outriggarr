@@ -103,7 +103,9 @@ class _StallGuard:
         self.reason: str | None = None
 
     def advanced(self, pct: float) -> None:
-        if pct > self.last_pct:
+        # not "greater": with bestvideo+bestaudio the hook restarts at 0 % for the audio
+        # stream, and steady audio progress must count as progress
+        if pct != self.last_pct:
             self.last_pct = pct
             self.last_advance = self.clock()
 
@@ -200,7 +202,8 @@ def abort_check(
             last = t
             with deps.session_factory() as s:
                 row = s.get(Job, job_id)
-                cancelled = row is not None and row.status is JobStatus.cancelled
+                # a row deleted meanwhile is gone for good: stop, do not recreate its folder
+                cancelled = row is None or row.status is JobStatus.cancelled
         return cancelled
 
     return check
@@ -232,12 +235,19 @@ def claim_next_jobs(
     excluded = list(exclude)
     if excluded:
         q = q.where(Job.id.not_in(excluded))
-    jobs = list(session.scalars(q))
-    for job in jobs:
-        job.status = JobStatus.downloading
-        job.next_retry_at = None
+    ids = [job.id for job in session.scalars(q)]
+    claimed: list[int] = []
+    for job_id in ids:
+        # conditional: a Cancel committed between the SELECT and this UPDATE must win
+        res = session.execute(
+            update(Job)
+            .where(Job.id == job_id, Job.status.in_((JobStatus.queued, JobStatus.failed)))
+            .values(status=JobStatus.downloading, next_retry_at=None)
+        )
+        if res.rowcount == 1:
+            claimed.append(job_id)
     session.commit()
-    return [job.id for job in jobs]
+    return claimed
 
 
 def recover_stale_jobs(session: Session) -> int:
@@ -345,9 +355,9 @@ async def _guarded(deps: RunnerDeps, job_id: int, stop_is_set: Callable[[], bool
                 if job.staged_path is None:
                     # nothing usable to keep for a Retry: do not leave a multi-GB orphan
                     shutil.rmtree(deps.staging_dir / str(job.id), ignore_errors=True)
-                _fail(session, job, f"internal error: {exc!r}", retry=False, now=deps.now())
-                session.commit()
-                await _notify_failed(deps, session, job)
+                if _fail(session, job, f"internal error: {exc!r}", retry=False, now=deps.now()):
+                    session.commit()
+                    await _notify_failed(deps, session, job)
 
 
 async def process_job(
@@ -383,12 +393,13 @@ async def process_job(
         except _Cancelled:
             shutil.rmtree(dest, ignore_errors=True)
             session.refresh(job)
-            job.staged_path = None
-            if not job.error or job.error == "cancelled":
-                job.error = "cancelled during download"
-            if job.finished_at is None:
-                job.finished_at = deps.now()
-            session.commit()
+            if job.status is JobStatus.cancelled:  # a Cancel→Retry meanwhile leaves it queued
+                job.staged_path = None
+                if not job.error or job.error == "cancelled":
+                    job.error = "cancelled during download"
+                if job.finished_at is None:
+                    job.finished_at = deps.now()
+                session.commit()
             return
         except _Interrupted:
             job.status = JobStatus.queued
@@ -639,6 +650,12 @@ async def _import_stage(
         info = await client.target_info(target)
         if info.has_file:
             return False
+        if info.partially_satisfied:
+            # a retry with the file already staged skips the pre-download check
+            raise _NoRetry(
+                "some of the target episodes already have a file; importing this multi-episode "
+                "file would replace them — split the target or delete those files first"
+            )
         candidates = await client.manual_import_candidates(remote_folder)
         cand = next(
             (

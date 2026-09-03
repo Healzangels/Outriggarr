@@ -15,9 +15,11 @@ QUALITY_LADDER: tuple[tuple[int, str], ...] = (
 )
 FALLBACK_QUALITY = "WEBDL-480p"
 
-_UNSAFE = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
+_UNSAFE = re.compile(r'[\\/:*?"<>|\x00-\x1f\x7f]')
 _WS = re.compile(r"\s+")
-_QUALITY_TAG = re.compile(r"\[(WEBDL-\d{3,4}p)\]")
+# the tag WE append sits at the very end, before the extension: a title that happens to
+# carry "[WEBDL-720p]" of its own must not be read as the file's quality
+_QUALITY_TAG = re.compile(r"\[(WEBDL-\d{3,4}p)\]\.[^.]+$")
 MAX_STEM = 180  # characters, but see MAX_STEM_BYTES: Linux limits a NAME to 255 bytes
 MAX_STEM_BYTES = 200  # leaves room for " [WEBDL-2160p]" + ".ext" and a ".xx.srt" sidecar
 
@@ -30,6 +32,18 @@ def _fit(stem: str) -> str:
     if len(encoded) > MAX_STEM_BYTES:
         stem = encoded[:MAX_STEM_BYTES].decode("utf-8", errors="ignore")
     return stem.rstrip(" .")
+
+
+def _fit_keeping(prefix: str, tail: str) -> str:
+    """Fit `prefix + tail` so that `tail` (the parseable part: the episode code or the
+    year) always survives: the prefix gives way first. Trimming the end of the whole
+    stem would erase exactly the part the safety-net parse needs."""
+    room = _fit(prefix)
+    while room and (
+        len(room) + len(tail) > MAX_STEM or len((room + tail).encode()) > MAX_STEM_BYTES
+    ):
+        room = _fit(room[:-1])
+    return (room + tail) if room else tail.lstrip(" -")
 
 
 def quality_for_height(height: int | None) -> str:
@@ -69,14 +83,17 @@ def episode_filename(
     quality: str,
     ext: str,
 ) -> str:
-    stem = f"{sanitize(series_title)} - {episode_code(season, episode_numbers)}"
+    code = episode_code(season, episode_numbers)
+    head = _fit_keeping(sanitize(series_title), f" - {code}")
+    stem = head
     if episode_title:
-        stem += f" - {sanitize(episode_title)}"
-    return f"{_fit(stem)} [{quality}].{ext.lstrip('.')}"
+        # the title is the part that gives way; the series and the code are already in
+        stem = _fit(f"{head} - {sanitize(episode_title)}")
+        if not stem.endswith(code) and code not in stem:
+            stem = head
+    return f"{stem} [{quality}].{ext.lstrip('.')}"
 
 
 def movie_filename(title: str, year: int | None, quality: str, ext: str) -> str:
-    stem = sanitize(title)
-    if year:
-        stem += f" ({year})"
-    return f"{_fit(stem)} [{quality}].{ext.lstrip('.')}"
+    stem = _fit_keeping(sanitize(title) or "untitled", f" ({year})" if year else "")
+    return f"{stem} [{quality}].{ext.lstrip('.')}"

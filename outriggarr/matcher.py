@@ -132,7 +132,9 @@ _WS = re.compile(r"\s+")
 _EP_PREFIX = re.compile(
     r"^(?:ep(?:isode)?\.?\s*\d+|#\s*\d+|\d+\.(?=\s))\s*[-:|–—]?\s*", re.IGNORECASE
 )
-_HASH_NUMBER = re.compile(r"#\s*(\d+)")
+# The show's own count sits at the head ("#751 - …", "KT #751 - …", "KT#751 …"): at most
+# one word before it, so a "#2024" hashtag in a title's tail is not a show number.
+_HASH_NUMBER = re.compile(r"^\s*(?:[^\s#]+\s*)?#\s*(\d+)")
 
 
 def show_number(title: str) -> int | None:
@@ -155,14 +157,34 @@ def normalise_title(text: str) -> str:
 # keeps the words but drops the brackets that make "(1/5)" unmistakable.
 _PART_MARKER = re.compile(
     r"""
-    \(\s*(?:(?:part|pt\.?)\s*(?P<n1>\d{1,2})(?:\s*[/⧸]\s*(?P<m1>\d{1,2}))?
-          |(?P<n2>\d{1,2})\s*[/⧸]\s*(?P<m2>\d{1,2}))\s*\)          # (Part 1/5) (Part 2) (1/5)
-  | \b(?:part|pt\.?)\s*(?P<n3>\d{1,2})\s*(?:[/⧸]|\s+of\s+)\s*(?P<m3>\d{1,2})\b  # Part 1 of 2
-  | \b(?P<n4>\d{1,2})\s+of\s+(?P<m4>\d{1,2})\b                             # 1 of 4
-  | \b(?:part|pt\.?)\s*(?P<n5>\d{1,2})\b                                    # Part 2
-    """,
+    # (Part 1/5) (Part II) (1/5)
+    \(\s*(?:(?:part|pt\.?)\s*(?P<n1>\d{1,2}|WORDS)(?:\s*[/⧸]\s*(?P<m1>\d{1,2}))?
+          |(?P<n2>\d{1,2})\s*[/⧸]\s*(?P<m2>\d{1,2}))\s*\)
+    # Part 1 of 2, Pt. 1/17, Part Two of Three
+  | \b(?:part|pt\.?)\s*(?P<n3>\d{1,2}|WORDS)\s*(?:[/⧸]|\s+of\s+)\s*(?P<m3>\d{1,2}|WORDS)\b
+    # 1 of 4
+  | \b(?P<n4>\d{1,2})\s+of\s+(?P<m4>\d{1,2})\b
+    # Part 2, Part One, Part IV
+  | \b(?:part|pt\.?)\s*(?P<n5>\d{1,2}|WORDS)\b
+    """.replace(
+        "WORDS", "one|two|three|four|five|six|seven|eight|nine|ten|i{1,3}|iv|v|vi{1,3}|ix|x"
+    ),
     re.IGNORECASE | re.VERBOSE,
 )
+_PART_WORDS = {
+    w: i + 1
+    for i, w in enumerate(
+        ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"]
+    )
+}
+_PART_ROMAN = {
+    r: i + 1 for i, r in enumerate(["i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x"])
+}
+
+
+def _part_number(token: str) -> int:
+    t = token.lower()
+    return int(t) if t.isdigit() else _PART_WORDS.get(t) or _PART_ROMAN.get(t) or 0
 
 
 def has_part_marker(title: str) -> bool:
@@ -171,8 +193,8 @@ def has_part_marker(title: str) -> bool:
     "5 of 3" are not parts of anything."""
     for m in _PART_MARKER.finditer(title):
         groups = m.groupdict()
-        n = next(int(v) for k, v in groups.items() if k.startswith("n") and v)
-        total = next((int(v) for k, v in groups.items() if k.startswith("m") and v), None)
+        n = next(_part_number(v) for k, v in groups.items() if k.startswith("n") and v)
+        total = next((_part_number(v) for k, v in groups.items() if k.startswith("m") and v), None)
         if n < 1 or (total is not None and n > total):
             continue
         return True
@@ -198,9 +220,10 @@ def _loose(text: str) -> str:
 def in_scope(title: str, phrase: str | None) -> bool:
     """Whether a video title contains the subscription's required phrase (case- and
     punctuation-insensitive substring). No phrase → everything is in scope."""
-    if not phrase or not phrase.strip():
-        return True
-    return _loose(phrase) in _loose(title)
+    wanted = _loose(phrase or "")
+    if not wanted:
+        return True  # nothing (or only punctuation) to require
+    return wanted in _loose(title)
 
 
 def compile_title_regex(pattern: str) -> re.Pattern[str]:
@@ -272,7 +295,10 @@ def is_unavailable(video: Video) -> bool:
 
 def _title_candidates(ep: Episode, videos: list[Video]) -> tuple[str, list[Video]]:
     """(tier, candidates): exact normalised equality first; otherwise containment on
-    word boundaries, for episode titles with at least two words, skipping promos."""
+    word boundaries, for episode titles with at least two words, skipping promos.
+    Containment where both titles carry the show's own number and it agrees is tier
+    "numbered": it settles a claim like an exact title, but it is still containment
+    ("KT #751 - … (clip)" contains "#751 - …"), so the length check still applies."""
     want = normalise_title(ep.title)
     if not want:
         return ("none", [])
@@ -301,7 +327,7 @@ def _title_candidates(ep: Episode, videos: list[Video]) -> tuple[str, list[Video
         if want_no is not None and show_number(v.title) == want_no:
             numbered.append(v)
     if numbered:
-        return ("exact", numbered)
+        return ("numbered", numbered)
     return ("contains", out)
 
 
@@ -316,7 +342,10 @@ def match(
     )
     rx = compile_title_regex(cfg.title_regex) if cfg.title_regex and "regex" in enabled else None
     by_video = {o.video_id: o for o in overrides}
-    pool: list[Video] = [v for v in videos if not is_unavailable(v)]
+    pool: list[Video] = []
+    for v in videos:  # one entry per id: a duplicate would make a pin see two candidates
+        if not is_unavailable(v) and all(p.id != v.id for p in pool):
+            pool.append(v)
     matched: dict[int, Match] = {}
     held: list[Held] = []
     seen: dict[int, dict[str, tuple[str, ...]]] = {ep.id: {} for ep in episodes}
@@ -352,7 +381,7 @@ def match(
                 if len(claimants) == 1:
                     winner = claimants[0][0]
                 else:
-                    exact = [ep for ep, tier in claimants if tier == "exact"]
+                    exact = [ep for ep, tier in claimants if tier in ("exact", "numbered")]
                     if len(exact) == 1:
                         winner = exact[0]
                 if winner is None:
@@ -390,12 +419,23 @@ def match(
     )
 
 
-def videos_needing_dates(result: MatchResult, videos: list[Video], cfg: MatchConfig) -> list[Video]:
+def videos_needing_dates(
+    result: MatchResult,
+    videos: list[Video],
+    cfg: MatchConfig,
+    overrides: list[Override] | tuple[Override, ...] = (),
+) -> list[Video]:
     """Videos worth a per-video fetch: only when the date strategy is on, something is
-    still unmatched, and the video is unassigned and undated."""
+    still unmatched, and the video is unassigned, undated, in the title scope and not
+    pinned — the date strategy can never see the other two, so dating them is waste."""
     if "date" not in cfg.strategies or not (result.unmatched or result.held):
         return []
-    used = result.matched_video_ids
+    used = result.matched_video_ids | {o.video_id for o in overrides}
     return [
-        v for v in videos if v.id not in used and v.upload_date is None and not is_unavailable(v)
+        v
+        for v in videos
+        if v.id not in used
+        and v.upload_date is None
+        and not is_unavailable(v)
+        and in_scope(v.title, cfg.title_require)
     ]
