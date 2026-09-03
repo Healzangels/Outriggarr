@@ -243,3 +243,26 @@ def test_ytdlp_stop_condition_keys_are_reserved() -> None:
     for key in ("download_archive", "break_on_existing", "max_downloads"):
         with pytest.raises(ValueError, match="owns those options"):
             validate_setting("ytdlp_extra_opts", json.dumps({key: 1}))
+
+
+def test_every_format_preset_is_a_valid_selector_and_the_default_is_one() -> None:
+    from outriggarr.settings import DEFAULTS, FORMAT_PRESETS, preset_for, validate_setting
+
+    keys = [p.key for p in FORMAT_PRESETS]
+    assert len(keys) == len(set(keys)) and len(keys) >= 5
+    for p in FORMAT_PRESETS:
+        assert validate_setting("default_format", p.format) == p.format, p.key  # yt-dlp parses it
+        assert p.label and p.note
+    assert preset_for(DEFAULTS["default_format"]).key == "1080p-h264", (
+        "the picker shows the default"
+    )
+    assert preset_for("  bestvideo*+bestaudio/best\n").key == "best", (
+        "whitespace is not a difference"
+    )
+    assert preset_for(None) is None and preset_for("") is None
+    assert preset_for("bestvideo[height<=600]+bestaudio") is None, "hand-written is custom"
+    by_height = {p.key: p.format for p in FORMAT_PRESETS}
+    assert "height<=2160" in by_height["2160p-any"] and "avc1" not in by_height["2160p-any"], (
+        "YouTube has no H.264 above 1080p: the 4K preset must not ask for it"
+    )
+    assert "avc1" in by_height["720p-h264"] and "mp4a" in by_height["720p-h264"]

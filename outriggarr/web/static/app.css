@@ -114,6 +114,12 @@ label .hint { display: block; color: var(--o-muted); font-size: .82em; font-weig
 .form-actions button { width: auto; margin: 0; }
 .form-actions .danger { margin-left: auto; }
 fieldset[role=group].pin { margin: 0; }
+/* a preset picker beside the free-text field it fills */
+.fill-row { display: grid; grid-template-columns: minmax(16rem, 2fr) 3fr; gap: .5rem; align-items: start; }
+.fill-row select, .fill-row input { margin-bottom: 0; }
+ul.presets { padding-left: 1.2rem; }
+ul.presets li { margin-bottom: .5rem; }
+ul.presets code { font-size: .78em; word-break: break-all; }
 fieldset[role=group].pin input { min-width: 16em; }
 details.error pre { white-space: pre-wrap; font-size: .8em; max-width: 60ch; margin: .3rem 0 0; }
 details.error summary { cursor: pointer; }
@@ -145,4 +151,5 @@ footer.container { margin-top: 2.5rem; padding: 1rem 0; border-top: 1px solid va
   nav.container ul:last-child { gap: 0; }
   nav.container ul:last-child li { padding: .25rem .45rem; }
   .form-actions .danger { margin-left: 0; }
+  .fill-row { grid-template-columns: 1fr; }
 }

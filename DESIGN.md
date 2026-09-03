@@ -123,6 +123,8 @@ Optional `title_regex` with named groups `season`/`episode` for channels that nu
 
 Quality from downloaded height: ≥2160 → WEBDL-2160p, ≥1080 → WEBDL-1080p, ≥720 → WEBDL-720p, else WEBDL-480p. The target's quality profile must allow it or the import is rejected (and the GUI says so).
 
+**Format presets.** The free-text yt-dlp selector stays the source of truth (global default in Settings, optional override per subscription); beside it a picker offers `FORMAT_PRESETS` (settings.py): up to 1080p H.264 + AAC (the default; every client direct-plays it and YouTube has no H.264 above 1080p), up to 1080p any codec, up to 4K any codec, up to 720p and 480p H.264 + AAC, and best available. Choosing one writes its selector into the field; a field that matches no preset shows as *Custom*, so an operator's own selector is never overwritten and the picker never hides what will actually run. Every preset is proved a valid selector by the test suite (yt-dlp parses it), and the default is asserted to be one of them.
+
 Default yt-dlp format: `bestvideo*[height<=1080][vcodec^=avc1]+bestaudio[acodec^=mp4a]/bestvideo*[height<=1080]+bestaudio/best[height<=1080]`. YouTube serves many uploads at 2160p AV1; the cap matches the profiles in use and H.264/AAC avoids player transcodes. Raise it in Settings → Downloads (or per subscription) for a 4K profile.
 
 ## GUI screens (v1)

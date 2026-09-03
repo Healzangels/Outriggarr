@@ -33,6 +33,13 @@
 <label>Audio language <span class="hint">Three-letter ISO 639-2 code, e.g. <code>jpn</code>. Blank = the language the source declares for the audio track (YouTube sets one per track), then the global default.</span>
   <input type="text" name="audio_language" maxlength="3" value="{{ sub.audio_language or '' if sub else '' }}" placeholder="declared by the source">
 </label>
-<label>yt-dlp format override <span class="hint">Blank uses the global default from Settings.</span>
-  <input type="text" name="format" value="{{ sub.format or '' if sub else '' }}">
+<label>yt-dlp format override <span class="hint">Blank uses the global default from Settings{% if global_format_preset %} ({{ global_format_preset.label }}){% endif %}. Pick a preset for this series alone, or write your own selector.</span>
+  <div class="fill-row">
+    <select data-fills="format" aria-label="format preset">
+      <option value="" {% if not (sub and sub.format) %}selected{% endif %}>Global default</option>
+      {% for p in format_presets %}<option value="{{ p.format }}" title="{{ p.note }}" {% if format_preset and p.key == format_preset.key %}selected{% endif %}>{{ p.label }}</option>{% endfor %}
+      <option value="__custom__" {% if sub and sub.format and not format_preset %}selected{% endif %}>Custom (as typed)</option>
+    </select>
+    <input type="text" name="format" value="{{ sub.format or '' if sub else '' }}">
+  </div>
 </label>

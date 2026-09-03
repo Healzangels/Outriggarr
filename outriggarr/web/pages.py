@@ -60,7 +60,14 @@ from outriggarr.db.models import (
     utcnow,
 )
 from outriggarr.matcher import OPTIONAL_STRATEGIES, length_mismatch, mmss, normalise_title
-from outriggarr.settings import DEFAULTS, MERGE_CONTAINERS, all_settings, get_setting
+from outriggarr.settings import (
+    DEFAULTS,
+    FORMAT_PRESETS,
+    MERGE_CONTAINERS,
+    all_settings,
+    get_setting,
+    preset_for,
+)
 from outriggarr.source import cookies_state, pot_provider_ready
 
 router = APIRouter(include_in_schema=False)
@@ -489,6 +496,9 @@ def _subscription_form_context(sub: Subscription | None, session: Session) -> di
         "scan_video_limit": get_setting(session, "scan_video_limit"),
         "strategies": sorted(OPTIONAL_STRATEGIES, key=("regex", "title", "date").index),
         "chosen": set(sub.strategies) if sub else {"title"},
+        "format_presets": FORMAT_PRESETS,
+        "format_preset": preset_for(sub.format) if sub and sub.format else None,
+        "global_format_preset": preset_for(get_setting(session, "default_format")),
     }
 
 
@@ -935,10 +945,13 @@ async def subscription_delete(
 
 
 def _settings_context(session: DbSession, **extra) -> dict:
+    settings = all_settings(session)
     return {
         "connections": list(session.scalars(select(Connection).order_by(Connection.id))),
-        "settings": all_settings(session),
+        "settings": settings,
         "defaults": DEFAULTS,
+        "format_presets": FORMAT_PRESETS,
+        "default_preset": preset_for(settings["default_format"]),
         "containers": MERGE_CONTAINERS,
         "kinds": [k.value for k in ConnectionKind],
         "conn_error": None,

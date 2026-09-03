@@ -1371,3 +1371,36 @@ def test_activity_reads_a_failed_job_in_plain_words(client: TestClient) -> None:
         )
         s.commit()
     assert client.get("/activity?view=done").text.count('class="cause"') == 0
+
+
+def test_format_preset_pickers_follow_the_text(client: TestClient) -> None:
+    from outriggarr.settings import FORMAT_PRESETS, set_setting
+
+    best = next(p for p in FORMAT_PRESETS if p.key == "best")
+    page = client.get("/settings").text
+    assert 'select data-fills="default_format"' in page and "data-fills" in page
+    assert "selected>Up to 1080p · H.264 + AAC (direct play)</option>" in page, "the default preset"
+    assert 'value="__custom__" >Custom' in page, "custom is not selected while the text is a preset"
+    with client.app.state.session_factory() as s:
+        set_setting(s, "default_format", "bestvideo[height<=600]+bestaudio")
+        s.commit()
+    page = client.get("/settings").text
+    assert 'value="__custom__" selected>Custom' in page and "selected>Up to 1080p" not in page
+    assert 'name="default_format" value="bestvideo[height&lt;=600]+bestaudio"' in page  # escaped
+
+    _seed_series(client)
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={"connection_id": 1, "series_id": 5, "sources": ["https://www.youtube.com/@x"]},
+    ).json()["id"]
+    page = client.get(f"/subscriptions/{sub_id}").text
+    assert 'select data-fills="format"' in page and 'value="" selected>Global default' in page
+    body = client.get(f"/api/subscriptions/{sub_id}").json()
+    body["format"] = best.format
+    assert client.put(f"/api/subscriptions/{sub_id}", json=body).status_code == 200
+    page = client.get(f"/subscriptions/{sub_id}").text
+    assert "selected>Best available · no cap</option>" in page and 'value="" selected' not in page
+    body["format"] = "worst"
+    assert client.put(f"/api/subscriptions/{sub_id}", json=body).status_code == 200
+    page = client.get(f"/subscriptions/{sub_id}").text
+    assert 'value="__custom__" selected>Custom' in page and 'name="format" value="worst"' in page

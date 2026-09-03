@@ -89,7 +89,7 @@ YouTube audio tracks carry no language tag, so players such as Plex show the aud
 
 ## Quality and naming
 
-Staged as `{Series} - SxxEyy - {Title} [WEBDL-{res}p].{ext}` / `{Movie} ({Year}) [WEBDL-{res}p].{ext}`. Quality from the downloaded height: ≥2160 → WEBDL-2160p, ≥1080 → WEBDL-1080p, ≥720 → WEBDL-720p, else WEBDL-480p. The default yt-dlp format caps at 1080p and prefers H.264/AAC; change it in Settings (or per subscription) for 4K profiles.
+Staged as `{Series} - SxxEyy - {Title} [WEBDL-{res}p].{ext}` / `{Movie} ({Year}) [WEBDL-{res}p].{ext}`. Quality from the downloaded height: ≥2160 → WEBDL-2160p, ≥1080 → WEBDL-1080p, ≥720 → WEBDL-720p, else WEBDL-480p. The default yt-dlp format caps at 1080p and prefers H.264/AAC. Settings (and each subscription's override) offer a picker of presets for a target quality — 4K any codec, 1080p H.264/AAC, 1080p any codec, 720p and 480p H.264/AAC, best available — beside the free-text selector; anything hand-written shows as Custom.
 
 ## Development
 

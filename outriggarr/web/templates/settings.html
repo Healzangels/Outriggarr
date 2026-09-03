@@ -64,7 +64,18 @@
     <label>Concurrent downloads<input type="number" name="concurrency" min="1" max="8" value="{{ settings.concurrency }}"></label>
     <label>Videos listed per scan<input type="number" name="scan_video_limit" min="1" max="500" value="{{ settings.scan_video_limit }}"></label>
   </div>
-  <label>Default yt-dlp format <span class="hint">Applies unless a subscription overrides it.</span><input name="default_format" value="{{ settings.default_format }}" required></label>
+  <label>Default yt-dlp format <span class="hint">Applies unless a subscription overrides it. Pick a preset for a target quality, or write your own selector; anything hand-written shows as Custom.</span>
+    <div class="fill-row">
+      <select data-fills="default_format" aria-label="format preset">
+        {% for p in format_presets %}<option value="{{ p.format }}" title="{{ p.note }}" {% if default_preset and p.key == default_preset.key %}selected{% endif %}>{{ p.label }}</option>{% endfor %}
+        <option value="__custom__" {% if not default_preset %}selected{% endif %}>Custom (as typed)</option>
+      </select>
+      <input name="default_format" value="{{ settings.default_format }}" required>
+    </div>
+  </label>
+  <details class="plain"><summary>What the presets mean</summary>
+    <ul class="presets">{% for p in format_presets %}<li><strong>{{ p.label }}</strong> <span class="muted">{{ p.note }}</span><br><code>{{ p.format }}</code></li>{% endfor %}</ul>
+  </details>
   <div class="grid">
     <label>Merge container<select name="merge_container">{% for c in containers %}<option value="{{ c }}" {% if c == settings.merge_container %}selected{% endif %}>{{ c }}</option>{% endfor %}</select></label>
     <label>Cookies file <span class="hint">Path inside the container, e.g. /config/cookies.txt.</span><input name="cookies_path" value="{{ settings.cookies_path }}"></label>

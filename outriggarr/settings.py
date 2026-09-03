@@ -79,6 +79,77 @@ DEFAULTS: dict[str, str] = {
 }
 
 
+@dataclass(frozen=True)
+class FormatPreset:
+    """A recommended yt-dlp format selector for one target quality, offered in a picker
+    beside the free-text field; the text stays the source of truth."""
+
+    key: str
+    label: str
+    format: str
+    note: str
+
+
+def _capped(height: int, h264: bool) -> str:
+    if h264:
+        return (
+            f"bestvideo*[height<={height}][vcodec^=avc1]+bestaudio[acodec^=mp4a]"
+            f"/bestvideo*[height<={height}]+bestaudio/best[height<={height}]"
+        )
+    return f"bestvideo*[height<={height}]+bestaudio/best[height<={height}]"
+
+
+FORMAT_PRESETS: tuple[FormatPreset, ...] = (
+    FormatPreset(
+        "1080p-h264",
+        "Up to 1080p · H.264 + AAC (direct play)",
+        DEFAULTS["default_format"],
+        "The default. Every Plex/Jellyfin client plays H.264/AAC without transcoding; "
+        "YouTube offers H.264 up to 1080p, so this is the best direct-play quality there is.",
+    ),
+    FormatPreset(
+        "1080p-any",
+        "Up to 1080p · any codec (smaller files)",
+        _capped(1080, h264=False),
+        "VP9 or AV1 where YouTube has it: noticeably smaller files at the same resolution, "
+        "but older players transcode them.",
+    ),
+    FormatPreset(
+        "2160p-any",
+        "Up to 4K (2160p) · any codec",
+        _capped(2160, h264=False),
+        "Above 1080p YouTube only has VP9/AV1, so this cannot prefer H.264. A 1440p file is "
+        "named WEBDL-1080p for Sonarr, which has no 1440p quality.",
+    ),
+    FormatPreset(
+        "720p-h264",
+        "Up to 720p · H.264 + AAC",
+        _capped(720, h264=True),
+        "Direct play, a third of the size of 1080p. Named WEBDL-720p.",
+    ),
+    FormatPreset(
+        "480p-h264",
+        "Up to 480p · H.264 + AAC (smallest)",
+        _capped(480, h264=True),
+        "For archives and slow links. Named WEBDL-480p.",
+    ),
+    FormatPreset(
+        "best",
+        "Best available · no cap",
+        "bestvideo*+bestaudio/best",
+        "Whatever is largest: 4K VP9/AV1 when it exists. Check the quality profiles in "
+        "Sonarr accept WEBDL-2160p, or the import is refused.",
+    ),
+)
+assert DEFAULTS["default_format"] == _capped(1080, h264=True)  # the picker shows the default
+
+
+def preset_for(format_string: str | None) -> FormatPreset | None:
+    """The preset a format string is, if it is one exactly (whitespace aside)."""
+    wanted = (format_string or "").strip()
+    return next((p for p in FORMAT_PRESETS if p.format == wanted), None)
+
+
 def apprise_urls(session: Session) -> list[str]:
     return [u.strip() for u in get_setting(session, "apprise_urls").splitlines() if u.strip()]
 

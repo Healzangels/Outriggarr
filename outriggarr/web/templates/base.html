@@ -42,6 +42,24 @@
       const summary = e.target.closest && e.target.closest('summary');
       if (summary && e.detail > 0) summary.blur();
     });
+    // A preset picker (select[data-fills=NAME]) writes its choice into the text field of
+    // that name; the field stays the source of truth, and typing anything that is not a
+    // preset flips the picker to "Custom".
+    document.addEventListener('change', (e) => {
+      const sel = e.target.closest && e.target.closest('select[data-fills]');
+      if (!sel || sel.value === '__custom__') return;
+      const input = sel.form ? sel.form.elements[sel.dataset.fills] : document.querySelector(`[name="${sel.dataset.fills}"]`);
+      if (input) input.value = sel.value;
+    });
+    document.addEventListener('input', (e) => {
+      const input = e.target;
+      if (!input.name || !input.form) return;
+      input.form.querySelectorAll(`select[data-fills="${input.name}"]`).forEach((sel) => {
+        const typed = input.value.trim();
+        const hit = [...sel.options].find((o) => o.value !== '__custom__' && o.value === typed);
+        sel.value = hit ? hit.value : '__custom__';
+      });
+    });
   </script>
   <script defer src="{{ static('alpine.min.js') }}"></script>
 </head>
