@@ -3,7 +3,7 @@
 {% elif not seasons %}<p class="empty">Sonarr lists no episodes for this series.</p>
 {% else %}
 {% for s in seasons %}
-<details class="plain season">
+<details class="plain season"{% if loop.first and s.missing %} open{% endif %}>
   <summary>Season {{ s.season }} <span class="muted">· {{ s.files }}/{{ s.total }} files{% if s.missing %} · <span class="warn">{{ s.missing }} missing</span>{% endif %}</span></summary>
   <div class="table-wrap">
   <table>
