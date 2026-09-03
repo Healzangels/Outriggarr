@@ -1500,3 +1500,50 @@ def test_matches_all_view_is_capped_with_a_show_all_switch(client: TestClient, m
     everything = client.get("/matches?view=all&limit=all").text
     assert everything.count("25m00s vs 25 min ✓") == 3 and "Show all" not in everything
     assert "How a pairing leaves that list" in page, "the long explanation folds away"
+
+
+def test_subscription_page_labels_its_facts_and_orders_the_preview(client: TestClient) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from outriggarr.arr.base import EpisodeRef, SeriesRef
+    from outriggarr.source import VideoRef
+    from tests.fakes import FakeArrClient
+
+    now = datetime.now(UTC)
+    client.app.state.arr_factory.by_url["http://sonarr-host:1234"] = FakeArrClient(
+        series_list=[SeriesRef(5, "Show", 2015, 1, True)],
+        episodes_by_series={
+            5: [EpisodeRef(11, 30, 6, "Six", False, True, now - timedelta(days=3))]
+        },
+    )
+    source = client.app.state.source
+    source.recent = [VideoRef("a", "Six", "https://y/a", 100, 1, None)]
+    client.post("/api/connections", json=SONARR)
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={
+            "connection_id": 1,
+            "series_id": 5,
+            "sources": ["https://www.youtube.com/@x"],
+            "strategies": ["title", "date"],
+            "auto_download": "all",
+        },
+    ).json()["id"]
+    client.post(f"/api/subscriptions/{sub_id}/scan")
+    page = client.get(f"/subscriptions/{sub_id}").text
+    head = page.split('id="preview"')[0]
+    assert "<dt>Matching</dt>" in head and "pins → title → date" in head
+    assert "<dt>Last scan</dt>" in head and "just now" in head
+    assert f"subscription {sub_id}" not in head, "the internal id is a hover, not a fact"
+    assert f"listing depth · #{sub_id}</span>" in page, "…and lives with the settings"
+    prev = client.get(f"/subscriptions/{sub_id}/preview").text
+    assert prev.index('class="chips scan-summary"') < prev.index('class="form-actions"'), (
+        "what the scan saw comes first, then what you can do about it"
+    )
+    assert "1 wanted episode(s) already have jobs" in prev, (
+        "the scan queued it: not a match row now"
+    )
+    assert (
+        '<a href="/activity" class="job-ref">#'
+        in client.get(f"/subscriptions/{sub_id}/episodes").text
+    )

@@ -1,20 +1,20 @@
 {% set queueable = report.matches | rejectattr("job_id") | list | length %}
 {% set auto_count = report.matches | rejectattr("job_id") | selectattr("auto") | list | length %}
+<p class="chips scan-summary">
+  <span class="chip">{{ report.videos | length }} videos listed{% if report.sources > 1 %} from {{ report.sources }} sources{% endif %}</span>
+  {% if sub.title_require %}<span class="chip" title="Only uploads whose title contains this phrase are candidates for this series (pins are exempt); set under Subscription settings">titles must contain “{{ sub.title_require }}”{% if report.in_scope is defined %} · {{ report.in_scope }} do{% endif %}</span>{% endif %}
+  <span class="chip {{ 'ok' if report.matches else 'zero' }}">{{ report.matches | length }} matched</span>
+  <span class="chip {{ 'warn' if report.unmatched else 'zero' }}">{{ report.unmatched | length }} unmatched</span>
+  {% if report.held %}<span class="chip warn" title="Paired, but something contradicts it: the video's length against the episode's runtime, or the video is one part of a split upload">{{ report.held | length }} held</span>{% endif %}
+  <span class="chip {{ '' if report.skipped_existing else 'zero' }}">{{ report.skipped_existing | length }} already have jobs</span>
+  <span class="chip" title="What the scheduler queues by itself: {{ sub.auto_download }}">auto: {% if sub.auto_download == "future" %}future only, {{ auto_count }} of {{ queueable }} would queue{% elif sub.auto_download == "all" %}everything{% else %}nothing{% endif %}</span>
+</p>
 <div class="form-actions">
   <button class="secondary" hx-post="/subscriptions/{{ sub.id }}/scan" hx-target="#preview" hx-indicator="#scan-busy">Scan now</button>
   <button hx-post="/subscriptions/{{ sub.id }}/download" hx-vals='{"all": "1"}' hx-target="#preview" hx-indicator="#scan-busy" {% if not queueable %}disabled{% endif %} title="Queue every current match, whatever the auto-download setting">Download all{% if queueable %} {{ queueable }}{% endif %}</button>
   <button id="download-selected" class="secondary" hx-post="/subscriptions/{{ sub.id }}/download" hx-include="#match-picks" hx-vals='{"selected": "1"}' hx-target="#preview" hx-indicator="#scan-busy" disabled title="Queue only the selected matches">Download selected <span class="count" id="selected-count">0</span></button>
   {% include "partials/date_fetch.html" %}
   <span id="scan-busy" class="htmx-indicator muted" aria-busy="true">working…</span>
-  <span class="chips">
-    <span class="chip">{{ report.videos | length }} videos listed{% if report.sources > 1 %} from {{ report.sources }} sources{% endif %}</span>
-    {% if sub.title_require %}<span class="chip" title="Only uploads whose title contains this phrase are candidates for this series (pins are exempt); set under Subscription settings">titles must contain “{{ sub.title_require }}”{% if report.in_scope is defined %} · {{ report.in_scope }} do{% endif %}</span>{% endif %}
-    <span class="chip {{ 'ok' if report.matches else 'zero' }}">{{ report.matches | length }} matched</span>
-    <span class="chip {{ 'warn' if report.unmatched else 'zero' }}">{{ report.unmatched | length }} unmatched</span>
-    {% if report.held %}<span class="chip warn" title="Paired, but something contradicts it: the video's length against the episode's runtime, or the video is one part of a split upload">{{ report.held | length }} held</span>{% endif %}
-    <span class="chip {{ '' if report.skipped_existing else 'zero' }}">{{ report.skipped_existing | length }} already have jobs</span>
-    <span class="chip" title="What the scheduler queues by itself: {{ sub.auto_download }}">auto: {% if sub.auto_download == "future" %}future only, {{ auto_count }} of {{ queueable }} would queue{% elif sub.auto_download == "all" %}everything{% else %}nothing{% endif %}</span>
-  </span>
 </div>
 {% if notice %}<p class="notice" role="status" aria-live="polite">{{ notice }}</p>{% endif %}
 {% if report.error %}<p class="notice bad">Scan failed: {{ report.error }}</p>{% endif %}
@@ -36,7 +36,7 @@
       <td><strong>{{ m.code }}</strong> {{ m.title }}<span class="two-line muted">{{ m.air_date or "" }}</span></td>
       <td><a href="{{ m.video_url }}" target="_blank" rel="noopener" class="truncate" title="{{ m.video_title }}">{{ m.video_title }}</a><span class="two-line muted mono">{{ m.video_id }}</span></td>
       <td><span class="chip">{{ m.strategy }}</span></td>
-      <td>{% if m.job_id %}<a href="/activity">#{{ m.job_id }}</a>{% elif m.skipped %}<span class="muted">{{ m.skipped }}</span>{% elif report.dry_run %}<span class="muted">{% if m.auto %}queues on the next scan{% else %}select to download{% endif %}</span>{% endif %}</td>
+      <td>{% if m.job_id %}<a href="/activity" class="job-ref">#{{ m.job_id }}</a>{% elif m.skipped %}<span class="muted">{{ m.skipped }}</span>{% elif report.dry_run %}<span class="muted">{% if m.auto %}queues on the next scan{% else %}select to download{% endif %}</span>{% endif %}</td>
     </tr>
   {% endfor %}
   </tbody>

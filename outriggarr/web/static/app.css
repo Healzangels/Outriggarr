@@ -24,6 +24,11 @@ a.brand svg { border-radius: 6px; flex: none; }
 .page-header h2 { margin: 0; }
 .page-header .sub { color: var(--o-muted); margin: 0; }
 .page-header .actions { display: flex; gap: .5rem; flex-wrap: wrap; }
+/* key: value facts in a page header ("Matching  pins → title", "Last scan  21 min ago") */
+.page-header dl.meta { display: flex; flex-wrap: wrap; gap: .25rem 1.5rem; margin: 0; font-size: .9em; }
+.page-header dl.meta > div { display: flex; gap: .45em; align-items: baseline; }
+.page-header dl.meta dt { color: var(--o-muted); font-weight: 400; margin: 0; }
+.page-header dl.meta dd { margin: 0; }
 
 /* cards & sections */
 article.card { padding: 1rem 1.25rem; margin-bottom: var(--o-gap); }
@@ -64,7 +69,9 @@ table td, table th { vertical-align: top; padding: .5rem .6rem; }
 /* long lists read as a diary: a quiet divider where the day changes */
 tr.day-group td { padding: .9rem .6rem .25rem; border-bottom: 0; color: var(--o-muted); font-size: .78em; letter-spacing: .06em; text-transform: uppercase; background: transparent; }
 tr.day-group + tr td { border-top: 1px solid var(--o-border); }
-.job-id { color: var(--o-muted); font-size: .8em; margin-right: .35em; }
+/* job references keep one width so the badge after them lines up whatever the digits */
+.job-id, .job-ref { display: inline-block; min-width: 4.5ch; font-family: var(--pico-font-family-monospace); font-size: .85em; }
+.job-id { color: var(--o-muted); margin-right: .35em; }
 tr.quiet .job-id { opacity: .7; }
 td.evidence .chip { vertical-align: middle; }
 td.evidence .length { font-size: .88em; margin: 0 .35em; }
@@ -137,7 +144,7 @@ label .hint { display: block; color: var(--o-muted); font-size: .82em; font-weig
    the row, its progress line takes a full row underneath */
 .form-actions > .date-fetch { display: contents; }
 .form-actions .date-fetch .notice { flex-basis: 100%; order: 99; margin: .25rem 0 0; }
-.form-actions .chips { margin-left: auto; }
+.scan-summary { margin: 0 0 .6rem; }
 fieldset[role=group].pin { margin: 0; }
 /* a preset picker beside the free-text field it fills */
 .fill-row { display: grid; grid-template-columns: minmax(16rem, 2fr) 3fr; gap: .5rem; align-items: start; }

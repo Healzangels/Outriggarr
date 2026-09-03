@@ -6,11 +6,10 @@
     <h2>{{ sub.title or ("series " ~ sub.series_id) }} {% if not sub.enabled %}<span class="badge badge-off">disabled</span>{% endif %}</h2>
     <p class="sub">{% for u in sub.sources %}<a href="{{ u }}" target="_blank" rel="noopener" class="truncate" title="{{ u }}">{{ u | replace("https://www.youtube.com/", "youtube.com/") }}</a>{% if not loop.last %} <span class="muted">·</span> {% endif %}{% endfor %}</p>
   </div>
-  <div class="chips">
-    <span class="chip" title="Videos you pin to an episode on this page always win">your pins</span>{% for st in sub.strategies %}<span class="chip">{{ st }}</span>{% endfor %}
-    {% if sub.last_scan_at %}<span class="chip" title="{{ sub.last_scan_at.strftime('%Y-%m-%d %H:%M') }}Z">last scan {{ sub.last_scan_at | ago }}</span>{% else %}<span class="chip">never scanned</span>{% endif %}
-    <span class="chip">subscription {{ sub.id }}</span>
-  </div>
+  <dl class="meta" title="Subscription {{ sub.id }}">
+    <div><dt>Matching</dt><dd title="Videos you pin to an episode always win, then the automatic strategies in this order">pins{% for st in sub.strategies %} → {{ st }}{% endfor %}</dd></div>
+    <div><dt>Last scan</dt><dd>{% if sub.last_scan_at %}<span title="{{ sub.last_scan_at.strftime('%Y-%m-%d %H:%M') }}Z">{{ sub.last_scan_at | ago }}</span>{% else %}never{% endif %}</dd></div>
+  </dl>
 </div>
 {% if error %}<p class="notice bad">{{ error }}</p>{% endif %}
 
@@ -37,7 +36,7 @@
 </article>
 
 <details class="panel">
-  <summary>Subscription settings <span class="muted">· sources, matching, listing depth</span></summary>
+  <summary>Subscription settings <span class="muted">· sources, matching, listing depth · #{{ sub.id }}</span></summary>
   <article class="card">
   <form method="post" action="/subscriptions/{{ sub.id }}/edit">
     {% include "partials/subscription_fields.html" %}
