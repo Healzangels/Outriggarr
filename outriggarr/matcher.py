@@ -54,6 +54,10 @@ class MatchConfig:
     date_tolerance_days: int = 2
     date_offset_days: int = 0
     title_regex: str | None = None
+    # A phrase every candidate's title must contain, for a channel that carries several
+    # shows; None → every listed video is a candidate. Pins are exempt: a pin is the
+    # user's word, whatever the title says.
+    title_require: str | None = None
 
 
 @dataclass(frozen=True)
@@ -185,6 +189,20 @@ def part_mismatch(episode_title: str, video_title: str) -> str | None:
     return None
 
 
+def _loose(text: str) -> str:
+    """Lower-case, punctuation to spaces, whitespace collapsed: the comparison form for
+    the title scope. Not `normalise_title`, which also strips episode prefixes."""
+    return _WS.sub(" ", _PUNCT.sub(" ", text.lower())).strip()
+
+
+def in_scope(title: str, phrase: str | None) -> bool:
+    """Whether a video title contains the subscription's required phrase (case- and
+    punctuation-insensitive substring). No phrase → everything is in scope."""
+    if not phrase or not phrase.strip():
+        return True
+    return _loose(phrase) in _loose(title)
+
+
 def compile_title_regex(pattern: str) -> re.Pattern[str]:
     """Validate a user regex: it must have an `episode` group; `season` is optional."""
     rx = re.compile(pattern, re.IGNORECASE)
@@ -306,7 +324,14 @@ def match(
     for strategy in enabled:
         while True:  # to a fixed point: a claim this round may free a candidate for another
             # A pinned video is exactly one episode's; it is never a candidate for another.
-            eligible = pool if strategy == "override" else [v for v in pool if v.id not in by_video]
+            # The title scope applies to every automatic strategy, never to a pin.
+            eligible = (
+                pool
+                if strategy == "override"
+                else [
+                    v for v in pool if v.id not in by_video and in_scope(v.title, cfg.title_require)
+                ]
+            )
             claims: dict[str, list[tuple[Episode, str]]] = {}  # video id → (episode, tier)
             before = (len(matched), len(pool))
             for ep in episodes:

@@ -50,6 +50,7 @@ from outriggarr.api.subscriptions import (
     update_subscription,
 )
 from outriggarr.arr.base import ArrError
+from outriggarr.causes import likely_cause
 from outriggarr.db.models import (
     Connection,
     ConnectionKind,
@@ -176,8 +177,27 @@ def _rows(
     return templates.TemplateResponse(
         request,
         "partials/jobs_table.html",
-        {"jobs": jobs, "view": view, "notice": notice, "total": total, "limit": ACTIVITY_LIMIT},
+        {
+            "jobs": jobs,
+            "view": view,
+            "notice": notice,
+            "total": total,
+            "limit": ACTIVITY_LIMIT,
+            "causes": _causes(session, jobs),
+        },
     )
+
+
+def _causes(session: Session, jobs: list[Job]) -> dict[int, str]:
+    """A plain-words reading of each failed job's error, keyed by job id."""
+    state = cookies_state(get_setting(session, "cookies_path"))
+    out: dict[int, str] = {}
+    for job in jobs:
+        if job.error and job.status is not JobStatus.done:
+            cause = likely_cause(job.error, youtube_session=state)
+            if cause:
+                out[job.id] = cause
+    return out
 
 
 @router.get("/")
@@ -207,6 +227,7 @@ def activity(
             "counts": counts,
             "total": counts.get(view, len(jobs)),
             "limit": ACTIVITY_LIMIT,
+            "causes": _causes(session, jobs),
         },
     )
 
@@ -513,6 +534,7 @@ def _form_to_body(
     video_limit: str = "",
     audio_language: str = "",
     auto_download: str = "future",
+    title_require: str = "",
 ) -> SubscriptionIn:
     video_limit = video_limit.strip()
     if video_limit and not video_limit.isdigit():
@@ -521,6 +543,7 @@ def _form_to_body(
         video_limit=int(video_limit) if video_limit else None,
         audio_language=audio_language,
         auto_download=auto_download,
+        title_require=title_require,
         connection_id=connection_id,
         series_id=series_id,
         sources=sources.splitlines(),
@@ -548,6 +571,7 @@ async def subscribe_submit(
     video_limit: Annotated[str, Form()] = "",
     audio_language: Annotated[str, Form()] = "",
     auto_download: Annotated[str, Form()] = "future",
+    title_require: Annotated[str, Form()] = "",
 ) -> HTMLResponse:
     conn = _sonarr(session)
     if conn is None:
@@ -566,6 +590,7 @@ async def subscribe_submit(
             video_limit,
             audio_language,
             auto_download,
+            title_require,
         )
         sub = await create_subscription(session, arr_factory, body)
     except Exception as exc:  # validation / 409 / 502: show it on the form
@@ -865,6 +890,7 @@ async def subscription_edit(
     video_limit: Annotated[str, Form()] = "",
     audio_language: Annotated[str, Form()] = "",
     auto_download: Annotated[str, Form()] = "future",
+    title_require: Annotated[str, Form()] = "",
 ) -> HTMLResponse:
     sub = session.get(Subscription, subscription_id)
     if sub is None:
@@ -883,6 +909,7 @@ async def subscription_edit(
             video_limit,
             audio_language,
             auto_download,
+            title_require,
         )
         await update_subscription(session, arr_factory, subscription_id, body)
     except Exception as exc:

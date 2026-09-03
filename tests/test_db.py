@@ -212,10 +212,10 @@ def test_migrations_are_transactional_and_downgrade_keeps_dedupe(settings) -> No
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
     assert "ux_job_live_target_video" in names, "the partial index survives a failed downgrade"
     assert not [t for t in tables if t.startswith("_alembic_tmp")], "no half-rebuilt table left"
-    assert version == "0004", "0012→…→0004 applied; the failing 0004→0003 step rolled back"
+    assert version == "0004", "0013→…→0004 applied; the failing 0004→0003 step rolled back"
     command.upgrade(cfg, "head")  # and the DB is still usable: back to head cleanly
     with engine.connect() as conn:
-        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0012"
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0013"
     engine.dispose()
 
 

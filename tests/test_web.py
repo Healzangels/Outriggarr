@@ -1289,3 +1289,85 @@ def test_recheck_under_a_rate_limit_leaves_the_rest_for_later(
         assert s.query(Job).one().video_duration is None
     assert client.app.state.runner_deps.cooloff.active()
     client.app.state.runner_deps.cooloff.clear()
+
+
+def test_title_scope_round_trips_and_shows_in_the_preview(client: TestClient) -> None:
+    from outriggarr.source import VideoRef
+
+    _seed_series(client)
+    source = client.app.state.source
+    source.recent = [
+        VideoRef("a", "Scam School 1: Fire", "https://y/a", 100, 1, None, approx_age="3 years ago"),
+        VideoRef("b", "Other Show: Fire", "https://y/b", 100, 2, "20240102"),
+        VideoRef("c", "Scam School 2: Ice", "https://y/c", 100, 3, None),
+    ]
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={"connection_id": 1, "series_id": 5, "sources": ["https://www.youtube.com/@x"]},
+    ).json()["id"]
+    r = client.post(
+        f"/subscriptions/{sub_id}/edit",
+        data={
+            "sources": "https://www.youtube.com/@x",
+            "strategies": ["title"],
+            "date_tolerance_days": "2",
+            "date_offset_days": "0",
+            "title_regex": "",
+            "title_require": " Scam School ",
+            "format": "",
+        },
+        follow_redirects=False,
+    )
+    assert r.status_code == 303, r.text
+    assert client.get(f"/api/subscriptions/{sub_id}").json()["title_require"] == "Scam School"
+    page = client.get(f"/subscriptions/{sub_id}").text
+    assert 'name="title_require" maxlength="100" value="Scam School"' in page
+    prev = client.get(f"/subscriptions/{sub_id}/preview").text
+    assert "titles must contain “Scam School” · 2 do" in prev
+    # the listing says what the page said about age, marked as a guess; a real date is a date
+    assert "~3 years ago" in prev and "20240102" not in prev and "2024-01-02" in prev
+
+
+def test_activity_reads_a_failed_job_in_plain_words(client: TestClient) -> None:
+    from outriggarr.db.models import Job, JobStatus, TargetKind
+
+    client.post("/api/connections", json=SONARR)
+    with client.app.state.session_factory() as s:
+        s.add(
+            Job(
+                connection_id=1,
+                target_kind=TargetKind.episode,
+                series_id=5,
+                episode_ids=[11],
+                target_key="episode:5:11",
+                video_id="gone",
+                video_url="https://y/gone",
+                video_title="x",
+                target_label="Show S30E06 - Six",
+                status=JobStatus.failed,
+                error="ERROR: [youtube] gone: Video unavailable",
+            )
+        )
+        s.commit()
+    page = client.get("/activity?view=failed").text
+    assert '<span class="cause">The video is gone from YouTube' in page
+    assert "Pin another upload to the episode." in page
+    # a finished job's note (an audio-tag hiccup) is not a failure and gets no reading
+    with client.app.state.session_factory() as s:
+        s.add(
+            Job(
+                connection_id=1,
+                target_kind=TargetKind.episode,
+                series_id=5,
+                episode_ids=[12],
+                target_key="episode:5:12",
+                video_id="fine",
+                video_url="https://y/fine",
+                video_title="y",
+                target_label="Show S30E07 - Seven",
+                status=JobStatus.done,
+                error="audio language tag failed (file imported untagged): ffmpeg exited 1",
+            )
+        )
+        s.commit()
+    assert client.get("/activity?view=done").text.count('class="cause"') == 0

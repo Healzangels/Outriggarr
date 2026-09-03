@@ -23,6 +23,7 @@ from outriggarr.matcher import (
     MatchResult,
     Override,
     Video,
+    in_scope,
     match,
     videos_needing_dates,
 )
@@ -49,6 +50,7 @@ class ScanReport:
     held: list[dict] = field(default_factory=list)  # paired, but the length check objects
     skipped_existing: list[dict] = field(default_factory=list)
     created_job_ids: list[int] = field(default_factory=list)
+    in_scope: int | None = None  # listed videos whose title carries the required phrase
     error: str | None = None
 
     def summary(self) -> dict:
@@ -291,6 +293,7 @@ async def _scan(
     limit = sub.video_limit or int(get_setting(session, "scan_video_limit"))
     refs = await list_source_videos(deps, sub, limit)
     report.sources = len(sub.sources)
+    ages = {r.id: r.approx_age for r in refs}  # "3 years ago" from the listing page, if any
     taken = live_video_ids_for_series(session, conn.id, sub.series_id)
     videos = [_video(v) for v in refs if v.id not in taken]
     _apply_cached_dates(session, videos)
@@ -299,6 +302,7 @@ async def _scan(
         date_tolerance_days=sub.date_tolerance_days,
         date_offset_days=sub.date_offset_days,
         title_regex=sub.title_regex,
+        title_require=sub.title_require,
     )
     overrides = [Override(o.video_id, o.season, o.episode) for o in sub.overrides]
     listed = {v.id for v in videos}
@@ -338,9 +342,12 @@ async def _scan(
             "title": v.title,
             "url": v.url,
             "upload_date": v.upload_date.isoformat() if v.upload_date else None,
+            "approx_age": ages.get(v.id),
         }
         for v in videos
     ]
+    if sub.title_require:
+        report.in_scope = sum(1 for v in videos if in_scope(v.title, sub.title_require))
     _fill_report(report, result, videos)
     for entry, m in zip(report.matches, result.matches, strict=True):
         entry["auto"] = auto_queues(sub, m.episode)

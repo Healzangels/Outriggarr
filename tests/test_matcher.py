@@ -12,6 +12,7 @@ from outriggarr.matcher import (
     Video,
     compile_title_regex,
     has_part_marker,
+    in_scope,
     length_mismatch,
     match,
     normalise_title,
@@ -420,3 +421,43 @@ def test_part_upload_is_held_unless_the_episode_names_a_part() -> None:
     # both parts listed: two candidates, nobody claims, the episode is plainly unmatched
     r4 = match(eps[:1], videos[:1] + [Video("a2", "Alpha Beta (Part 2)", "https://x/a2")], [], cfg)
     assert [u.episode.id for u in r4.unmatched] == [1] and r4.held == ()
+
+
+@pytest.mark.parametrize(
+    ("title", "phrase", "ok"),
+    [
+        ("Scam School 194: Balls of Fire", "scam school", True),
+        ("SCAM SCHOOL: the basics", "Scam School", True),
+        ("Scam-School 12", "scam school", True),  # punctuation is not a difference
+        ("Brian's other show", "Scam School", False),
+        ("anything", None, True),
+        ("anything", "   ", True),
+    ],
+)
+def test_in_scope(title: str, phrase: str | None, ok: bool) -> None:
+    assert in_scope(title, phrase) is ok
+
+
+def test_title_scope_hides_other_shows_on_a_shared_channel_but_never_a_pin() -> None:
+    # A channel carrying two shows: the guest's name matches an upload of the OTHER show.
+    # With the phrase required, only the right show's uploads are candidates for any
+    # automatic strategy; a pin is the user's word and ignores the scope.
+    eps = [
+        Episode(1, 1, 1, "Max Schaaf", date(2026, 1, 8)),
+        Episode(2, 1, 2, "Some Title Here", date(2026, 1, 9)),
+    ]
+    videos = [
+        Video("wrong", "Max Schaaf | Let It Kill You", "https://x/wrong"),
+        Video("right", "Epicly Later'd: Max Schaaf", "https://x/right"),
+        Video("bydate", "Unrelated upload", "https://x/bydate", date(2026, 1, 9)),
+    ]
+    open_cfg = MatchConfig(("title", "date"), date_tolerance_days=0)
+    r = match(eps, videos, [], open_cfg)
+    assert 1 not in {m.episode.id for m in r.matches}, "two containment candidates: ambiguous"
+    scoped = MatchConfig(("title", "date"), date_tolerance_days=0, title_require="Epicly Later'd")
+    r2 = match(eps, videos, [], scoped)
+    assert {(m.episode.id, m.video.id) for m in r2.matches} == {(1, "right")}
+    assert [u.episode.id for u in r2.unmatched] == [2], "the date pairing is out of scope too"
+    assert r2.unmatched[0].candidates["date"] == (), "an out-of-scope video is invisible to it"
+    r3 = match(eps, videos, [Override("bydate", 1, 2)], scoped)
+    assert (2, "bydate") in {(m.episode.id, m.video.id) for m in r3.matches}, "pins are exempt"

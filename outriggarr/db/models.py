@@ -125,6 +125,10 @@ class Subscription(Base):
     date_tolerance_days: Mapped[int] = mapped_column(Integer, nullable=False, default=2)
     date_offset_days: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     title_regex: Mapped[str | None] = mapped_column(String(500))
+    # A phrase every candidate upload's title must contain (case-insensitive), for a
+    # channel that carries several shows: a guest's name turns up in every show they
+    # appear in. Pins are exempt. None → every listed video is a candidate.
+    title_require: Mapped[str | None] = mapped_column(String(100))
     enabled: Mapped[bool] = mapped_column(default=True, nullable=False)
     # What the scheduler queues by itself: "all" wanted episodes, only those airing
     # from created_at on ("future", the default for a new subscription: a big show must

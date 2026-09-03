@@ -12,9 +12,14 @@
   <label>Date tolerance (days)<input type="number" name="date_tolerance_days" min="0" max="60" value="{{ sub.date_tolerance_days if sub else 2 }}"></label>
   <label>Date offset (days)<span class="hint">Positive if uploads land after the air date.</span><input type="number" name="date_offset_days" min="-60" max="60" value="{{ sub.date_offset_days if sub else 0 }}"></label>
 </div>
-<label>Title regex <span class="hint">Optional, for channels that number their own uploads, e.g. <code>S(?P&lt;season&gt;\d+)E(?P&lt;episode&gt;\d+)</code> or <code>#(?P&lt;episode&gt;\d+)</code>.</span>
-  <input type="text" name="title_regex" value="{{ sub.title_regex or '' if sub else '' }}">
-</label>
+<div class="grid">
+  <label>Title regex <span class="hint">Optional, for channels that number their own uploads, e.g. <code>S(?P&lt;season&gt;\d+)E(?P&lt;episode&gt;\d+)</code> or <code>#(?P&lt;episode&gt;\d+)</code>.</span>
+    <input type="text" name="title_regex" value="{{ sub.title_regex or '' if sub else '' }}">
+  </label>
+  <label>Title must contain <span class="hint">Optional, for a channel that carries several shows: only uploads whose title contains this phrase are candidates (case-insensitive). Pins are exempt.</span>
+    <input type="text" name="title_require" maxlength="100" value="{{ sub.title_require or '' if sub else '' }}" placeholder="e.g. Scam School">
+  </label>
+</div>
 <label>Videos to list per scan <span class="hint">Blank uses the global setting ({{ scan_video_limit }}). Raise it for a channel whose episodes sit behind hundreds of newer uploads; a deep listing costs a few seconds per scan. Playlists are always listed whole.</span>
   <input type="number" name="video_limit" min="1" max="5000" value="{{ sub.video_limit or '' if sub else '' }}" placeholder="{{ scan_video_limit }}">
 </label>

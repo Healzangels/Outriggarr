@@ -6,7 +6,9 @@ from outriggarr.source import (
     CoolOff,
     SourceError,
     VideoRef,
+    is_permanent_failure,
     is_rate_limited,
+    relative_age,
     skip_reason,
     videos_from_info,
 )
@@ -475,10 +477,14 @@ def test_po_token_provider_is_wired_when_present_and_operator_args_merge(
     assert seen[0]["extractor_args"] == {
         "youtubepot-bgutilscript": {"server_home": [str(home)], "disable_innertube": ["1"]},
         "youtube": {"player_client": ["tv"]},
+        "youtubetab": {"approximate_date": ["1"]},
     }, "ours plus the operator's, merged per extractor"
     monkeypatch.setattr(shutil, "which", lambda name: None)
     YtDlpSource(extra_opts=lambda: {}, pot_server_home=home).resolve("https://youtu.be/x")
-    assert "extractor_args" not in seen[1], "no node: nothing is promised to yt-dlp"
+    assert "youtubepot-bgutilscript" not in seen[1]["extractor_args"], (
+        "no node: no PO-token provider is promised to yt-dlp"
+    )
+    assert seen[1]["extractor_args"]["youtubetab"] == {"approximate_date": ["1"]}
 
 
 JAR_SIGNED_IN = (
@@ -885,3 +891,89 @@ def test_cooloff_escalates_only_after_a_pause_proved_too_short() -> None:
     c.clear()
     assert c.strikes == 0 and c.message is None and not c.active()
     assert c.hit("again") == 900, "a success resets the ladder"
+
+
+@pytest.mark.parametrize(
+    ("message", "permanent"),
+    [
+        ("ERROR: [youtube] a: Video unavailable", True),
+        ("ERROR: [youtube] a: This video has been removed by the uploader", True),
+        (
+            "ERROR: [youtube] a: This video is no longer available because the YouTube account "
+            "associated with this video has been terminated.",
+            True,
+        ),
+        ("ERROR: [youtube] a: Private video. Sign in if you've been granted access", True),
+        ("ERROR: [youtube] a: Join this channel to get access to members-only content", True),
+        ("ERROR: [youtube] a: Sign in to confirm your age", True),
+        (
+            "ERROR: [youtube] a: The uploader has not made this video available in your country",
+            True,
+        ),
+        ("ERROR: [youtube] a: Requested format is not available", True),
+        ("ERROR: Unsupported URL: https://example.com/x", True),
+        ("ERROR: unable to download webpage: HTTP Error 404: Not Found", True),
+        # the address being busy, not the video: retried
+        ("ERROR: [youtube] a: Sign in to confirm you're not a bot", False),
+        (
+            "ERROR: [youtube] a: This content isn't available, try again later. The current "
+            "session has been rate-limited by YouTube for up to an hour.",
+            False,
+        ),
+        ("ERROR: [youtube] a: This live event will begin in 3 hours.", False),
+        ("ERROR: unable to download video data: HTTP Error 403: Forbidden", False),
+        ("ERROR: Unable to download webpage: <urlopen error timed out>", False),
+    ],
+)
+def test_is_permanent_failure(message: str, permanent: bool) -> None:
+    assert is_permanent_failure(message) is permanent
+
+
+@pytest.mark.parametrize(
+    ("age_seconds", "text"),
+    [
+        (3 * 365 * 86400, "3 years ago"),
+        (365 * 86400, "1 year ago"),
+        (2 * 30 * 86400, "2 months ago"),
+        (7 * 86400, "1 week ago"),
+        (2 * 86400, "2 days ago"),
+        (5 * 3600, "5 hours ago"),
+        (120, "today"),
+    ],
+)
+def test_relative_age_reads_the_unit_back(age_seconds: int, text: str) -> None:
+    now = 1_800_000_000.0
+    assert relative_age(now - age_seconds, now=now) == text
+    assert relative_age(None, now=now) is None
+    assert relative_age(now + 60, now=now) is None, "the future is not an age"
+
+
+def test_flat_entries_carry_an_approximate_age_not_a_date() -> None:
+    import time
+
+    now = time.time()
+    info = {
+        "_type": "playlist",
+        "id": "PL1",
+        "entries": [
+            {"id": "old", "title": "Old", "timestamp": now - 3 * 365 * 86400},
+            {"id": "new", "title": "New", "timestamp": now - 2 * 86400},
+            {"id": "dated", "title": "Dated", "timestamp": now - 86400, "upload_date": "20260901"},
+            {"id": "bare", "title": "Bare"},
+        ],
+    }
+    refs = {r.id: r for r in videos_from_info(info)}
+    assert refs["old"].approx_age == "3 years ago" and refs["old"].upload_date is None
+    assert refs["new"].approx_age == "2 days ago" and refs["new"].upload_date is None
+    assert refs["dated"].approx_age is None and refs["dated"].upload_date == "20260901", (
+        "a real date needs no guess"
+    )
+    assert refs["bare"].approx_age is None
+
+
+def test_listing_asks_youtube_for_approximate_dates() -> None:
+    from outriggarr.source import YtDlpSource
+
+    source = YtDlpSource(extra_opts=lambda: {})
+    opts = source._opts({"extractor_args": {"youtubetab": {"skip": ["webpage"]}}})
+    assert opts["extractor_args"]["youtubetab"] == {"approximate_date": ["1"], "skip": ["webpage"]}

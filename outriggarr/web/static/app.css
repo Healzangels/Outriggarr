@@ -117,6 +117,9 @@ fieldset[role=group].pin { margin: 0; }
 fieldset[role=group].pin input { min-width: 16em; }
 details.error pre { white-space: pre-wrap; font-size: .8em; max-width: 60ch; margin: .3rem 0 0; }
 details.error summary { cursor: pointer; }
+/* the plain-words reading of a failed job's error, under the verbatim text */
+.cause { display: block; color: var(--o-muted); font-size: .82em; max-width: 60ch; margin-top: .2rem; }
+.cause::before { content: "Likely cause: "; color: var(--pico-color); }
 .htmx-indicator { opacity: 0; transition: opacity .2s; }
 .htmx-request .htmx-indicator, .htmx-request.htmx-indicator { opacity: 1; }
 

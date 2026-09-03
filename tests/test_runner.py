@@ -707,14 +707,16 @@ async def test_notify_on_terminal_failure_only(deps, session_factory) -> None:
     conn_id = add_connection(session_factory)
     job_id = add_job(session_factory, conn_id)
     fake_for(deps, conn_id)
-    deps.source.error = SourceError("ERROR: [youtube] v1: Video unavailable")
+    deps.source.error = SourceError(
+        "ERROR: [youtube] v1: Unable to download webpage: <urlopen error timed out>"
+    )
     for _ in range(MAX_ATTEMPTS - 1):
         await process_job(deps, job_id)
         assert deps.notifier.sent == [], "retryable failures stay quiet"
     await process_job(deps, job_id)  # attempts exhausted
     (title, body) = deps.notifier.sent[0]
     assert title == "Outriggarr: job failed"
-    assert f"#{job_id}" in body and "Video unavailable" in body
+    assert f"#{job_id}" in body and "Unable to download webpage: <urlopen error timed out>" in body
 
 
 async def test_notify_on_rejection_and_not_on_done_by_default(deps, session_factory) -> None:
@@ -1280,3 +1282,26 @@ async def test_rate_limited_download_pauses_the_queue_without_spending_an_attemp
     assert get_job(deps, other).status is JobStatus.done
     assert not deps.cooloff.active() and deps.cooloff.strikes == 0, "a success clears the ladder"
     assert get_job(deps, job_id).status is JobStatus.queued, "still waiting for its own retry time"
+
+
+async def test_permanent_download_failure_is_not_retried(deps, session_factory) -> None:
+    conn_id = add_connection(session_factory)
+    job_id = add_job(session_factory, conn_id)
+    fake_for(deps, conn_id)
+    with session_factory() as s:
+        set_setting(s, "notify_on_failed", "1")
+        s.commit()
+    deps.source.error = SourceError("ERROR: [youtube] v1: Video unavailable")
+    await process_job(deps, job_id)
+    job = get_job(deps, job_id)
+    assert job.status is JobStatus.failed and job.error == "ERROR: [youtube] v1: Video unavailable"
+    assert job.next_retry_at is None and job.finished_at == NOW, "gone is gone: no retry ladder"
+    assert not (deps.staging_dir / str(job_id)).exists()
+    assert len(deps.notifier.sent) == 1 and "Video unavailable" in deps.notifier.sent[0][1], (
+        "a terminal failure is announced at once"
+    )
+    # a bot check is the address being busy, not the video: still on the ladder
+    other = add_job(session_factory, conn_id, video_id="v2", episode_id=43)
+    deps.source.error = SourceError("ERROR: [youtube] v2: Sign in to confirm you're not a bot")
+    await process_job(deps, other)
+    assert get_job(deps, other).next_retry_at == NOW + BACKOFF[0]

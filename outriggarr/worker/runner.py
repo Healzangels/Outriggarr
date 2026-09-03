@@ -42,7 +42,14 @@ from outriggarr.naming import (
 )
 from outriggarr.notify import Notifier, NullNotifier
 from outriggarr.settings import get_setting
-from outriggarr.source import CoolOff, DownloadAborted, SourceError, VideoSource, is_rate_limited
+from outriggarr.source import (
+    CoolOff,
+    DownloadAborted,
+    SourceError,
+    VideoSource,
+    is_permanent_failure,
+    is_rate_limited,
+)
 
 log = logging.getLogger(__name__)
 
@@ -571,6 +578,9 @@ async def _download_stage(
         shutil.rmtree(dest, ignore_errors=True)
         if is_rate_limited(str(exc)):
             raise _RateLimited(str(exc), deps.cooloff.hit(str(exc))) from exc
+        if is_permanent_failure(str(exc)):
+            # gone, walled off, or a wrong request: a day of retries changes nothing
+            raise _NoRetry(str(exc)) from exc
         raise _Retry(str(exc)) from exc
     except OSError as exc:
         # e.g. PermissionError creating /staging/<id>, ENAMETOOLONG on the rename: an

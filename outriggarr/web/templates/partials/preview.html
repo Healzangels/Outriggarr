@@ -7,6 +7,7 @@
   <span id="scan-busy" class="htmx-indicator muted" aria-busy="true">working…</span>
   <span class="chips">
     <span class="chip">{{ report.videos | length }} videos listed{% if report.sources > 1 %} from {{ report.sources }} sources{% endif %}</span>
+    {% if sub.title_require %}<span class="chip" title="Only uploads whose title contains this phrase are candidates for this series (pins are exempt); set under Subscription settings">titles must contain “{{ sub.title_require }}”{% if report.in_scope is defined %} · {{ report.in_scope }} do{% endif %}</span>{% endif %}
     <span class="chip {{ 'ok' if report.matches else 'zero' }}">{{ report.matches | length }} matched</span>
     <span class="chip {{ 'warn' if report.unmatched else 'zero' }}">{{ report.unmatched | length }} unmatched</span>
     {% if report.held %}<span class="chip warn" title="Paired, but something contradicts it: the video's length against the episode's runtime, or the video is one part of a split upload">{{ report.held | length }} held</span>{% endif %}
@@ -139,5 +140,5 @@
 {% endif %}
 
 <details class="plain"><summary>{{ report.videos | length }} video(s) listed from the source{% if report.sources > 1 %}s{% endif %}</summary>
-<ol>{% for v in report.videos %}<li>{% if v.title == v.id %}<span class="muted">unavailable video</span>{% else %}<a href="{{ v.url }}" target="_blank" rel="noopener">{{ v.title }}</a>{% endif %} <span class="muted mono">{{ v.id }}{% if v.upload_date %} · {{ v.upload_date }}{% endif %}</span></li>{% endfor %}</ol>
+<ol>{% for v in report.videos %}<li>{% if v.title == v.id %}<span class="muted">unavailable video</span>{% else %}<a href="{{ v.url }}" target="_blank" rel="noopener">{{ v.title }}</a>{% endif %} <span class="muted mono">{{ v.id }}{% if v.upload_date %} · {{ v.upload_date }}{% elif v.approx_age %} · <span title="What the listing page says; the exact date needs a per-video fetch (Fetch upload dates)">~{{ v.approx_age }}</span>{% endif %}</span></li>{% endfor %}</ol>
 </details>

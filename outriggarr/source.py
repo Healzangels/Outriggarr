@@ -38,6 +38,9 @@ class VideoRef:
     duration: int | None
     playlist_index: int | None
     upload_date: str | None  # YYYYMMDD when the listing carries it, else None
+    # "3 years ago" / "2 days ago": what the listing page says, when it says anything.
+    # A guess to the unit, never a date: shown with a ~, never matched on.
+    approx_age: str | None = None
 
 
 @dataclass(frozen=True)
@@ -192,6 +195,29 @@ RATE_LIMITED = re.compile(
 
 def is_rate_limited(message: str) -> bool:
     return RATE_LIMITED.search(message) is not None
+
+
+# Answers that time will not change: the video is gone, walled off, or the request
+# itself is wrong. Retrying them for a day only delays the news; the job fails at once
+# and Retry by hand is there once something has changed (a cookies file, the format
+# string, the owner's mind). A bot check is deliberately NOT here: it is the address
+# being busy, and it passes again by itself.
+PERMANENT_FAILURE = re.compile(
+    r"video unavailable|has been removed|no longer available|account associated with this "
+    r"video has been terminated|this video is private|private video|members[- ]only|"
+    r"join this channel|sign in to confirm your age|age[- ]restricted|not available in your "
+    r"country|not made this video available|blocked it in your country|"
+    r"requested format is not available|unsupported url|http error 404|http error 410|"
+    r"is not a valid url",
+    re.IGNORECASE,
+)
+
+
+def is_permanent_failure(message: str) -> bool:
+    """Whether a download error is one no retry will fix (see PERMANENT_FAILURE). The bot
+    check and the rate-limit answer are outside that regex by construction; the tests
+    pin both as retryable, so the regex cannot quietly grow to swallow them."""
+    return PERMANENT_FAILURE.search(message) is not None
 
 
 @dataclass
@@ -375,6 +401,8 @@ class YtDlpSource:
         args: dict[str, dict[str, Any]] = {
             k: dict(v) for k, v in (base.get("extractor_args") or {}).items()
         }
+        # flat channel/playlist entries then carry a timestamp read off "3 years ago"
+        args["youtubetab"] = {"approximate_date": ["1"], **args.get("youtubetab", {})}
         if pot_provider_ready(self._pot_home):
             args["youtubepot-bgutilscript"] = {
                 "server_home": [str(self._pot_home)],
@@ -673,6 +701,30 @@ def videos_from_info(info: dict[str, Any]) -> list[VideoRef]:
 _UNAVAILABLE_TITLES = re.compile(r"^\[(private|deleted|unavailable) video\]$", re.IGNORECASE)
 
 
+_AGE_UNITS = (
+    ("year", 365 * 86400),
+    ("month", 30 * 86400),
+    ("week", 7 * 86400),
+    ("day", 86400),
+    ("hour", 3600),
+)
+
+
+def relative_age(timestamp: int | float | None, now: float | None = None) -> str | None:
+    """ "3 years ago" from an approximate timestamp yt-dlp derived from that very text
+    (now minus N units), so the largest whole unit gives the wording back."""
+    if not timestamp:
+        return None
+    secs = (now if now is not None else time.time()) - float(timestamp)
+    if secs < 0:
+        return None
+    for unit, size in _AGE_UNITS:
+        if secs >= size:
+            n = int(secs // size)
+            return f"{n} {unit}{'' if n == 1 else 's'} ago"
+    return "today"
+
+
 def _ref(e: dict[str, Any], index: int | None) -> VideoRef:
     vid = str(e["id"])
     url = e.get("webpage_url") or e.get("url") or f"https://www.youtube.com/watch?v={vid}"
@@ -680,12 +732,15 @@ def _ref(e: dict[str, Any], index: int | None) -> VideoRef:
     if _UNAVAILABLE_TITLES.match(title):
         title = vid  # the app's convention for a dead entry: title == id
     duration = e.get("duration")
+    upload_date = e.get("upload_date")
     return VideoRef(
         id=vid,
         title=title,
         url=str(url),
         duration=int(duration) if duration else None,
         playlist_index=int(index) if index is not None else None,
+        # a flat entry's timestamp is yt-dlp's reading of "N units ago" (approximate_date)
+        approx_age=None if upload_date else relative_age(e.get("timestamp")),
         upload_date=str(e["upload_date"]) if e.get("upload_date") else None,
     )
 

@@ -21,7 +21,7 @@
         <span class="two-line muted">{{ job.connection.name }}{% if job.subscription_id %} · subscription {{ job.subscription_id }}{% endif %}</span>
       </td>
       <td><a href="{{ job.video_url }}" target="_blank" rel="noopener" class="truncate" title="{{ job.video_title or job.video_id }}">{{ job.video_title or job.video_id }}</a>
-        {% if job.error %}<details class="error" id="err-{{ job.id }}" hx-preserve><summary class="{{ 'warn' if job.status.value == 'done' else 'bad' }}">{{ job.error.splitlines()[0] | truncate(60) }}</summary><pre>{{ job.error }}</pre></details>{% endif %}
+        {% if job.error %}<details class="error" id="err-{{ job.id }}" hx-preserve><summary class="{{ 'warn' if job.status.value == 'done' else 'bad' }}">{{ job.error.splitlines()[0] | truncate(60) }}</summary><pre>{{ job.error }}</pre></details>{% if causes is defined and causes.get(job.id) %}<span class="cause">{{ causes[job.id] }}</span>{% endif %}{% endif %}
       </td>
       <td class="num">
         {% if job.status.value == "downloading" %}<progress value="{{ job.progress_pct }}" max="100"></progress><br>{{ job.progress_pct }}%

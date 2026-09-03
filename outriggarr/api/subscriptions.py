@@ -49,6 +49,8 @@ class SubscriptionIn(BaseModel):
     date_tolerance_days: int = Field(default=2, ge=0, le=60)
     date_offset_days: int = Field(default=0, ge=-60, le=60)
     title_regex: str | None = Field(default=None, max_length=500)
+    # a phrase every candidate's title must contain (case-insensitive); pins are exempt
+    title_require: str | None = Field(default=None, max_length=100)
     enabled: bool = True
 
     @field_validator("auto_download")
@@ -99,7 +101,7 @@ class SubscriptionIn(BaseModel):
             )
         return list(dict.fromkeys(v))
 
-    @field_validator("format", "title_regex")
+    @field_validator("format", "title_regex", "title_require")
     @classmethod
     def _blank_to_none(cls, v: str | None) -> str | None:
         v = (v or "").strip()
