@@ -20,6 +20,13 @@ MIN_CONTAINMENT_TOKENS = 2
 # A video whose title carries one of these words while the episode title does not is
 # a promo for the episode, not the episode.
 PROMO_TOKENS = frozenset({"trailer", "teaser", "promo", "preview", "sneak", "recap"})
+# An ellipsis run inside an episode title is TVDB's wildcard for the words it does not
+# know yet: Hot Ones is "Caleb Williams .... While Eating Spicy Wings" against the
+# upload "Caleb Williams Goes “Iceman” Mode While Eating Spicy Wings". Such a title is
+# matched fragment by fragment, in order, each on word boundaries. A placeholder
+# fragment (an episode TVDB has not named) never matches anything.
+_ELLIPSIS = re.compile(r"\s*(?:\.{3,}|…+)\s*")
+PLACEHOLDER_FRAGMENTS = frozenset({"tba", "tbd"})
 
 
 @dataclass(frozen=True)
@@ -152,6 +159,27 @@ def normalise_title(text: str) -> str:
     text = _EP_PREFIX.sub("", text)
     text = _PUNCT.sub(" ", text)
     return _WS.sub(" ", text).strip()
+
+
+def wildcard_fragments(title: str) -> tuple[str, ...]:
+    """The normalised pieces either side of an ellipsis wildcard, or () when the title
+    has no gap to fill: a trailing "..." leaves one piece, which is plain containment."""
+    pieces = [normalise_title(piece) for piece in _ELLIPSIS.split(title)]
+    pieces = [piece for piece in pieces if piece]
+    return tuple(pieces) if len(pieces) >= 2 else ()
+
+
+def _contains_in_order(have: str, fragments: tuple[str, ...]) -> bool:
+    """Every fragment appears in `have`, in order, on word boundaries; the gaps between
+    them may be empty or any number of words."""
+    padded = f" {have} "
+    pos = 0
+    for fragment in fragments:
+        idx = padded.find(f" {fragment} ", pos)
+        if idx < 0:
+            return False
+        pos = idx + len(fragment) + 1  # the next fragment starts after this one's words
+    return True
 
 
 # "Part N" markers in the shapes uploaders use: "(Part 1/5)", "(Part 2)", "(1/5)",
@@ -317,11 +345,17 @@ def _title_candidates(ep: Episode, videos: list[Video]) -> tuple[str, list[Video
     want_tokens = want.split()
     if len(want) < MIN_CONTAINMENT_LEN or len(want_tokens) < MIN_CONTAINMENT_TOKENS:
         return ("none", [])
+    fragments = wildcard_fragments(ep.title)
+    if fragments and PLACEHOLDER_FRAGMENTS & set(fragments):
+        return ("none", [])
     out = []
     numbered = []  # containment plus the show's own number agreeing: as good as exact
     for v in videos:
         have = normalise_title(v.title)
-        if f" {want} " not in f" {have} ":
+        if fragments:
+            if not _contains_in_order(have, fragments):
+                continue
+        elif f" {want} " not in f" {have} ":
             continue
         if PROMO_TOKENS & (set(have.split()) - set(want_tokens)):
             continue

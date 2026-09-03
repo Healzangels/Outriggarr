@@ -23,6 +23,7 @@ from outriggarr.matcher import (
     parse_with_regex,
     show_number,
     videos_needing_dates,
+    wildcard_fragments,
 )
 
 
@@ -611,3 +612,107 @@ def test_mmss_reads_like_a_player() -> None:
     assert mmss(3600) == "1:00:00"
     assert mmss(3909) == "1:05:09"
     assert length_mismatch(24, 3909) == "video runs 1:05:09, Sonarr says the episode runs 24 min"
+
+
+# --- ellipsis wildcards in episode titles ("Caleb Williams .... While Eating Spicy Wings")
+
+
+@pytest.mark.parametrize(
+    ("title", "fragments"),
+    [
+        (
+            "Caleb Williams .... While Eating Spicy Wings",
+            ("caleb williams", "while eating spicy wings"),
+        ),
+        ("Bubbles... OF FIRE!!", ("bubbles", "of fire")),
+        ("Words vs. Numbers...BAR FIGHT!", ("words vs numbers", "bar fight")),
+        (
+            "It's Impossible to Find This Card…Isn't it?",
+            ("it s impossible to find this card", "isn t it"),
+        ),
+        ("The Alt Burger Journey Continues...", ()),  # trailing: one piece, plain containment
+        ("...And Justice for All", ()),
+        ("No gap here", ()),
+        ("3.5 Things", ()),  # a decimal point is not an ellipsis
+    ],
+)
+def test_wildcard_fragments(title: str, fragments: tuple[str, ...]) -> None:
+    assert wildcard_fragments(title) == fragments
+
+
+def test_wildcard_title_matches_across_the_gap_in_order_only() -> None:
+    eps = [ep(1, 31, 1, "Caleb Williams .... While Eating Spicy Wings")]
+    full = vid("a", "Caleb Williams Goes “Iceman” Mode While Eating Spicy Wings | Hot Ones")
+    videos = [
+        vid("b", "Shaq Goes Iceman Mode While Eating Spicy Wings | Hot Ones"),  # head missing
+        vid("c", "While Eating Spicy Wings, Caleb Williams Melts | Hot Ones"),  # wrong order
+        vid("d", "Caleb Williams Answers Your Questions | Hot Ones"),  # tail missing
+        full,
+    ]
+    r = match(eps, videos, [], MatchConfig(("title",)))
+    assert r.matches == (Match(eps[0], full, "title", "contains"),)
+    assert r.held == () and r.unmatched == ()
+
+
+def test_wildcard_placeholder_episode_never_matches() -> None:
+    # TVDB names an unaired Hot Ones episode "TBA .... While Eating Spicy Wings"; if it
+    # aired before TVDB named it, the tail alone must not pull in any upload
+    eps = [ep(1, 31, 2, "TBA .... While Eating Spicy Wings"), ep(2, 31, 3, "TBD ... Spicy Wings")]
+    videos = [
+        vid("a", "Caleb Williams Goes “Iceman” Mode While Eating Spicy Wings | Hot Ones"),
+        vid("b", "TBA Goes Iceman Mode While Eating Spicy Wings | Hot Ones"),  # even literally
+    ]
+    r = match(eps, videos, [], MatchConfig(("title",)))
+    assert r.matches == () and r.held == ()
+    assert [u.candidates["title"] for u in r.unmatched] == [(), ()]
+
+
+def test_wildcard_fragments_are_word_bounded() -> None:
+    eps = [ep(1, 31, 1, "Caleb William .... Spicy Wing")]
+    videos = [vid("a", "Caleb Williams Goes Iceman Mode While Eating Spicy Wings")]
+    r = match(eps, videos, [], MatchConfig(("title",)))
+    assert r.matches == () and r.unmatched[0].candidates["title"] == ()
+
+
+def test_wildcard_two_candidates_stay_ambiguous() -> None:
+    eps = [ep(1, 31, 1, "Caleb Williams .... While Eating Spicy Wings")]
+    videos = [
+        vid("a", "Caleb Williams Goes “Iceman” Mode While Eating Spicy Wings | Hot Ones"),
+        vid("b", "Caleb Williams Goes Iceman Mode While Eating Spicy Wings (Extended Cut)"),
+    ]
+    r = match(eps, videos, [], MatchConfig(("title",)))
+    assert r.matches == () and r.unmatched[0].candidates["title"] == ("a", "b")
+
+
+def test_wildcard_skips_promos_and_keeps_the_containment_floor() -> None:
+    eps = [ep(1, 31, 1, "Caleb Williams .... While Eating Spicy Wings"), ep(2, 1, 1, "A .... B")]
+    videos = [
+        vid("a", "TRAILER: Caleb Williams Goes Iceman Mode While Eating Spicy Wings"),
+        vid("b", "a x b"),
+    ]
+    r = match(eps, videos, [], MatchConfig(("title",)))
+    assert r.matches == () and [u.candidates["title"] for u in r.unmatched] == [(), ()]
+
+
+def test_wildcard_match_is_containment_so_the_length_check_applies() -> None:
+    eps = [Episode(1, 31, 1, "Caleb Williams .... While Eating Spicy Wings", None, 25)]
+    clip = Video(
+        "a", "Caleb Williams Goes Iceman Mode While Eating Spicy Wings", "https://x/a", None, 180
+    )
+    r = match(eps, [clip], [], MatchConfig(("title",)))
+    assert r.matches == () and len(r.held) == 1
+    assert r.held[0].tier == "contains" and r.held[0].reason.startswith("video runs 3:00")
+
+
+def test_wildcard_containment_loses_to_an_exact_claim_on_the_same_video() -> None:
+    eps = [ep(1, 1, 1, "Foo .... Bar"), ep(2, 1, 2, "Foo Baz Bar")]
+    videos = [vid("a", "Foo Baz Bar")]
+    r = match(eps, videos, [], MatchConfig(("title",)))
+    assert r.matches == (Match(eps[1], videos[0], "title", "exact"),)
+
+
+def test_trailing_ellipsis_title_still_matches_by_plain_containment() -> None:
+    eps = [ep(1, 7, 41, "THE ALT BURGER JOURNEY CONTINUES...")]
+    videos = [vid("a", "The Alt Burger Journey Continues... | F*ck, That's Delicious")]
+    r = match(eps, videos, [], MatchConfig(("title",)))
+    assert r.matches == (Match(eps[0], videos[0], "title", "contains"),)
