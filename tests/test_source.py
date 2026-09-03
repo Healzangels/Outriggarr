@@ -180,7 +180,7 @@ def test_ytdlp_source_merges_extra_opts_last(monkeypatch, tmp_path) -> None:
     assert with_cookies[0]["extract_flat"] == "in_playlist" and "logger" in with_cookies[0]
     src.list_recent("https://www.youtube.com/@c", 7)
     with_cookies = [c for c in seen if "cookiefile" in c]
-    assert with_cookies[1]["playlistend"] == 7 and with_cookies[1]["_jar"] == "# cookies"
+    assert with_cookies[1]["playlistend"] == 7 + 5 and with_cookies[1]["_jar"] == "# cookies"
 
 
 def test_subtitle_opts_and_sidecars(tmp_path) -> None:
@@ -245,7 +245,7 @@ def test_list_recent_caps_channels_but_lists_playlists_whole(monkeypatch) -> Non
     monkeypatch.setattr(yt_dlp, "YoutubeDL", StubYDL)
     src = YtDlpSource()
     assert len(src.list_recent("https://www.youtube.com/@c", 3)) == 3
-    assert seen[-1][0].endswith("/videos") and seen[-1][1]["playlistend"] == 3
+    assert seen[-1][0].endswith("/videos") and seen[-1][1]["playlistend"] == 3 + 5
     assert len(src.list_recent("https://www.youtube.com/playlist?list=PL1", 3)) == 5, (
         "playlists are not truncated"
     )
@@ -376,8 +376,9 @@ def test_unreadable_cookies_file_is_a_clear_error(monkeypatch, tmp_path) -> None
     from outriggarr.source import SourceError, YtDlpSource
 
     src = YtDlpSource(extra_opts=lambda: {"cookiefile": str(tmp_path / "missing.txt")})
-    with pytest.raises(SourceError, match="cookies file"):
+    with pytest.raises(SourceError, match="cookies file") as info:
         src.resolve("https://youtu.be/x")
+    assert str(info.value).startswith("cookies file"), "ours, not wrapped in 'could not run'"
 
 
 def test_ytdlp_gets_a_private_cookie_jar_and_never_clobbers_a_replaced_file(
@@ -910,7 +911,7 @@ def test_cooloff_escalates_only_after_a_pause_proved_too_short() -> None:
             "ERROR: [youtube] a: The uploader has not made this video available in your country",
             True,
         ),
-        ("ERROR: [youtube] a: Requested format is not available", True),
+        ("ERROR: [youtube] a: Requested format is not available", False),  # transient on YouTube
         ("ERROR: Unsupported URL: https://example.com/x", True),
         ("ERROR: unable to download webpage: HTTP Error 404: Not Found", True),
         # the address being busy, not the video: retried
@@ -977,3 +978,233 @@ def test_listing_asks_youtube_for_approximate_dates() -> None:
     source = YtDlpSource(extra_opts=lambda: {})
     opts = source._opts({"extractor_args": {"youtubetab": {"skip": ["webpage"]}}})
     assert opts["extractor_args"]["youtubetab"] == {"approximate_date": ["1"], "skip": ["webpage"]}
+
+
+class _ScriptedYDL:
+    """A yt-dlp stand-in that drives the progress hook with a scripted sequence."""
+
+    script: list[dict] = []
+    info: dict = {}
+    seen_opts: list[dict] = []
+
+    def __init__(self, opts):
+        self.opts = opts
+        type(self).seen_opts.append(opts)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def extract_info(self, url, download=False):
+        for event in type(self).script:
+            for hook in self.opts.get("progress_hooks", []):
+                hook(event)
+        return dict(type(self).info)
+
+
+def _drive_download(monkeypatch, tmp_path, script, progress, should_abort=lambda: False):
+    import yt_dlp
+
+    from outriggarr.source import YtDlpSource
+
+    out = tmp_path / "v1.mkv"
+    out.write_bytes(b"x")
+    _ScriptedYDL.script = script
+    _ScriptedYDL.info = {"id": "v1", "title": "t", "requested_downloads": [{"filepath": str(out)}]}
+    _ScriptedYDL.seen_opts = []
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", _ScriptedYDL)
+    src = YtDlpSource(extra_opts=lambda: {})
+    return src.download(
+        "https://y/v1",
+        tmp_path,
+        fmt="best",
+        merge_container="mkv",
+        progress=progress,
+        should_abort=should_abort,
+    )
+
+
+def test_download_progress_is_cumulative_across_video_and_audio(monkeypatch, tmp_path) -> None:
+    two = {"info_dict": {"requested_formats": [{}, {}]}}
+    script = [
+        {"status": "downloading", "downloaded_bytes": 50, "total_bytes": 100, **two},
+        {"status": "downloading", "downloaded_bytes": 100, "total_bytes": 100, **two},
+        {"status": "finished", **two},
+        {"status": "downloading", "downloaded_bytes": 0, "total_bytes": 40, **two},  # audio starts
+        {"status": "downloading", "downloaded_bytes": 20, "total_bytes": 40, **two},
+        {"status": "finished", **two},
+    ]
+    seen: list[float] = []
+    result = _drive_download(monkeypatch, tmp_path, script, seen.append)
+    assert seen == [25.0, 50.0, 50.0, 75.0], "one figure that never drops back"
+    assert result.video_id == "v1"
+
+
+def test_a_failing_progress_callback_does_not_discard_the_download(monkeypatch, tmp_path) -> None:
+    script = [{"status": "downloading", "downloaded_bytes": 1, "total_bytes": 2}]
+
+    def boom(pct):
+        raise RuntimeError("database is locked")
+
+    result = _drive_download(monkeypatch, tmp_path, script, boom)
+    assert result.path.exists()
+
+
+def test_the_hook_aborts_on_request(monkeypatch, tmp_path) -> None:
+    from outriggarr.source import DownloadAborted
+
+    script = [{"status": "downloading", "downloaded_bytes": 1, "total_bytes": 2}]
+    with pytest.raises(DownloadAborted):
+        _drive_download(monkeypatch, tmp_path, script, lambda p: None, should_abort=lambda: True)
+
+
+def test_fetch_info_refuses_a_collection_and_stays_flat(monkeypatch) -> None:
+    import yt_dlp
+
+    from outriggarr.source import YtDlpSource
+
+    _ScriptedYDL.script = []
+    _ScriptedYDL.info = {
+        "_type": "playlist",
+        "id": "PL",
+        "entries": [{"id": "a", "title": "A"}, {"id": "b", "title": "B"}],
+    }
+    _ScriptedYDL.seen_opts = []
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", _ScriptedYDL)
+    with pytest.raises(SourceError, match="not a single video \\(2 entries"):
+        YtDlpSource(extra_opts=lambda: {}).fetch_info("https://www.youtube.com/playlist?list=PL")
+    assert _ScriptedYDL.seen_opts[0]["extract_flat"] == "in_playlist", "never one request per entry"
+
+
+def _ytdlp_stamp(listed, precision_seconds: int) -> float:
+    # yt-dlp: datetime_round(now - N units, unit): weeks/months/years round to the DAY,
+    # hours to the hour, half-up
+    raw = listed.timestamp()
+    return ((raw + precision_seconds / 2) // precision_seconds) * precision_seconds
+
+
+@pytest.mark.parametrize("clock", ["03:00", "13:00", "23:30"])
+@pytest.mark.parametrize(
+    ("back", "precision", "text"),
+    [
+        ({"days": 2}, 86400, "2 days ago"),
+        ({"days": 7}, 86400, "1 week ago"),
+        ({"days": 13}, 86400, "1 week ago"),
+        ({"hours": 5}, 3600, "5 hours ago"),
+        ({"years": 3}, 86400, "3 years ago"),
+    ],
+)
+def test_relative_age_reads_back_what_the_listing_said(
+    clock: str, back: dict, precision: int, text: str
+) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    h, m = (int(x) for x in clock.split(":"))
+    now = datetime(2026, 9, 2, h, m, tzinfo=UTC)
+    if "years" in back:
+        listed = now.replace(year=now.year - back["years"])
+    else:
+        listed = now - timedelta(**back)
+    assert relative_age(_ytdlp_stamp(listed, precision), now=now.timestamp()) == text
+
+
+def test_relative_age_calendar_month() -> None:
+    from datetime import UTC, datetime
+
+    now = datetime(2026, 3, 30, 13, 0, tzinfo=UTC).timestamp()
+    assert relative_age(now - 28 * 86400, now=now) == "1 month ago", "February is a month too"
+
+
+def test_list_recent_still_returns_the_newest_n_past_a_premiere_and_a_live_stream(
+    monkeypatch,
+) -> None:
+    import yt_dlp
+
+    from outriggarr.source import YtDlpSource
+
+    _ScriptedYDL.script = []
+    _ScriptedYDL.info = {
+        "_type": "playlist",
+        "id": "UC1",
+        "entries": [
+            {"id": "up", "title": "Premiere", "live_status": "is_upcoming"},
+            {"id": "live", "title": "Live", "live_status": "is_live"},
+            *({"id": f"v{i}", "title": f"V{i}"} for i in range(6)),
+        ],
+    }
+    _ScriptedYDL.seen_opts = []
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", _ScriptedYDL)
+    refs = YtDlpSource(extra_opts=lambda: {}).list_recent("https://www.youtube.com/@c", 3)
+    assert [r.id for r in refs] == ["v0", "v1", "v2"]
+    assert _ScriptedYDL.seen_opts[0]["playlistend"] == 8, "a few extra cover the entries left out"
+
+
+def test_cooloff_strikes_reset_once_a_pause_is_long_over() -> None:
+    t = [0.0]
+    c = CoolOff(clock=lambda: t[0])
+    assert c.hit("a") == 900
+    t[0] = 1000
+    assert c.hit("b") == 1800, "the last pause was too short: escalate"
+    t[0] = 1000 + 1800 + 3600 + 1  # more than the cap after the pause ended
+    assert c.hit("c") == 900, "a wall a long time ago is no reason to start high"
+
+
+def test_channel_home_tab_lists_the_uploads_tab() -> None:
+    from outriggarr.source import channel_videos_url
+
+    assert (
+        channel_videos_url("https://www.youtube.com/@c/featured")
+        == "https://www.youtube.com/@c/videos"
+    )
+    assert (
+        channel_videos_url("https://www.youtube.com/@c/featured?x=1")
+        == "https://www.youtube.com/@c/videos"
+    )
+
+
+def test_private_cookie_jar_leaves_no_temp_file_when_the_copy_fails(monkeypatch, tmp_path) -> None:
+    import shutil
+    import tempfile
+
+    from outriggarr.source import YtDlpSource
+
+    jar = tmp_path / "cookies.txt"
+    jar.write_text("# Netscape HTTP Cookie File\n")
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    monkeypatch.setattr(
+        shutil, "copyfile", lambda a, b: (_ for _ in ()).throw(OSError(28, "No space left"))
+    )
+    src = YtDlpSource(extra_opts=lambda: {"cookiefile": str(jar)})
+    with pytest.raises(OSError), src._private_cookie_jar({"cookiefile": str(jar)}):
+        pass
+    assert not list(tmp_path.glob("outriggarr-cookies-*")), "no orphaned private copy"
+
+
+def test_archive_search_answers_with_lists_and_odd_docs_are_tolerated() -> None:
+    from outriggarr.source import YtDlpSource
+
+    pages = [
+        [
+            {
+                "identifier": ["Scam_School_7"],
+                "title": ["Scam School 7: Lists"],
+                "date": ["2011-11-30T00:00:00Z"],
+                "mediatype": ["movies"],
+            },
+            "not a dict at all",
+            {
+                "identifier": "Scam_School_8",
+                "title": "Scam School 8",
+                "date": [],
+                "mediatype": "movies",
+            },
+        ]
+    ]
+    get, _calls = _archive_http(pages)
+    refs = YtDlpSource(http_get=get).list_recent("https://archive.org/details/scam_school", 50)
+    assert [(r.id, r.title, r.upload_date) for r in refs] == [
+        ("Scam_School_7", "Lists", "20111130"),
+        ("Scam_School_8", "Scam School 8", None),
+    ]

@@ -138,7 +138,8 @@ def channel_videos_url(url: str) -> str:
     """A bare YouTube channel URL lists featured shelves; its /videos tab is the flat,
     newest-first upload list the scheduler wants. Other URLs pass through unchanged."""
     m = re.match(
-        r"^(https?://(?:www\.|m\.)?youtube\.com/(?:@[^/?#]+|channel/[^/?#]+|c/[^/?#]+|user/[^/?#]+))/?(?:[?#].*)?$",
+        r"^(https?://(?:www\.|m\.)?youtube\.com/(?:@[^/?#]+|channel/[^/?#]+|c/[^/?#]+|user/[^/?#]+))"
+        r"(?:/featured)?/?(?:[?#].*)?$",
         url.strip(),
     )
     return f"{m.group(1)}/videos" if m else url.strip()
@@ -207,7 +208,7 @@ PERMANENT_FAILURE = re.compile(
     r"video has been terminated|this video is private|private video|members[- ]only|"
     r"join this channel|sign in to confirm your age|age[- ]restricted|not available in your "
     r"country|not made this video available|blocked it in your country|"
-    r"requested format is not available|unsupported url|http error 404|http error 410|"
+    r"unsupported url|http error 404|http error 410|"
     r"is not a valid url",
     re.IGNORECASE,
 )
@@ -242,6 +243,8 @@ class CoolOff:
         if self.active():
             self.message = self.message or message
             return self.remaining()
+        if self.until and self.clock() - self.until > self.cap_seconds:
+            self.strikes = 0  # the last pause was long over: start the ladder again
         wait = min(self.base_seconds * 2**self.strikes, self.cap_seconds)
         self.strikes += 1
         self.until = self.clock() + wait
@@ -347,6 +350,9 @@ class YtDlpSource:
             )
             docs = (data.get("response") or {}).get("docs") or []
             for d in docs:
+                if not isinstance(d, dict):
+                    continue
+                d = {k: (v[0] if isinstance(v, list) and v else v) for k, v in d.items()}
                 if d.get("mediatype") not in ARCHIVE_MEDIATYPES or not d.get("identifier"):
                     continue
                 date = str(d.get("date") or "")[:10].replace("-", "")
@@ -432,7 +438,12 @@ class YtDlpSource:
         was_signed_in = has_signin_cookie(Path(original).read_text(errors="replace"))
         fd, private = tempfile.mkstemp(prefix="outriggarr-cookies-", suffix=".txt")
         os.close(fd)
-        shutil.copyfile(original, private)
+        try:
+            shutil.copyfile(original, private)
+        except OSError:
+            with contextlib.suppress(OSError):
+                os.unlink(private)
+            raise
         try:
             yield {**opts, "cookiefile": private}
         finally:
@@ -465,6 +476,8 @@ class YtDlpSource:
                     os.replace(staged, original)  # atomic: a concurrent run sees old or new
             except OSError as exc:
                 log.warning("could not write rotated cookies back to %s: %s", original, exc)
+                with contextlib.suppress(OSError, NameError):
+                    os.unlink(staged)  # a half-written copy beside the export helps nobody
             finally:
                 with contextlib.suppress(OSError):
                     os.unlink(private)
@@ -480,6 +493,8 @@ class YtDlpSource:
                     yt_dlp.YoutubeDL(ydl_opts) as ydl,
                 ):
                     info = ydl.extract_info(url, download=False)
+            except SourceError:
+                raise  # ours already (an unreadable cookies file): not "could not run"
             except DownloadError as exc:
                 raise SourceError(str(exc)) from exc
             except Exception as exc:  # a bad format/option string raises inside YoutubeDL()
@@ -507,8 +522,9 @@ class YtDlpSource:
         target = channel_videos_url(url)
         opts = dict(_FLAT_OPTS)
         if target != url.strip() or "/videos" in target:
-            # Channel uploads are newest-first: the first N are the newest N.
-            opts["playlistend"] = limit
+            # Channel uploads are newest-first: the first N are the newest N. A few extra
+            # cover a premiere or a live stream pinned at the top, which are left out.
+            opts["playlistend"] = limit + 5
         # A playlist is in whatever order its owner chose; list it whole (flat listing is
         # cheap) so a newest-last playlist still surfaces its newest entries.
         return videos_from_info(self._extract(target, opts))[
@@ -516,9 +532,20 @@ class YtDlpSource:
         ]
 
     def fetch_info(self, url: str) -> VideoRef:
-        info = self._extract(url, {"skip_download": True, "quiet": True, "noplaylist": True})
-        (video,) = videos_from_info(info)
-        return video
+        # flat: a playlist/channel URL pasted here must not extract every entry
+        info = self._extract(
+            url,
+            {
+                "skip_download": True,
+                "quiet": True,
+                "noplaylist": True,
+                "extract_flat": "in_playlist",
+            },
+        )
+        videos = videos_from_info(info)
+        if len(videos) != 1:
+            raise SourceError(f"{url} is not a single video ({len(videos)} entries listed)")
+        return videos[0]
 
     def tag_audio_language(self, path: Path, language: str) -> None:
         tmp = path.with_name(f"{path.stem}.lang{path.suffix}")
@@ -558,14 +585,34 @@ class YtDlpSource:
 
         dest_dir.mkdir(parents=True, exist_ok=True)
 
+        finished_formats = 0
+
         def hook(d: dict[str, Any]) -> None:
+            nonlocal finished_formats
             if should_abort():
                 raise DownloadCancelled("aborted by outriggarr")
-            if d.get("status") == "downloading":
-                total = d.get("total_bytes") or d.get("total_bytes_estimate")
-                done = d.get("downloaded_bytes")
-                if total and done is not None:
-                    progress(min(100.0, 100.0 * done / total))
+            status = d.get("status")
+            if status == "finished":
+                finished_formats += 1
+                return
+            if status != "downloading":
+                return
+            total = d.get("total_bytes") or d.get("total_bytes_estimate")
+            done = d.get("downloaded_bytes")
+            if not total or done is None:
+                return
+            # bestvideo+bestaudio is two downloads, each reported 0→100 by yt-dlp: fold
+            # them into one monotonic figure so the UI never drops back and the stall
+            # guard sees the audio stream as progress
+            formats = len((d.get("info_dict") or {}).get("requested_formats") or ()) or 1
+            share = min(1.0, done / total)
+            pct = min(
+                100.0, 100.0 * (finished_formats + share) / max(formats, finished_formats + 1)
+            )
+            try:
+                progress(pct)
+            except Exception:  # a hiccup writing progress must not discard the download
+                log.warning("progress callback failed", exc_info=True)
 
         opts: dict[str, Any] = {
             "format": fmt,
@@ -594,6 +641,8 @@ class YtDlpSource:
                 if "aborted by outriggarr" in str(exc):
                     raise DownloadAborted(str(exc)) from exc
                 raise SourceError(f"yt-dlp stopped: {exc}") from exc
+            except SourceError:
+                raise  # ours already (an unreadable cookies file): not "could not run"
             except DownloadError as exc:
                 raise SourceError(str(exc)) from exc
             except OSError as exc:
@@ -701,15 +750,6 @@ def videos_from_info(info: dict[str, Any]) -> list[VideoRef]:
 _UNAVAILABLE_TITLES = re.compile(r"^\[(private|deleted|unavailable) video\]$", re.IGNORECASE)
 
 
-_AGE_UNITS = (
-    ("year", 365 * 86400),
-    ("month", 30 * 86400),
-    ("week", 7 * 86400),
-    ("day", 86400),
-    ("hour", 3600),
-)
-
-
 def relative_age(timestamp: int | float | None, now: float | None = None) -> str | None:
     """ "3 years ago" from an approximate timestamp yt-dlp derived from that very text
     (now minus N units), so the largest whole unit gives the wording back."""
@@ -718,11 +758,24 @@ def relative_age(timestamp: int | float | None, now: float | None = None) -> str
     secs = (now if now is not None else time.time()) - float(timestamp)
     if secs < 0:
         return None
-    for unit, size in _AGE_UNITS:
-        if secs >= size:
-            n = int(secs // size)
-            return f"{n} {unit}{'' if n == 1 else 's'} ago"
-    return "today"
+    # yt-dlp turns "N units ago" into now − N units rounded to the NEAREST day (hour for
+    # hours), so the way back is to round the same way — half-up, as yt-dlp does, not
+    # Python's half-to-even; flooring read every age after noon UTC one unit short
+    days = int(secs / 86400 + 0.5)
+    if days >= 365:
+        n, unit = days // 365, "year"
+    elif days >= 28:
+        n, unit = max(1, int(days / 30.44 + 0.5)), "month"
+    elif days >= 7:
+        n, unit = days // 7, "week"
+    elif days >= 1:
+        n, unit = days, "day"
+    else:
+        hours = int(secs / 3600 + 0.5)
+        if hours < 1:
+            return "today"
+        n, unit = hours, "hour"
+    return f"{n} {unit}{'' if n == 1 else 's'} ago"
 
 
 def _ref(e: dict[str, Any], index: int | None) -> VideoRef:
