@@ -132,6 +132,12 @@ label .hint { display: block; color: var(--o-muted); font-size: .82em; font-weig
 .form-actions { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; margin-top: .5rem; }
 .form-actions button { width: auto; margin: 0; }
 .form-actions .danger { margin-left: auto; }
+.form-actions form { margin: 0; }
+/* the date-fetch partial is swapped as one unit but lays out as two: its button joins
+   the row, its progress line takes a full row underneath */
+.form-actions > .date-fetch { display: contents; }
+.form-actions .date-fetch .notice { flex-basis: 100%; order: 99; margin: .25rem 0 0; }
+.form-actions .chips { margin-left: auto; }
 fieldset[role=group].pin { margin: 0; }
 /* a preset picker beside the free-text field it fills */
 .fill-row { display: grid; grid-template-columns: minmax(16rem, 2fr) 3fr; gap: .5rem; align-items: start; }

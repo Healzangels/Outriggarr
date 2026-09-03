@@ -4,6 +4,7 @@
   <button class="secondary" hx-post="/subscriptions/{{ sub.id }}/scan" hx-target="#preview" hx-indicator="#scan-busy">Scan now</button>
   <button hx-post="/subscriptions/{{ sub.id }}/download" hx-vals='{"all": "1"}' hx-target="#preview" hx-indicator="#scan-busy" {% if not queueable %}disabled{% endif %} title="Queue every current match, whatever the auto-download setting">Download all{% if queueable %} {{ queueable }}{% endif %}</button>
   <button id="download-selected" class="secondary" hx-post="/subscriptions/{{ sub.id }}/download" hx-include="#match-picks" hx-vals='{"selected": "1"}' hx-target="#preview" hx-indicator="#scan-busy" disabled title="Queue only the selected matches">Download selected <span class="count" id="selected-count">0</span></button>
+  {% include "partials/date_fetch.html" %}
   <span id="scan-busy" class="htmx-indicator muted" aria-busy="true">working…</span>
   <span class="chips">
     <span class="chip">{{ report.videos | length }} videos listed{% if report.sources > 1 %} from {{ report.sources }} sources{% endif %}</span>
@@ -16,7 +17,6 @@
   </span>
 </div>
 {% if notice %}<p class="notice" role="status" aria-live="polite">{{ notice }}</p>{% endif %}
-{% include "partials/date_fetch.html" %}
 {% if report.error %}<p class="notice bad">Scan failed: {{ report.error }}</p>{% endif %}
 {# "this source may not carry the series" is only a fair reading when the subscription has never matched anything; a fully imported series with a few absent episodes looks the same to the matcher #}
 {% set nothing_seen = report.unmatched and not report.matches and not report.skipped_existing and not has_history and (report.unmatched | map(attribute="candidates") | map("dictsort") | map("map", attribute="1") | map("sum", start=[]) | map("length") | sum == 0) %}

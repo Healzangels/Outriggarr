@@ -1,8 +1,10 @@
-<div id="date-fetch"{% if date_progress and date_progress.running %} hx-get="/subscriptions/{{ sub.id }}/dates/status" hx-trigger="every 3s" hx-swap="outerHTML"{% endif %}>
-{% if date_progress_text %}<p class="notice {{ 'bad' if date_progress and date_progress.failure else '' }}" role="status" aria-live="polite" {% if date_progress and date_progress.running %}aria-busy="true"{% endif %}>{{ date_progress_text }}</p>{% endif %}
+{# Lives inside the preview's action row (display: contents), so the button sits with
+   its neighbours at their size; the progress line drops to a full-width row below. #}
+<div id="date-fetch" class="date-fetch"{% if date_progress and date_progress.running %} hx-get="/subscriptions/{{ sub.id }}/dates/status" hx-trigger="every 3s" hx-swap="outerHTML"{% endif %}>
 {% if undated is not none and "date" in sub.strategies and undated %}
-<form class="inline" hx-post="/subscriptions/{{ sub.id }}/dates" hx-target="#date-fetch" hx-swap="outerHTML">
+<form hx-post="/subscriptions/{{ sub.id }}/dates" hx-target="#date-fetch" hx-swap="outerHTML">
   <button type="submit" class="secondary outline" {% if date_progress and date_progress.running %}disabled{% endif %} title="Flat listings carry no upload date and a scan fetches only a few per pass, newest first. This fetches every undated listed video once, in the background, and keeps the dates; then Scan now can pair by date.">Fetch upload dates <span class="count">{{ undated }} undated</span></button>
 </form>
 {% endif %}
+{% if date_progress_text %}<p class="notice {{ 'bad' if date_progress and date_progress.failure else '' }}" role="status" aria-live="polite" {% if date_progress and date_progress.running %}aria-busy="true"{% endif %}>{{ date_progress_text }}</p>{% endif %}
 </div>
