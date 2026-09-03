@@ -370,7 +370,8 @@ def test_subscription_episodes_panel_states_and_jobs(client: TestClient) -> None
     html = client.get(f"/subscriptions/{sub_id}/episodes").text
     assert html.index("Season 30") < html.index("Season 29"), "newest season first"
     assert "1/4 files" in html and "1 missing" in html
-    assert "1 complete season" in html and "S29 1/1" in html, "complete seasons fold"
+    assert "1/1 files" in html, "every season has its own row, complete ones too"
+    assert "complete season" not in html
     for needle in ("✓ file", ">missing<", ">unaired<", ">unmonitored<"):
         assert needle in html, needle
     assert "status-queued" in html and "#1" in html, "the queued job is linked to S30E06"
