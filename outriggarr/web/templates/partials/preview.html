@@ -32,7 +32,8 @@
 {% if report.dry_run and queueable and not auto_count %}<p class="muted">Nothing here queues by itself: tick the episodes you want and press Download selected, or Download all.</p>{% endif %}
 <div class="table-wrap">
 <table>
-  <thead><tr><th><input type="checkbox" id="tick-all" aria-label="tick all"></th><th>Episode</th><th>Video</th><th>Matched by</th><th>Job</th></tr></thead>
+  {% set show_job = report.matches | selectattr("job_id") | list or report.matches | selectattr("skipped") | list or (report.dry_run and auto_count) %}
+  <thead><tr><th><input type="checkbox" id="tick-all" aria-label="tick all"></th><th>Episode</th><th>Video</th><th>Matched by</th>{% if show_job %}<th>Job</th>{% endif %}</tr></thead>
   <tbody id="match-picks">
   {% for m in report.matches %}
     <tr>
@@ -40,7 +41,7 @@
       <td><strong>{{ m.code }}</strong> {{ m.title }}<span class="two-line muted">{{ m.air_date or "" }}</span></td>
       <td><a href="{{ m.video_url }}" target="_blank" rel="noopener" class="truncate" title="{{ m.video_title }}">{{ m.video_title }}</a><span class="two-line muted mono">{{ m.video_id }}</span></td>
       <td><span class="chip">{{ tier_label(m.tier if m.strategy == "title" else m.strategy) }}</span></td>
-      <td>{% if m.job_id %}<a href="/activity" class="job-ref">#{{ m.job_id }}</a>{% elif m.skipped %}<span class="muted">{{ m.skipped }}</span>{% elif report.dry_run and m.auto %}<span class="muted nowrap">queues on the next scan</span>{% endif %}</td>
+      {% if show_job %}<td>{% if m.job_id %}<a href="/activity" class="job-ref">#{{ m.job_id }}</a>{% elif m.skipped %}<span class="muted">{{ m.skipped }}</span>{% elif report.dry_run and m.auto %}<span class="muted nowrap">queues on the next scan</span>{% endif %}</td>{% endif %}
     </tr>
   {% endfor %}
   </tbody>

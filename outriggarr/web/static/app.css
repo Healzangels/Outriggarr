@@ -79,8 +79,9 @@ tr.quiet .job-id { opacity: .85; }
 tr.quiet .badge { background: transparent; border: 1px solid #2f6b3a; color: var(--o-ok); line-height: 1.45; }
 tr.quiet .badge-cancelled { border-color: #555; color: var(--o-muted); }
 td.evidence .chip { vertical-align: middle; }
-td.evidence .length { font-size: .88em; margin: 0 .35em; }
-table.matches th:first-child { width: 32%; }  /* episode labels mostly fit one line */
+td.evidence .length { font-size: .88em; margin: 0 .35em; white-space: nowrap; }  /* "6:54 vs 10:00 ✓" is one fact */
+table.matches th:first-child { width: 30%; }  /* episode labels mostly fit one line */
+table.matches td.when { width: 6.5rem; }
 #matches-content .form-actions { margin: 0 0 .75rem; }
 tr.attention td:first-child { box-shadow: inset 3px 0 0 var(--o-warn); }
 details.explainer { margin: -.5rem 0 1rem; }
