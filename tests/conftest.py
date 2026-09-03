@@ -31,13 +31,15 @@ def settings(tmp_path: Path) -> Settings:
             "OUTRIGGARR_CONFIG_DIR": str(tmp_path / "config"),
             "OUTRIGGARR_STAGING_DIR": str(tmp_path / "staging"),
             "OUTRIGGARR_LOG_LEVEL": "WARNING",
+            # never the host's; a suite run inside the image must see the same answer
+            "OUTRIGGARR_POT_SERVER_HOME": str(tmp_path / "no-bgutil"),
         }
     )
 
 
 @pytest.fixture
 def session_factory(settings: Settings):
-    settings.config_dir.mkdir(parents=True)
+    settings.config_dir.mkdir(parents=True, exist_ok=True)  # the client fixture may have made it
     run_migrations(settings.database_url)
     engine = make_engine(settings.database_url)
     yield make_session_factory(engine)

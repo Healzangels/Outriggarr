@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 
+import pytest
 from fastapi.testclient import TestClient
 
 from outriggarr.db.models import Job, JobStatus
@@ -1802,3 +1803,17 @@ def test_listed_videos_panel_is_capped(client: TestClient) -> None:
     listed = prev.split("<summary>7 videos listed")[1]
     assert listed.count("<li>") == 5 and "…and 2 more" in listed
     assert prev.count('<option value="https://y/v') == 7, "the pin picker still offers every one"
+
+
+def test_templates_refuse_undefined_names() -> None:
+    # a renamed context key must be an error in the suite, not a blank in production
+    from jinja2 import StrictUndefined, UndefinedError
+
+    from outriggarr.web.pages import templates
+
+    assert templates.env.undefined is StrictUndefined
+    with pytest.raises(UndefinedError):
+        templates.env.from_string("{{ nobody_passes_this }}").render()
+    assert templates.env.from_string("{{ notice }}|{{ notice_bad }}").render() == "None|False", (
+        "the optional notice keys default; everything else must be passed"
+    )

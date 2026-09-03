@@ -9,8 +9,7 @@ from datetime import UTC, datetime
 import httpx
 import pytest
 
-from outriggarr.arr.base import ArrError, CommandStatus, WantedEpisode, WantedMovie
-from outriggarr.arr.common import PAGE_SIZE
+from outriggarr.arr.base import ArrError, CommandStatus
 from outriggarr.arr.radarr import RadarrClient
 from outriggarr.arr.sonarr import SonarrClient
 
@@ -34,19 +33,6 @@ def make(cls, handler):
     rec = Recorder(handler)
     http = httpx.AsyncClient(transport=httpx.MockTransport(rec))
     return cls(BASE, KEY, http), rec
-
-
-def paged(records: list[dict], page: int, page_size: int) -> httpx.Response:
-    start = (page - 1) * page_size
-    return httpx.Response(
-        200,
-        json={
-            "page": page,
-            "pageSize": page_size,
-            "totalRecords": len(records),
-            "records": records[start : start + page_size],
-        },
-    )
 
 
 async def test_status_uses_v3_path_base_and_api_key_header() -> None:
@@ -113,69 +99,6 @@ def _ep(i: int, series_id: int, **kw) -> dict:
     }
 
 
-async def test_sonarr_wanted_pages_and_filters_by_series() -> None:
-    records = [_ep(i, series_id=1 if i % 2 else 2) for i in range(1, PAGE_SIZE * 2 + 6)]
-
-    def handler(r: httpx.Request) -> httpx.Response:
-        assert r.url.path == "/base/api/v3/wanted/missing"
-        assert r.url.params["monitored"] == "true"
-        assert r.url.params["includeSeries"] == "true"
-        return paged(records, int(r.url.params["page"]), int(r.url.params["pageSize"]))
-
-    client, rec = make(SonarrClient, handler)
-    got = await client.wanted(series_id=1)
-    assert len(rec.requests) == 3  # 200 + 200 + 5 records, three pages
-    assert all(isinstance(e, WantedEpisode) for e in got)
-    assert {e.series_id for e in got} == {1}
-    assert len(got) == len([r for r in records if r["seriesId"] == 1])
-    first = got[0]
-    assert first.series_title == "Show 1"
-    assert first.air_date_utc == datetime(2024, 3, 1, tzinfo=UTC)
-
-    everything = await client.wanted()
-    assert len(everything) == len(records)
-
-
-async def test_sonarr_wanted_stops_on_empty_page_even_if_total_lies() -> None:
-    def handler(r: httpx.Request) -> httpx.Response:
-        page = int(r.url.params["page"])
-        return httpx.Response(
-            200,
-            json={"totalRecords": 999, "records": [_ep(1, 1)] if page == 1 else []},
-        )
-
-    client, rec = make(SonarrClient, handler)
-    got = await client.wanted()
-    assert len(got) == 1
-    assert len(rec.requests) == 2
-
-
-async def test_sonarr_wanted_tolerates_missing_optional_fields() -> None:
-    rec_body = {"id": 5, "seriesId": 9, "seasonNumber": 2, "episodeNumber": 3}
-    client, _ = make(SonarrClient, lambda r: paged([rec_body], 1, PAGE_SIZE))
-    (ep,) = await client.wanted()
-    assert (ep.title, ep.air_date_utc, ep.series_title) == ("", None, None)
-
-
-async def test_radarr_wanted_parses_movies() -> None:
-    records = [
-        {"id": 7, "title": "A Film", "year": 2020, "tmdbId": 123},
-        {"id": 8, "title": "No Year"},
-    ]
-
-    def handler(r: httpx.Request) -> httpx.Response:
-        assert r.url.path == "/base/api/v3/wanted/missing"
-        assert r.url.params["monitored"] == "true"
-        return paged(records, int(r.url.params["page"]), int(r.url.params["pageSize"]))
-
-    client, _ = make(RadarrClient, handler)
-    got = await client.wanted()
-    assert got == [
-        WantedMovie(id=7, title="A Film", year=2020, tmdb_id=123),
-        WantedMovie(id=8, title="No Year", year=None, tmdb_id=None),
-    ]
-
-
 @pytest.mark.parametrize(
     ("path", "expected_parent", "listing", "expected"),
     [
@@ -209,20 +132,6 @@ async def test_path_visible_rejects_root() -> None:
     client, rec = make(SonarrClient, lambda r: httpx.Response(200, json={"directories": []}))
     assert await client.path_visible("/") is False
     assert rec.requests == []
-
-
-async def test_get_all_pages_passes_page_size() -> None:
-    seen = []
-
-    def handler(r: httpx.Request) -> httpx.Response:
-        seen.append(dict(r.url.params))
-        return httpx.Response(200, json={"totalRecords": 0, "records": []})
-
-    client, _ = make(RadarrClient, handler)
-    await client.wanted()
-    assert seen[0]["pageSize"] == str(PAGE_SIZE)
-    assert seen[0]["page"] == "1"
-    assert json.loads(json.dumps(seen))  # params are plain strings
 
 
 # ---- M2: manual import ------------------------------------------------------------

@@ -67,7 +67,7 @@ Strategies run in a fixed order and the first one that yields exactly one candid
 
 1. **Override** — a video pinned to an episode from the GUI. Always on.
 2. **Regex** — `title_regex` with named groups `episode` (required) and `season` (optional).
-3. **Title** — both sides lower-cased, punctuation stripped, whitespace collapsed, `Ep. 5` / `#5` / `Episode 5` prefixes removed; equality first, then containment (episode title of at least 6 characters). A subscription can require a phrase in every candidate's title (*Title must contain*) when a channel carries several shows; pins are exempt.
+3. **Title** — both sides lower-cased, punctuation stripped, whitespace collapsed, `Ep. 5` / `#5` / `Episode 5` prefixes removed; equality first, then containment (episode title of at least 6 characters and two words). A subscription can require a phrase in every candidate's title (*Title must contain*) when a channel carries several shows; pins are exempt.
 4. **Date** — upload date within *tolerance* days of the air date plus *offset*. Upload dates need a per-video fetch, so this only runs for still-unmatched episodes.
 
 ## JSON API

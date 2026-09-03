@@ -22,7 +22,6 @@ from outriggarr.arr.base import (
 
 log = logging.getLogger(__name__)
 
-PAGE_SIZE = 200
 IMPORT_MODE = "move"
 
 
@@ -71,19 +70,6 @@ class ArrHttp:
 
     async def post(self, path: str, body: Any) -> Any:
         return await self._request("POST", path, json=body)
-
-    async def get_all_pages(self, path: str, params: dict[str, Any]) -> list[dict[str, Any]]:
-        records: list[dict[str, Any]] = []
-        page = 1
-        while True:
-            data = await self.get(path, {**params, "page": page, "pageSize": PAGE_SIZE})
-            batch = data.get("records", [])
-            records.extend(batch)
-            if not batch or len(records) >= data.get("totalRecords", 0):
-                return records
-            page += 1
-
-    # -- shared endpoints ------------------------------------------------------------
 
     async def status(self) -> SystemStatus:
         data = await self.get("system/status")

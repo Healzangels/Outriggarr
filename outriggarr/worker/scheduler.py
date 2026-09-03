@@ -431,6 +431,7 @@ def _fill_report(report: ScanReport, result: MatchResult, videos: list[Video]) -
                 "strategy": m.strategy,
                 "tier": m.tier,
                 "job_id": None,
+                "skipped": None,  # the policy or the dedupe may fill it; the template reads it
             }
         )
     shown: set[int] = set()

@@ -47,5 +47,10 @@ ENV PATH="/app/.venv/bin:$PATH" \
 
 VOLUME ["/config"]
 
+# /health answers 503 when the worker or scheduler task has died: let the runtime see it
+HEALTHCHECK --interval=60s --timeout=10s --start-period=30s --retries=3 \
+    CMD python -c "import os, sys, urllib.request; sys.exit(0 if urllib.request.urlopen(f'http://127.0.0.1:{os.environ.get(\"OUTRIGGARR_PORT\", \"8080\")}/health', timeout=8).status == 200 else 1)" || exit 1
+
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["sh", "-c", "exec uvicorn outriggarr.main:app --host 0.0.0.0 --port ${OUTRIGGARR_PORT}"]
+# no access log: Activity polls every 3 s and Matches every 2 s while a page is open
+CMD ["sh", "-c", "exec uvicorn outriggarr.main:app --host 0.0.0.0 --port ${OUTRIGGARR_PORT} --no-access-log"]

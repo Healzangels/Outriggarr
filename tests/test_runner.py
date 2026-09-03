@@ -994,7 +994,10 @@ async def test_concurrency_limit_is_enforced(deps, session_factory) -> None:
     deps.source.download = slow
     stop = asyncio.Event()
     task = asyncio.create_task(run_worker(deps, stop))
-    await asyncio.sleep(0.3)
+    for _ in range(300):  # two downloads must start; how fast depends on the runner
+        await asyncio.sleep(0.01)
+        if in_flight[0] == 2:
+            break
     assert peak[0] == 2 and in_flight[0] == 2
     gate.set()
     for _ in range(300):

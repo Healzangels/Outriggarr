@@ -13,6 +13,7 @@ from typing import Annotated
 from fastapi import APIRouter, Form, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
+from jinja2 import StrictUndefined
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
@@ -77,7 +78,11 @@ from outriggarr.worker.scheduler import known_date_ids
 router = APIRouter(include_in_schema=False)
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+# strict: a renamed context key renders as an error in tests, not as a blank
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+templates.env.undefined = StrictUndefined
+# presentation extras every page may omit; anything else missing is a bug and renders as one
+templates.env.globals.update(notice=None, notice_bad=False)
 # Changes whenever a shipped static file does (mtimes are set when the image is built),
 # so versioned asset URLs can be cached as immutable.
 STATIC_TOKEN = format(

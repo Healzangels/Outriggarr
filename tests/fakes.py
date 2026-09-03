@@ -20,7 +20,6 @@ from outriggarr.arr.base import (
     SystemStatus,
     Target,
     TargetInfo,
-    Wanted,
 )
 from outriggarr.db.models import Connection, ConnectionKind
 from outriggarr.source import DownloadAborted, DownloadResult, SourceError, VideoRef
@@ -55,7 +54,6 @@ class FakeArrClient:
     kind: ConnectionKind = ConnectionKind.sonarr
     status_result: SystemStatus | Exception | None = None
     qualities: list[QualityDefinition] = field(default_factory=lambda: list(DEFAULT_QUALITIES))
-    wanted_items: list[Wanted] = field(default_factory=list)
     visible_paths: set[str] = field(default_factory=lambda: {"/staging"})
     path_error: Exception | None = None
     # manual-import behaviour
@@ -100,14 +98,6 @@ class FakeArrClient:
         self.calls.append(("quality_definitions", None))
         return list(self.qualities)
 
-    async def wanted(self, series_id: int | None = None) -> list[Wanted]:
-        self.calls.append(("wanted", series_id))
-        return [
-            w
-            for w in self.wanted_items
-            if series_id is None or getattr(w, "series_id", None) == series_id
-        ]
-
     async def path_visible(self, path: str) -> bool:
         self.calls.append(("path_visible", path))
         if self.path_error is not None:
@@ -131,7 +121,12 @@ class FakeArrClient:
         if series_id in self.series_titles:
             return self.series_titles[series_id]
         hit = next((s for s in self.series_list if s.id == series_id), None)
-        return hit.title if hit else ""
+        if hit is not None:
+            return hit.title
+        if series_id in self.episodes_by_series:
+            return ""  # the fake knows its episodes: it exists, its title is just not set
+        # the real client 404s (a deleted/re-added series) — a deterministic ArrError
+        raise ArrError(f"GET /api/v3/series/{series_id} -> HTTP 404: not found", retryable=False)
 
     async def episodes(self, series_id: int) -> list[EpisodeRef]:
         self.calls.append(("episodes", series_id))

@@ -45,7 +45,29 @@ jobs:
             type=sha,prefix=sha-
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-      - uses: docker/build-push-action@v6
+      - name: Build (local)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: outriggarr:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Smoke-run the image before it is pushed
+        # the build stage proves the PO-token script; this proves the final image: the
+        # app imports, ffmpeg/deno/node are on the path, the entrypoint drops privileges
+        run: |
+          docker run --rm -e PUID=99 -e PGID=100 outriggarr:ci sh -c '
+            set -e
+            python -c "import outriggarr.main"
+            ffmpeg -version >/dev/null
+            deno --version >/dev/null
+            node /opt/bgutil/server/build/generate_once.js --help >/dev/null
+            id -u | grep -qx 99
+          '
+      - name: Push
+        uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64
@@ -53,4 +75,3 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
