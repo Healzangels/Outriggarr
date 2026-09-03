@@ -1095,6 +1095,9 @@ def test_fetch_upload_dates_runs_in_the_background_and_caches(
     assert rows == {"a": "20160218", "b": None, "c": None}
     status_html = client.get(f"/subscriptions/{sub_id}/dates/status").text
     assert "Fetched dates for 1 of 3" in status_html and "every 3s" not in status_html
+    assert "Fetch upload dates" not in client.get(f"/subscriptions/{sub_id}/preview").text, (
+        "every listed video is now dated or known to carry no date: nothing left to offer"
+    )
     assert "Fetched dates" not in client.get(f"/subscriptions/{sub_id}/dates/status").text, (
         "shown once"
     )
@@ -1176,7 +1179,9 @@ def test_missing_episode_with_a_stale_job_offers_a_clear_button(client: TestClie
     assert r.status_code == 200 and f"Cleared job #{stale}." in r.text
     assert 'class="notice" role="status"' in r.text, "an action notice: the page fades it out"
     page = client.get(f"/subscriptions/{sub_id}").text
-    assert "htmx:afterSwap" in page
+    assert "htmx:afterSwap', () => arm(document)" in page, (
+        "a notice swapped in by outerHTML is never inside the event's target"
+    )
     assert "closest('summary')" in page and "summary.blur()" in page, (
         "mouse-toggled sections drop focus"
     )

@@ -69,6 +69,7 @@ from outriggarr.settings import (
     preset_for,
 )
 from outriggarr.source import cookies_state, pot_provider_ready
+from outriggarr.worker.scheduler import _date_known
 
 router = APIRouter(include_in_schema=False)
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
@@ -682,13 +683,22 @@ def subscription_page(request: Request, subscription_id: int, session: DbSession
     )
 
 
-def _date_fetch_context(request: Request, sub: Subscription, report=None) -> dict:
+def _date_fetch_context(request: Request, session: Session, sub: Subscription, report=None) -> dict:
     p = date_progress_map(request.app).get(sub.id)
     show = p is not None and (p.running or (p.finished_at is not None and not p.reported))
     if show and p is not None and not p.running:
         p.reported = True  # the finished summary reads like a notice: once
+    # The button counts exactly what a fetch would fetch: an undated video whose date the
+    # source already said it does not have (remembered for a week) is not "undated" here,
+    # or the button would come back after every fetch offering the same three videos.
     undated = (
-        sum(1 for v in report.videos if not v.get("upload_date") and v["title"] != v["id"])
+        sum(
+            1
+            for v in report.videos
+            if not v.get("upload_date")
+            and v["title"] != v["id"]
+            and not _date_known(session, v["id"])
+        )
         if report is not None
         else None
     )
@@ -714,7 +724,7 @@ def _preview_response(request: Request, session: DbSession, report, notice: str 
             "report": report,
             "notice": notice,
             "has_history": has_history,
-            **_date_fetch_context(request, sub, report),
+            **_date_fetch_context(request, session, sub, report),
         },
     )
 
@@ -728,7 +738,9 @@ async def subscription_fetch_dates(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "subscription not found")
     start_date_fetch(request.app, subscription_id)
     return templates.TemplateResponse(
-        request, "partials/date_fetch.html", {"sub": sub, **_date_fetch_context(request, sub)}
+        request,
+        "partials/date_fetch.html",
+        {"sub": sub, **_date_fetch_context(request, session, sub)},
     )
 
 
@@ -740,7 +752,9 @@ async def subscription_fetch_dates_status(
     if sub is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "subscription not found")
     return templates.TemplateResponse(
-        request, "partials/date_fetch.html", {"sub": sub, **_date_fetch_context(request, sub)}
+        request,
+        "partials/date_fetch.html",
+        {"sub": sub, **_date_fetch_context(request, session, sub)},
     )
 
 

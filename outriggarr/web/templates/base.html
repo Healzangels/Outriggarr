@@ -32,7 +32,9 @@
           setTimeout(() => dismiss(el), LINGER_MS);
         });
       };
-      document.addEventListener('htmx:afterSwap', (e) => arm(e.detail && e.detail.target ? e.detail.target : e.target));
+      // the whole document, not the swap target: an outerHTML swap replaces the target,
+      // so the new content is never inside the element the event names
+      document.addEventListener('htmx:afterSwap', () => arm(document));
       document.addEventListener('DOMContentLoaded', () => arm(document));
     })();
     // A section toggled with the mouse keeps the browser's focus ring (and Pico's focused
