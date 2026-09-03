@@ -110,6 +110,13 @@ button.x-clear { background: none; border: 0; color: var(--o-bad); padding: 0 .3
 button.x-clear:hover, button.x-clear:focus { opacity: 1; background: none; }
 fieldset[role=group].compact { margin: 0; }
 label .hint { display: block; color: var(--o-muted); font-size: .82em; font-weight: 400; }
+/* Side-by-side fields: hints differ in length, so without this the controls sit at
+   different depths and a row of inputs looks jumbled. Each label becomes a column with
+   its control pinned to the bottom of the (equal-height) grid cell; checkbox labels are
+   left alone, their control comes first. */
+.grid > label:has(> input:not([type=checkbox]):not([type=radio]), > select, > textarea, > .fill-row) { display: flex; flex-direction: column; }
+.grid > label > input:not([type=checkbox]):not([type=radio]), .grid > label > select, .grid > label > textarea, .grid > label > .fill-row { margin-top: auto; }
+.grid > label > .hint { margin-bottom: .35rem; }
 .form-actions { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; margin-top: .5rem; }
 .form-actions button { width: auto; margin: 0; }
 .form-actions .danger { margin-left: auto; }
