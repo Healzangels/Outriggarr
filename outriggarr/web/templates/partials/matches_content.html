@@ -31,7 +31,7 @@
       <td class="actions">
         {% if e.state == "confirmed" %}<form class="inline" hx-post="/matches/{{ job.id }}/unconfirm?{{ qs }}" hx-target="#matches-content" hx-swap="outerHTML"><button type="submit" class="secondary outline">undo</button></form>
         {% elif e.needs_look %}<form class="inline" hx-post="/matches/{{ job.id }}/confirm?{{ qs }}" hx-target="#matches-content" hx-swap="outerHTML"><button type="submit" class="secondary" title="You looked and it is the right video">Looks right</button></form>{% endif %}
-        {% if job.subscription_id %}<span class="two-line"><a href="/subscriptions/{{ job.subscription_id }}" class="muted" title="Open the subscription to pin the right video">wrong? pin</a></span>{% endif %}
+        {% if job.subscription_id %}<span class="two-line"><a href="/subscriptions/{{ job.subscription_id }}" class="muted" title="Open the subscription to pin the right video to this episode">wrong video? pin another</a></span>{% endif %}
       </td>
     </tr>
   {% endfor %}

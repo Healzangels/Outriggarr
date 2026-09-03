@@ -875,7 +875,9 @@ async def subscription_download(
     notice = None
     if not report.error:
         n = len(report.created_job_ids)
-        notice = f"Queued {n} job(s)." if n else "Nothing to queue: no new matches."
+        notice = (
+            f"Queued {n} job{'' if n == 1 else 's'}." if n else "Nothing to queue: no new matches."
+        )
     return _preview_response(request, session, report, notice)
 
 

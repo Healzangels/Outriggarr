@@ -199,7 +199,7 @@ def test_subscription_page_preview_scan_and_override(client: TestClient) -> None
     assert "2 matched" in scan.text and "Download all 2" in scan.text
     assert client.get("/api/jobs").json() == [], "Scan now never queues"
     dl = client.post(f"/subscriptions/{sub_id}/download")
-    assert dl.status_code == 200 and "Queued 2 job(s)" in dl.text
+    assert dl.status_code == 200 and "Queued 2 jobs." in dl.text
     assert len(client.get("/api/jobs").json()) == 2
     again = client.post(f"/subscriptions/{sub_id}/download")
     assert "Nothing to queue" in again.text and "disabled" in again.text
@@ -400,7 +400,7 @@ def test_override_form_accepts_a_url(client: TestClient) -> None:
     )
     assert r.status_code == 200
     assert "Override set for Seven, older upload (from URL)" in r.text
-    assert ">URL<" in r.text and "S30E07" in r.text
+    assert ">via URL<" in r.text and "S30E07" in r.text
     assert "select to download" in r.text  # S30E07 now matches via the override
     r = client.post(f"/subscriptions/{sub_id}/overrides", data={"season": "30", "episode": "7"})
     assert "Pick a video or paste a URL" in r.text
@@ -1025,7 +1025,7 @@ def test_subscribe_form_defaults_to_future_and_preview_downloads_selected(
     r = client.post(
         f"/subscriptions/{sub_id}/download", data={"selected": "1", "episode_id": ["11"]}
     )
-    assert "Queued 1 job(s)." in r.text
+    assert "Queued 1 job." in r.text
     assert [j["episode_ids"] for j in client.get("/api/jobs").json()] == [[11]]
 
 
@@ -1540,9 +1540,7 @@ def test_subscription_page_labels_its_facts_and_orders_the_preview(client: TestC
     assert prev.index('class="chips scan-summary"') < prev.index('class="form-actions"'), (
         "what the scan saw comes first, then what you can do about it"
     )
-    assert "1 wanted episode(s) already have jobs" in prev, (
-        "the scan queued it: not a match row now"
-    )
+    assert "1 wanted episode already has a job" in prev, "the scan queued it: not a match row now"
     assert (
         '<a href="/activity" class="job-ref">#'
         in client.get(f"/subscriptions/{sub_id}/episodes").text

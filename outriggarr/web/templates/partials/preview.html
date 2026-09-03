@@ -127,18 +127,18 @@
 <h4>Your pins</h4>
 <ul>
 {% for o in sub.overrides %}
-  <li><code>{{ o.video_id }}</code>{% if o.video_title %} <span class="muted">{{ o.video_title | truncate(60) }}</span>{% endif %} → S{{ "%02d" % o.season }}E{{ "%02d" % o.episode }}{% if o.video_url %} <span class="chip">URL</span>{% endif %}
+  <li><code>{{ o.video_id }}</code>{% if o.video_title %} <span class="muted">{{ o.video_title | truncate(60) }}</span>{% endif %} → S{{ "%02d" % o.season }}E{{ "%02d" % o.episode }}{% if o.video_url %} <span class="chip" title="Pinned by pasting a URL; the video need not be in the listing">via URL</span>{% endif %}
     <form class="inline" hx-post="/subscriptions/{{ sub.id }}/overrides/{{ o.video_id }}/delete" hx-target="#preview"><button type="submit" class="secondary outline">remove</button></form></li>
 {% endfor %}
 </ul>
 {% endif %}
 
 {% if report.skipped_existing %}
-<details class="plain"><summary>{{ report.skipped_existing | length }} wanted episode(s) already have jobs</summary>
-<ul>{% for s in report.skipped_existing %}<li>{{ s.code }} {{ s.title }} → job #{{ s.job_id }} <span class="badge badge-{{ s.job_status }}">{{ s.job_status }}</span></li>{% endfor %}</ul>
+<details class="plain"><summary>{% set n = report.skipped_existing | length %}{{ n }} wanted episode{{ '' if n == 1 else 's' }} already {{ 'has a job' if n == 1 else 'have jobs' }}</summary>
+<ul>{% for s in report.skipped_existing %}<li>{{ s.code }} {{ s.title }} → <a href="/activity" class="job-ref">#{{ s.job_id }}</a> <span class="badge badge-{{ s.job_status }}">{{ s.job_status }}</span></li>{% endfor %}</ul>
 </details>
 {% endif %}
 
-<details class="plain"><summary>{{ report.videos | length }} video(s) listed from the source{% if report.sources > 1 %}s{% endif %}</summary>
+<details class="plain"><summary>{% set n = report.videos | length %}{{ n }} video{{ '' if n == 1 else 's' }} listed from the source{% if report.sources > 1 %}s{% endif %}</summary>
 <ol>{% for v in report.videos %}<li>{% if v.title == v.id %}<span class="muted">unavailable video</span>{% else %}<a href="{{ v.url }}" target="_blank" rel="noopener">{{ v.title }}</a>{% endif %} <span class="muted mono">{{ v.id }}{% if v.upload_date %} · {{ v.upload_date }}{% elif v.approx_age %} · <span title="What the listing page says; the exact date needs a per-video fetch (Fetch upload dates)">~{{ v.approx_age }}</span>{% endif %}</span></li>{% endfor %}</ol>
 </details>

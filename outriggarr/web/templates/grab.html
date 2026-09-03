@@ -86,7 +86,7 @@
       </table></div>
       <div class="sticky-bar">
         <button type="button" @click="queue()" :disabled="queueing || !readyCount()" :aria-busy="queueing">
-          Queue <span x-text="readyCount()"></span> job(s)
+          Queue <span x-text="readyCount()"></span> <span x-text="readyCount() === 1 ? 'job' : 'jobs'"></span>
         </button>
         <span class="muted"><span x-text="rows.filter(r => r.include).length"></span> selected · <span x-text="readyCount()"></span> ready</span>
         <span class="notice" role="status" aria-live="polite" x-show="result" x-html="result" style="margin:0"></span>
@@ -185,7 +185,7 @@ function grabApp() {
       });
       try {
         const created = await this.api('POST', '/api/jobs', jobs);
-        this.result = `Queued ${created.length} job(s). <a href="/activity">Open Activity</a>.`;
+        this.result = `Queued ${created.length} ${created.length === 1 ? 'job' : 'jobs'}. <a href="/activity">Open Activity</a>.`;
         this.rows.forEach(r => { if (this.isReady(r)) r.include = false; });
       } catch (e) { this.error = e.message; }
       this.queueing = false;
