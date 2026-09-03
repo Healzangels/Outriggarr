@@ -7,12 +7,11 @@
 {% if not connections %}
 <p class="notice warn">No enabled connections. Add Sonarr or Radarr under <a href="/settings">Settings</a> first.</p>
 {% endif %}
-<p class="steps">1 · Paste a video or playlist URL → 2 · choose the target series or movie → 3 · queue.</p>
 <div x-data="grabApp()" x-init="init()">
   <form @submit.prevent="resolve()">
     <fieldset role="group">
       <input type="url" x-model="url" placeholder="Video or playlist URL" required>
-      <button type="submit" :aria-busy="resolving" :disabled="resolving">Resolve</button>
+      <button type="submit" :aria-busy="resolving" :disabled="resolving">List videos</button>
     </fieldset>
   </form>
   <p class="notice bad" x-show="error" x-text="error"></p>
@@ -20,7 +19,7 @@
   <template x-if="videos.length">
     <div>
       <div class="grid">
-        <label>Target
+        <label>Send to
           <select x-model.number="connectionId" @change="connectionChanged()">
             {% for c in connections %}<option value="{{ c.id }}">{{ c.name }} ({{ c.kind.value }})</option>{% endfor %}
           </select>

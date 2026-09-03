@@ -624,7 +624,7 @@ async def test_length_mismatch_is_held_not_queued_and_jobs_carry_the_evidence(
     assert [(h["code"], h["video_id"], h["tier"]) for h in report.held] == [
         ("S30E07", "v7", "contains")
     ]
-    assert report.held[0]["reason"] == "video runs 1m40s, Sonarr says the episode runs 30 min"
+    assert report.held[0]["reason"] == "video runs 1:40, Sonarr says the episode runs 30 min"
     assert [m["code"] for m in report.matches] == ["S30E06"] and not report.unmatched
     assert report.summary()["held"] == 1 and report.summary()["wanted"] == 2
     with session_factory() as s:

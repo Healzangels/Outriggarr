@@ -1,11 +1,11 @@
 {% if notice %}<p id="jobs-notice" hx-swap-oob="true" class="notice{{ ' bad' if notice_bad else '' }}" role="{{ 'alert' if notice_bad else 'status' }}" aria-live="polite">{{ notice }}</p>{% endif %}
 {% if total is defined and total > jobs | length %}<p class="muted">Showing the newest {{ jobs | length }} of {{ total }}.</p>{% endif %}
 {% if not jobs %}
-<p class="empty">No jobs{% if view != "all" %} in "{{ view }}"{% endif %}. Queue one from <a href="/grab">Grab</a> or subscribe to a series under <a href="/series">Series</a>.</p>
+<p class="empty">{% if view == "failed" %}No failed jobs.{% elif view == "active" %}Nothing running.{% elif view == "done" %}Nothing finished yet.{% else %}No jobs yet. Queue one from <a href="/grab">Grab</a> or subscribe to a series under <a href="/series">Series</a>.{% endif %}</p>
 {% else %}
 <div class="table-wrap">
 <table class="jobs">
-  <thead><tr><th>Job</th><th>Target</th><th>Video</th><th>When</th><th class="actions"></th></tr></thead>
+  <thead><tr><th>Job</th><th>Episode / movie</th><th>Video</th><th>When</th><th class="actions"></th></tr></thead>
   <tbody>
   {% set ns = namespace(day=None) %}
   {% for job in jobs %}
@@ -25,7 +25,7 @@
         {% if job.target_label %}{{ job.target_label }}{% else %}
           {% if job.target_kind.value == "episode" %}series {{ job.series_id }} · episodes {{ job.episode_ids }}{% else %}movie {{ job.movie_id }}{% endif %}
         {% endif %}
-        {% if not job.subscription_id %} <span class="chip" title="Queued from Grab, not by a subscription">grab</span>{% endif %}
+        {% if not job.subscription_id %} <span class="chip" title="Queued from Grab, not by a subscription">by hand</span>{% endif %}
       </td>
       <td><a href="{{ job.video_url }}" target="_blank" rel="noopener" class="truncate" title="{{ job.video_title or job.video_id }}">{{ job.video_title or job.video_id }}</a>
         {% if job.error %}<details class="error" id="err-{{ job.id }}-{{ job.attempts }}" hx-preserve><summary class="{{ 'warn' if job.status.value == 'done' else 'bad' }}">{{ job.error.splitlines()[0] | truncate(60) }}</summary><pre>{{ job.error }}</pre></details>{% if causes is defined and causes.get(job.id) %}<span class="cause">{{ causes[job.id] }}</span>{% endif %}{% endif %}
@@ -33,8 +33,8 @@
       <td class="muted when" title="created {{ job.created_at.strftime('%Y-%m-%d %H:%M') }}Z{% if job.finished_at %} · finished {{ job.finished_at.strftime('%Y-%m-%d %H:%M') }}Z{% endif %}">{{ when | ago }}</td>
       <td class="actions">
         {% if job.status in RETRYABLE %}<button hx-post="/activity/jobs/{{ job.id }}/retry?view={{ view }}" hx-target="#jobs">Retry</button>{% endif %}
-        {% if job.status in CANCELLABLE %}<button class="secondary outline" hx-post="/activity/jobs/{{ job.id }}/cancel?view={{ view }}" hx-target="#jobs" hx-confirm="Cancel job {{ job.id }}?">Cancel</button>{% endif %}
-        {% if job.status in DELETABLE and not (job.status.value == "failed" and job.next_retry_at) %}<button class="secondary outline" hx-post="/activity/jobs/{{ job.id }}/delete?view={{ view }}" hx-target="#jobs" hx-confirm="Delete job {{ job.id }} and its staged files?" title="Remove this job from the history">Delete</button>{% endif %}
+        {% if job.status in CANCELLABLE %}<button class="secondary outline" hx-post="/activity/jobs/{{ job.id }}/cancel?view={{ view }}" hx-target="#jobs" hx-confirm="Cancel job #{{ job.id }}?">Cancel</button>{% endif %}
+        {% if job.status in DELETABLE and not (job.status.value == "failed" and job.next_retry_at) %}<button class="secondary outline" hx-post="/activity/jobs/{{ job.id }}/delete?view={{ view }}" hx-target="#jobs" hx-confirm="Delete job #{{ job.id }} and its staged files?" title="Delete this job and its staged files">Delete</button>{% endif %}
       </td>
     </tr>
   {% endfor %}

@@ -56,14 +56,14 @@ No built-in authentication: put it behind your reverse proxy / SSO like the othe
 | Screen | What it does |
 |---|---|
 | Activity | Every job, newest first and grouped by day: status, progress while it runs, attempts, the verbatim error text with a plain-words likely cause; Retry, Cancel, Delete. Refreshes every 3 s. |
-| Matches | Every pairing a subscription made, riskiest first, with the evidence for each (how it matched, video length against Sonarr's runtime, your confirmation); *needs a look* holds the ones nothing vouches for; *Recheck lengths* fetches the missing evidence in the background. |
-| Series | Search Sonarr's series, subscribe with a source URL and matching options; per subscription: match preview (dry run), unmatched episodes with an override picker, *Scan now*, recent jobs. |
+| Matches | Every match a subscription made, riskiest first, with the evidence for each (how it matched, video length against Sonarr's runtime, your confirmation); *needs a look* holds the ones nothing vouches for; *Recheck lengths* fetches the missing evidence in the background. |
+| Series | Search Sonarr's series, subscribe with a source URL and matching options; per subscription: match preview (dry run), unmatched episodes with a pin picker, *Refresh preview*, recent jobs. |
 | Grab | Paste a URL/playlist → pick targets per row (bulk-fill for playlists, newest-first toggle) → queue. |
-| Settings | Connections and download options: scan interval, concurrency, videos per scan, default yt-dlp format, container, cookies file, extra yt-dlp options (JSON, merged last), audio language tag, optional Sonarr tag. |
+| Settings | Connections and download options: scan interval, concurrency, videos per scan, default quality (a yt-dlp format), file container, cookies file, extra yt-dlp options (JSON, merged last), audio language tag, optional Sonarr tag. |
 
 ## Matching
 
-Strategies run in a fixed order and the first one that yields exactly one candidate wins; zero or several fall through. A pairing that is not a pin or an exact title is then checked against the episode's runtime: a video shorter than half or longer than twice it (and off by more than five minutes) is *held* with the reason instead of queued; so is a video whose title names a part ("(Part 1/5)", "Part 1 of 2") when the episode is whole in Sonarr, because importing it would file a fragment as the episode. The *Matches* page lists every pairing riskiest first so a wrong one is a glance away (a pairing clears itself once its length agrees with the runtime, or when you mark it *Looks right*):
+Strategies run in a fixed order and the first one that yields exactly one candidate wins; zero or several fall through. A match that is not a pin or an exact title is then checked against the episode's runtime: a video shorter than half or longer than twice it (and off by more than five minutes) is *held* with the reason instead of queued; so is a video whose title names a part ("(Part 1/5)", "Part 1 of 2") when the episode is whole in Sonarr, because importing it would file a fragment as the episode. The *Matches* page lists every match riskiest first so a wrong one is a glance away (a match clears itself once its length agrees with the runtime, or when you mark it *Looks right*):
 
 1. **Override** — a video pinned to an episode from the GUI. Always on.
 2. **Regex** — `title_regex` with named groups `episode` (required) and `season` (optional).

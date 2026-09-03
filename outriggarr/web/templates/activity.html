@@ -2,11 +2,11 @@
 {% block title %}Activity · Outriggarr{% endblock %}
 {% block content %}
 <div class="page-header">
-  <div><h2>Activity</h2><p class="sub">Every job, newest first, grouped by day. Refreshes every 3 seconds.</p></div>
+  <div><h2>Activity</h2><p class="sub">Every job, newest first, grouped by day. Updates live.</p></div>
 </div>
 <nav class="tabs" aria-label="views">
   {% for f in filters %}
-    <a href="/activity?view={{ f }}" {% if f == view %}aria-current="page"{% endif %}>{{ f }}<span class="count">{{ counts[f] }}</span></a>
+    <a href="/activity?view={{ f }}" {% if f == view %}aria-current="page"{% endif %}>{{ f | capitalize }}<span class="count">{{ counts[f] }}</span></a>
   {% endfor %}
 </nav>
 <div id="jobs-notice"></div>

@@ -1,5 +1,5 @@
 """Match evidence: fetch what the scheduler did not record (older jobs) so the review
-page can clear pairings automatically instead of asking a person to eyeball them.
+page can clear matches automatically instead of asking a person to eyeball them.
 
 The recheck is a background task on the app: it outlives the request that started it,
 reports progress, and commits in small batches so rows clear as the evidence lands."""
@@ -66,9 +66,9 @@ class RecheckProgress:
         if self.finished_at is None:
             return ""
         if self.checked == 0:
-            return "Nothing left to check: every pairing already has its length evidence."
+            return "Nothing left to check: every match already has its length evidence."
         text = (
-            f"Checked {self.checked} pairings: {self.durations_filled} video lengths and "
+            f"Checked {self.checked} matches: {self.durations_filled} video lengths and "
             f"{self.runtimes_filled} runtimes fetched; {self.flagged} contradict their runtime."
         )
         if self.error_count:

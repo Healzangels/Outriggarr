@@ -7,7 +7,7 @@
     <p class="sub">{% for u in sub.sources %}<a href="{{ u }}" target="_blank" rel="noopener" class="truncate" title="{{ u }}">{{ u | replace("https://www.youtube.com/", "youtube.com/") }}</a>{% if not loop.last %} <span class="muted">·</span> {% endif %}{% endfor %}</p>
   </div>
   <dl class="meta" title="Subscription {{ sub.id }}">
-    <div><dt>Matching</dt><dd title="Videos you pin to an episode always win, then the automatic strategies in this order">pins{% for st in sub.strategies %} → {{ st }}{% endfor %}</dd></div>
+    <div><dt>Match order</dt><dd title="Videos you pin to an episode always win, then the automatic strategies in this order">pins{% for st in sub.strategies %} → {{ st }}{% endfor %}</dd></div>
     <div><dt>Last scan</dt><dd>{% if sub.last_scan_at %}<span title="{{ sub.last_scan_at.strftime('%Y-%m-%d %H:%M') }}Z">{{ sub.last_scan_at | ago }}</span>{% else %}never{% endif %}</dd></div>
   </dl>
 </div>
@@ -16,7 +16,7 @@
 <article class="card">
   <header>Match preview <span class="muted">· what the next scan would do</span></header>
   <div id="preview" hx-get="/subscriptions/{{ sub.id }}/preview" hx-trigger="load" hx-swap="innerHTML">
-    <p class="muted" aria-busy="true">Loading match preview…</p>
+    <p class="muted" aria-busy="true">Listing the sources and matching…</p>
   </div>
 </article>
 
@@ -29,8 +29,8 @@
 
 <article class="card">
   <header>Recent jobs from this subscription</header>
-  {% if not jobs %}<p class="muted">None yet.</p>{% else %}
-  <div class="table-wrap"><table><thead><tr><th>Job</th><th>Target</th><th>Video</th><th>When</th></tr></thead><tbody>
+  {% if not jobs %}<p class="muted">No jobs yet. Download from the preview above, or leave it to the scheduler and the auto-download setting.</p>{% else %}
+  <div class="table-wrap"><table><thead><tr><th>Job</th><th>Episode</th><th>Video</th><th>When</th></tr></thead><tbody>
   {% for job in jobs %}<tr><td class="nowrap"><a href="/activity" class="job-ref">#{{ job.id }}</a> <span class="badge badge-{{ job.status.value }} status status-{{ job.status.value }}">{{ job.status.value }}</span></td><td>{{ job.target_label }}</td><td><span class="truncate" title="{{ job.video_title }}">{{ job.video_title }}</span></td><td class="muted when">{{ (job.finished_at or job.created_at) | ago }}</td></tr>{% endfor %}
   </tbody></table></div>{% endif %}
 </article>
@@ -42,7 +42,7 @@
     {% include "partials/subscription_fields.html" %}
     <label><input type="checkbox" name="enabled" value="1" {% if sub.enabled %}checked{% endif %}> Enabled <span class="muted">(scanned on the schedule)</span></label>
     <div class="form-actions">
-      <button type="submit">Save</button>
+      <button type="submit">Save subscription</button>
       <button type="submit" form="delete-subscription" class="secondary outline danger">Delete subscription</button>
     </div>
   </form>

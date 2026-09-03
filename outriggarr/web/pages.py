@@ -125,7 +125,7 @@ def day_label(dt: datetime | None, now: datetime | None = None, tz: tzinfo | Non
 
 
 def ago(dt: datetime | None) -> str:
-    """'3 min ago' / 'in 2 h' — coarse, for tables; the exact time goes in a title attr."""
+    """'3 min ago' / 'in 2 hr' — coarse, for tables; the exact time goes in a title attr."""
     if dt is None:
         return ""
     if dt.tzinfo is None:
@@ -135,15 +135,41 @@ def ago(dt: datetime | None) -> str:
     secs = abs(int(delta.total_seconds()))
     if secs < 60:
         return "in under a minute" if future else "just now"
-    for unit, size in (("d", 86400), ("h", 3600), ("min", 60)):
+    for unit, size in (("day", 86400), ("hr", 3600), ("min", 60)):
         if secs >= size:
             n = secs // size
-            return f"in {n} {unit}" if future else f"{n} {unit} ago"
+            label = f"{n} {unit}{'s' if unit == 'day' and n != 1 else ''}"
+            return f"in {label}" if future else f"{label} ago"
     return "just now"
 
 
 templates.env.filters["ago"] = ago
 templates.env.filters["day_label"] = day_label
+
+# How a match was made, in the words the page uses (the matcher's tier and strategy
+# names are internal). "override" is a pin on screen; "title" as a bare strategy only
+# appears where the tier is unknown.
+TIER_LABELS = {
+    "override": "pinned",
+    "exact": "exact title",
+    "numbered": "show number",
+    "contains": "title contains",
+    "title": "title",
+    "date": "by date",
+    "regex": "regex",
+    "unknown": "unknown",
+}
+
+
+def tier_label(tier: str | None) -> str:
+    return TIER_LABELS.get(tier or "unknown", tier or "unknown")
+
+
+def _code(season: int, episode: int) -> str:
+    return f"S{season:02d}E{episode:02d}"
+
+
+templates.env.globals["tier_label"] = tier_label
 
 
 def _tooling(request: Request) -> dict:
@@ -335,6 +361,7 @@ def review_entry(job: Job) -> dict:
         "reason": reason,
         "state": state,
         "video_length": mmss(job.video_duration) if job.video_duration else None,
+        "runtime_length": mmss(job.target_runtime * 60) if job.target_runtime else None,
         "needs_look": state in ("length mismatch", "unchecked", "no runtime"),
     }
 
@@ -471,7 +498,7 @@ def matches_confirm_all(
         job.reviewed_at = now
     session.commit()
     return _matches_partial(
-        request, session, view, f"Confirmed {len(listed)} pairings.", show_all=limit == "all"
+        request, session, view, f"Confirmed {len(listed)} matches.", show_all=limit == "all"
     )
 
 
@@ -490,7 +517,7 @@ def activity_retry(
         retry_job(session, job_id)
     except HTTPException as exc:
         return _rows(request, session, view, notice=str(exc.detail), notice_bad=True)
-    return _rows(request, session, view, notice=f"Job {job_id} queued again.")
+    return _rows(request, session, view, notice=f"Job #{job_id} queued again.")
 
 
 @router.post("/activity/jobs/{job_id}/delete")
@@ -505,7 +532,7 @@ def activity_delete(
         delete_job(session, job_id, deps.staging_dir)
     except HTTPException as exc:
         return _rows(request, session, view, notice=str(exc.detail), notice_bad=True)
-    return _rows(request, session, view, notice=f"Job {job_id} deleted.")
+    return _rows(request, session, view, notice=f"Job #{job_id} deleted.")
 
 
 @router.post("/activity/jobs/{job_id}/cancel")
@@ -516,7 +543,7 @@ def activity_cancel(
         cancel_job(session, job_id)
     except HTTPException as exc:
         return _rows(request, session, view, notice=str(exc.detail), notice_bad=True)
-    return _rows(request, session, view, notice=f"Job {job_id} cancelled.")
+    return _rows(request, session, view, notice=f"Job #{job_id} cancelled.")
 
 
 # ---- Series / subscriptions -------------------------------------------------------
@@ -894,7 +921,7 @@ async def subscription_clear_job(
         return RedirectResponse("/series", status_code=302)
     try:
         delete_job(session, job_id, deps.staging_dir)
-        notice = f"Cleared job #{job_id}."
+        notice = f"Deleted job #{job_id}."
     except HTTPException as exc:
         notice = f"Job #{job_id} not cleared: {exc.detail}"
         return await _episodes_response(request, sub, session, arr_factory, notice, notice_bad=True)
@@ -965,12 +992,12 @@ async def _episodes_response(
 async def subscription_scan(
     request: Request, subscription_id: int, session: DbSession, deps: RunnerDepsDep
 ) -> HTMLResponse:
-    """Scan now = refresh the preview. Nothing is queued; that is the Download button."""
+    """Refresh preview = a dry-run scan. Nothing is queued; that is the Download button."""
     report = await run_scan(deps, subscription_id, dry_run=True)
     notice = None
     if not report.error:
         notice = (
-            f"Scan done: {len(report.matches)} matched, {len(report.unmatched)} unmatched, "
+            f"Preview refreshed: {len(report.matches)} matched, {len(report.unmatched)} unmatched, "
             f"{len(report.skipped_existing)} already have jobs. Nothing queued."
         )
     return _preview_response(request, session, report, notice)
@@ -1023,16 +1050,18 @@ async def subscription_add_override(
                 subscription_id,
                 OverrideByUrlIn(url=video_url, season=season, episode=episode),
             )
-            notice = f"Override set for {row.video_title or row.video_id} (from URL)."
+            notice = (
+                f"Pinned {row.video_title or row.video_id} to {_code(season, episode)} (from URL)."
+            )
         elif video_id:
             set_override(
                 session, subscription_id, video_id, OverrideIn(season=season, episode=episode)
             )
-            notice = f"Override set for {video_id}."
+            notice = f"Pinned {video_id} to {_code(season, episode)}."
         else:
             notice = "Pick a video or paste a URL."
     except Exception as exc:
-        notice = "Override not set: " + str(getattr(exc, "detail", None) or exc)
+        notice = "Pin not set: " + str(getattr(exc, "detail", None) or exc)
         failed = True
     report = await run_scan(deps, subscription_id, dry_run=True)
     return _preview_response(request, session, report, notice, notice_bad=failed)
@@ -1044,7 +1073,7 @@ async def subscription_delete_override(
 ) -> HTMLResponse:
     try:
         delete_override(session, subscription_id, video_id)
-        notice = f"Override removed for {video_id}."
+        notice = f"Pin removed: {video_id}."
     except HTTPException as exc:
         notice = str(exc.detail)
     report = await run_scan(deps, subscription_id, dry_run=True)
@@ -1172,7 +1201,8 @@ async def settings_downloads_post(request: Request, session: DbSession) -> HTMLR
             _settings_context(session, settings_error=detail),
             status_code=400,
         )
-    return RedirectResponse("/settings?saved=downloads", status_code=303)
+    saved = "notifications" if data.get("_notify_form") else "downloads"
+    return RedirectResponse(f"/settings?saved={saved}", status_code=303)
 
 
 def _connection_body(data: dict[str, str]) -> ConnectionIn:
@@ -1195,7 +1225,7 @@ async def settings_notify_test(request: Request, session: DbSession, deps: Runne
         text = (
             "✓ sent"
             if result["sent"]
-            else "✗ no target accepted the message (check the URLs / logs)"
+            else "✗ No service accepted it. Check the URLs, then the log."
         )
     except Exception as exc:
         text = "✗ " + str(getattr(exc, "detail", None) or exc)

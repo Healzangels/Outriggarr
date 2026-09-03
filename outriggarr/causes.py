@@ -40,7 +40,7 @@ _SESSION_ADVICE = {
     "then Retry.",
     "signed out": "the cookies file carries no live sign-in. Export it again from a private "
     "window (then close that window), then Retry.",
-    "signed in": "the signed-in account has no access to it. Pin another upload to the episode.",
+    "signed in": "the signed-in account has no access to it. Pin another video to the episode.",
 }
 
 _GENERAL: tuple[tuple[re.Pattern[str], str], ...] = (
@@ -50,7 +50,7 @@ _GENERAL: tuple[tuple[re.Pattern[str], str], ...] = (
     ),
     (
         re.compile(r"account associated with this video has been terminated", _R),
-        "The channel is gone from YouTube. Pin another upload to the episode.",
+        "The channel is gone from YouTube. Pin another video to the episode.",
     ),
     (
         re.compile(r"video unavailable|has been removed|no longer available", _R),

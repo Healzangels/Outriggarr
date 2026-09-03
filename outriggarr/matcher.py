@@ -123,8 +123,10 @@ def length_mismatch(runtime_minutes: int | None, duration_seconds: int | None) -
 
 
 def mmss(seconds: int) -> str:
+    """A length the way a player shows it: 4:08, 23:02, 1:05:09."""
     m, s = divmod(int(seconds), 60)
-    return f"{m}m{s:02d}s"
+    h, m = divmod(m, 60)
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
 
 
 _PUNCT = re.compile(r"[^\w\s]+", re.UNICODE)

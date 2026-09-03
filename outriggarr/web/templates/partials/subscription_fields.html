@@ -1,39 +1,39 @@
-<label>Source URLs <span class="hint">One per line: a channel (its newest uploads are scanned) or a playlist. Add another channel when some episodes are posted elsewhere; every scan lists all of them and matches against the lot.</span>
+<label>Source URLs <span class="hint">One per line: a channel (its newest videos are scanned) or a playlist. Add another channel when some episodes are posted elsewhere; every scan lists all of them and matches against the lot.</span>
   <textarea name="sources" rows="2" required placeholder="https://www.youtube.com/@channel">{{ sub.sources | join("\n") if sub else '' }}</textarea>
 </label>
 <fieldset>
   <legend>Automatic matching strategies <span class="muted">(videos you pin to an episode by hand always win, before any of these)</span></legend>
   {% for st in strategies %}
     <label><input type="checkbox" name="strategies" value="{{ st }}" {% if st in chosen %}checked{% endif %}> {{ st }}
-      <span class="muted">{% if st == "title" %}normalised title equality, then containment{% elif st == "date" %}upload date near the air date (per-video fetch, unmatched episodes only){% else %}named groups season/episode in the regex below{% endif %}</span></label>
+      <span class="muted">{% if st == "title" %}the same title once tidied, else the episode title inside the video title{% elif st == "date" %}upload date near the air date (fetched per video, only for episodes nothing else matched){% else %}season and episode numbers captured by the regex below{% endif %}</span></label>
   {% endfor %}
 </fieldset>
 <div class="grid">
   <label>Date tolerance (days)<input type="number" name="date_tolerance_days" min="0" max="60" value="{{ sub.date_tolerance_days if sub else 2 }}"></label>
-  <label>Date offset (days)<span class="hint">Positive if uploads land after the air date.</span><input type="number" name="date_offset_days" min="-60" max="60" value="{{ sub.date_offset_days if sub else 0 }}"></label>
+  <label>Date offset (days)<span class="hint">Positive if videos land after the air date.</span><input type="number" name="date_offset_days" min="-60" max="60" value="{{ sub.date_offset_days if sub else 0 }}"></label>
 </div>
 <div class="grid">
-  <label>Title regex <span class="hint">Optional, for channels that number their own uploads, e.g. <code>S(?P&lt;season&gt;\d+)E(?P&lt;episode&gt;\d+)</code> or <code>#(?P&lt;episode&gt;\d+)</code>.</span>
+  <label>Title regex <span class="hint">Optional, for channels that number their own videos, e.g. <code>S(?P&lt;season&gt;\d+)E(?P&lt;episode&gt;\d+)</code> or <code>#(?P&lt;episode&gt;\d+)</code>.</span>
     <input type="text" name="title_regex" value="{{ sub.title_regex or '' if sub else '' }}">
   </label>
-  <label>Title must contain <span class="hint">Optional, for a channel that carries several shows: only uploads whose title contains this phrase are candidates (case-insensitive). Pins are exempt.</span>
+  <label>Title must contain <span class="hint">Optional, for a channel that carries several series: only videos whose title contains this phrase are candidates (case-insensitive). Pins are exempt.</span>
     <input type="text" name="title_require" maxlength="100" value="{{ sub.title_require or '' if sub else '' }}" placeholder="e.g. Scam School">
   </label>
 </div>
-<label>Videos to list per scan <span class="hint">Blank uses the global setting ({{ scan_video_limit }}). Raise it for a channel whose episodes sit behind hundreds of newer uploads; a deep listing costs a few seconds per scan. Playlists are always listed whole.</span>
+<label>Videos to list per scan <span class="hint">Blank = the global setting ({{ scan_video_limit }}). Raise it for a channel whose episodes sit behind hundreds of newer uploads; a deep listing costs a few seconds per scan. Playlists are always listed whole.</span>
   <input type="number" name="video_limit" min="1" max="5000" value="{{ sub.video_limit or '' if sub else '' }}" placeholder="{{ scan_video_limit }}">
 </label>
 <fieldset>
   <legend>Automatic downloads <span class="muted">(what the scheduler queues by itself; the Download buttons in the preview are always yours)</span></legend>
   {% set mode = sub.auto_download if sub else "future" %}
-  <label><input type="radio" name="auto_download" value="future" {% if mode == "future" %}checked{% endif %}> Future episodes only <span class="muted">— episodes airing from {% if sub %}{{ sub.created_at.strftime('%Y-%m-%d') }}{% else %}today{% endif %} on; take the backlog from the preview when you choose</span></label>
-  <label><input type="radio" name="auto_download" value="all" {% if mode == "all" %}checked{% endif %}> Everything Sonarr wants <span class="muted">— backlog included; a big show means a big queue</span></label>
+  <label><input type="radio" name="auto_download" value="future" {% if mode == "future" %}checked{% endif %}> Future episodes only <span class="muted">— episodes airing from {% if sub %}{{ sub.created_at.strftime('%-d %b %Y') }}{% else %}today{% endif %} on; take the backlog from the preview when you choose</span></label>
+  <label><input type="radio" name="auto_download" value="all" {% if mode == "all" %}checked{% endif %}> Everything Sonarr wants <span class="muted">— backlog included; a big series means a big queue</span></label>
   <label><input type="radio" name="auto_download" value="none" {% if mode == "none" %}checked{% endif %}> Nothing automatic <span class="muted">— scans only refresh the preview; you pick what to download</span></label>
 </fieldset>
 <label>Audio language <span class="hint">Three-letter ISO 639-2 code, e.g. <code>jpn</code>. Blank = the language the source declares for the audio track (YouTube sets one per track), then the global default.</span>
   <input type="text" name="audio_language" maxlength="3" value="{{ sub.audio_language or '' if sub else '' }}" placeholder="declared by the source">
 </label>
-<label>yt-dlp format override <span class="hint">Blank uses the global default from Settings{% if global_format_preset %} ({{ global_format_preset.label }}){% endif %}. Pick a preset for this series alone, or write your own selector.</span>
+<label>Quality for this series <span class="hint">Blank = the global default from Settings{% if global_format_preset %} ({{ global_format_preset.label }}){% endif %}. Pick a preset for this series alone, or write your own yt-dlp format selector.</span>
   <div class="fill-row">
     <select data-fills="format" aria-label="format preset">
       <option value="" {% if not (sub and sub.format) %}selected{% endif %}>Global default</option>

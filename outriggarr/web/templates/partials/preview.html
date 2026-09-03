@@ -2,15 +2,15 @@
 {% set auto_count = report.matches | rejectattr("job_id") | selectattr("auto") | list | length %}
 <p class="chips scan-summary">
   <span class="chip">{{ report.videos | length }} videos listed{% if report.sources > 1 %} from {{ report.sources }} sources{% endif %}</span>
-  {% if sub.title_require %}<span class="chip" title="Only uploads whose title contains this phrase are candidates for this series (pins are exempt); set under Subscription settings">titles must contain “{{ sub.title_require }}”{% if report.in_scope is defined %} · {{ report.in_scope }} do{% endif %}</span>{% endif %}
+  {% if sub.title_require %}<span class="chip" title="Only videos whose title contains this phrase are candidates for this series (pins are exempt); set under Subscription settings">titles must contain “{{ sub.title_require }}”{% if report.in_scope is defined %} · {{ report.in_scope }} do{% endif %}</span>{% endif %}
   <span class="chip {{ 'ok' if report.matches else 'zero' }}">{{ report.matches | length }} matched</span>
   <span class="chip {{ 'warn' if report.unmatched else 'zero' }}">{{ report.unmatched | length }} unmatched</span>
-  {% if report.held %}<span class="chip warn" title="Paired, but something contradicts it: the video's length against the episode's runtime, or the video is one part of a split upload">{{ report.held | length }} held</span>{% endif %}
+  {% if report.held %}<span class="chip warn" title="Matched, but something contradicts it: the video's length against the episode's runtime, or the video is one part of a split upload">{{ report.held | length }} held</span>{% endif %}
   <span class="chip {{ '' if report.skipped_existing else 'zero' }}">{{ report.skipped_existing | length }} already have jobs</span>
-  <span class="chip" title="What the scheduler queues by itself: {{ sub.auto_download }}">auto: {% if sub.auto_download == "future" %}future only, {{ auto_count }} of {{ queueable }} would queue{% elif sub.auto_download == "all" %}everything{% else %}nothing{% endif %}</span>
+  <span class="chip" title="What the scheduler queues by itself; set under Subscription settings">auto-download: {% if sub.auto_download == "future" %}future only · {{ auto_count }} of {{ queueable }} would queue{% elif sub.auto_download == "all" %}everything{% else %}nothing{% endif %}</span>
 </p>
 <div class="form-actions">
-  <button class="secondary" hx-post="/subscriptions/{{ sub.id }}/scan" hx-target="#preview" hx-indicator="#scan-busy">Scan now</button>
+  <button class="secondary" hx-post="/subscriptions/{{ sub.id }}/scan" hx-target="#preview" hx-indicator="#scan-busy" title="List the sources again and re-match; nothing is queued">Refresh preview</button>
   <button hx-post="/subscriptions/{{ sub.id }}/download" hx-vals='{"all": "1"}' hx-target="#preview" hx-indicator="#scan-busy" {% if not queueable %}disabled{% endif %} title="Queue every current match, whatever the auto-download setting">Download all{% if queueable %} {{ queueable }}{% endif %}</button>
   <button id="download-selected" class="secondary" hx-post="/subscriptions/{{ sub.id }}/download" hx-include="#match-picks" hx-vals='{"selected": "1"}' hx-target="#preview" hx-indicator="#scan-busy" disabled title="Queue only the selected matches">Download selected <span class="count" id="selected-count">0</span></button>
   {% include "partials/date_fetch.html" %}
@@ -28,14 +28,14 @@
 <h4>Matches</h4>
 <div class="table-wrap">
 <table>
-  <thead><tr><th><input type="checkbox" id="tick-all" aria-label="tick all"></th><th>Episode</th><th>Video</th><th>How</th><th>Job</th></tr></thead>
+  <thead><tr><th><input type="checkbox" id="tick-all" aria-label="tick all"></th><th>Episode</th><th>Video</th><th>Matched by</th><th>Job</th></tr></thead>
   <tbody id="match-picks">
   {% for m in report.matches %}
     <tr>
       <td>{% if not m.job_id %}<input type="checkbox" name="episode_id" value="{{ m.episode_id }}" aria-label="download {{ m.code }}">{% endif %}</td>
       <td><strong>{{ m.code }}</strong> {{ m.title }}<span class="two-line muted">{{ m.air_date or "" }}</span></td>
       <td><a href="{{ m.video_url }}" target="_blank" rel="noopener" class="truncate" title="{{ m.video_title }}">{{ m.video_title }}</a><span class="two-line muted mono">{{ m.video_id }}</span></td>
-      <td><span class="chip">{{ m.strategy }}</span></td>
+      <td><span class="chip">{{ tier_label(m.tier if m.strategy == "title" else m.strategy) }}</span></td>
       <td>{% if m.job_id %}<a href="/activity" class="job-ref">#{{ m.job_id }}</a>{% elif m.skipped %}<span class="muted">{{ m.skipped }}</span>{% elif report.dry_run %}<span class="muted">{% if m.auto %}queues on the next scan{% else %}select to download{% endif %}</span>{% endif %}</td>
     </tr>
   {% endfor %}
@@ -54,6 +54,7 @@
     const update = () => {
       const n = picks.querySelectorAll('input[name=episode_id]:checked').length;
       count.textContent = n;
+      count.hidden = n === 0;
       button.disabled = n === 0;
       if (all) { all.checked = n > 0 && n === boxes().length; all.indeterminate = n > 0 && n < boxes().length; }
     };
@@ -65,7 +66,7 @@
 {% endif %}
 
 {% if report.held %}
-<h4>Held <span class="muted">· paired, but something contradicts it: the video's length against the episode's runtime, or the video is one part of a split upload; nothing is queued unless you pin it</span></h4>
+<h4>Held <span class="muted">· matched, but something contradicts it: the video's length against the episode's runtime, or the video is one part of a split upload; nothing is queued unless you pin it</span></h4>
 <div class="table-wrap">
 <table>
   <thead><tr><th>Episode</th><th>Video</th><th>Why held</th><th></th></tr></thead>
@@ -73,12 +74,12 @@
   {% for h in report.held %}
     <tr>
       <td><strong>{{ h.code }}</strong> {{ h.title }}<span class="two-line muted">{{ h.air_date or "" }}</span></td>
-      <td><a href="{{ h.video_url }}" target="_blank" rel="noopener" class="truncate" title="{{ h.video_title }}">{{ h.video_title }}</a><span class="two-line"><span class="chip">{{ h.tier }}</span></span></td>
+      <td><a href="{{ h.video_url }}" target="_blank" rel="noopener" class="truncate" title="{{ h.video_title }}">{{ h.video_title }}</a><span class="two-line"><span class="chip">{{ tier_label(h.tier) }}</span></span></td>
       <td class="warn">{{ h.reason }}</td>
       <td>
         <form class="inline" hx-post="/subscriptions/{{ sub.id }}/overrides" hx-target="#preview">
           <input type="hidden" name="season" value="{{ h.season }}"><input type="hidden" name="episode" value="{{ h.number }}"><input type="hidden" name="video_url" value="{{ h.video_url }}">
-          <button type="submit" class="secondary" title="Pins this video to the episode; pins are never held">It's right, pin it</button>
+          <button type="submit" class="secondary" title="Pins this video to the episode; pins are never held">Looks right, pin it</button>
         </form>
       </td>
     </tr>
@@ -92,7 +93,7 @@
 {% set shown = report.unmatched[:40] %}
 <datalist id="listed-videos">{% for v in report.videos if v.title != v.id %}<option value="{{ v.url }}">{{ v.title | truncate(70) }}</option>{% endfor %}</datalist>
 <h4>Unmatched <span class="muted">{{ report.unmatched | length }}{% if report.unmatched | length > shown | length %} · showing the first {{ shown | length }}{% endif %}</span></h4>
-<p class="muted">Pin a video to an episode by picking one of the listed uploads or pasting a video URL. Pins always win on the next scan.</p>
+<p class="muted">Pin a video to an episode by picking one of the listed videos or pasting a video URL. Pins always win on the next scan.</p>
 <div class="table-wrap">
 <table>
   <thead><tr><th>Episode</th><th>What each strategy saw</th><th>Pin a video</th></tr></thead>
@@ -102,7 +103,7 @@
       <td><strong>{{ u.code }}</strong> {{ u.title }}<span class="two-line muted">{{ u.air_date or "" }}</span></td>
       <td class="muted">
         {% for strategy, cands in u.candidates.items() %}
-          <span class="chip">{{ strategy }}</span>
+          <span class="chip">{{ "pins" if strategy == "override" else strategy }}</span>
           {% if not cands %}no candidate{% else %}<span class="warn">{{ cands | length }} candidates:</span>
             {% for c in cands %}{{ c.title | truncate(50) }}{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}<br>
         {% endfor %}
@@ -112,7 +113,7 @@
           <input type="hidden" name="season" value="{{ u.season }}"><input type="hidden" name="episode" value="{{ u.number }}">
           <fieldset role="group" class="pin">
             <input type="url" name="video_url" list="listed-videos" placeholder="pick a listed video or paste a URL" aria-label="video to pin to {{ u.code }}" title="Type part of a title to filter the listed videos, or paste any video URL (it need not be in the listing)">
-            <button type="submit">Set</button>
+            <button type="submit">Pin</button>
           </fieldset>
         </form>
       </td>
@@ -128,7 +129,7 @@
 <ul>
 {% for o in sub.overrides %}
   <li><code>{{ o.video_id }}</code>{% if o.video_title %} <span class="muted">{{ o.video_title | truncate(60) }}</span>{% endif %} → S{{ "%02d" % o.season }}E{{ "%02d" % o.episode }}{% if o.video_url %} <span class="chip" title="Pinned by pasting a URL; the video need not be in the listing">via URL</span>{% endif %}
-    <form class="inline" hx-post="/subscriptions/{{ sub.id }}/overrides/{{ o.video_id }}/delete" hx-target="#preview"><button type="submit" class="secondary outline">remove</button></form></li>
+    <form class="inline" hx-post="/subscriptions/{{ sub.id }}/overrides/{{ o.video_id }}/delete" hx-target="#preview"><button type="submit" class="secondary outline">Remove</button></form></li>
 {% endfor %}
 </ul>
 {% endif %}

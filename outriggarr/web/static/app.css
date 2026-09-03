@@ -100,7 +100,7 @@ td.when { white-space: nowrap; }
 progress { margin: 0; height: .5rem; }
 
 /* tabs (filters) */
-.tabs { display: flex; flex-wrap: wrap; gap: .25rem; margin-bottom: .75rem; }
+.tabs { display: flex; flex-wrap: wrap; justify-content: flex-start; gap: .25rem; margin-bottom: .75rem; }  /* Pico spreads a nav's children apart; tabs sit together */
 .tabs a { padding: .3em .8em; border-radius: var(--o-radius); text-decoration: none; color: var(--o-muted); border: 1px solid transparent; }
 .tabs a[aria-current=page] { color: var(--pico-color); border-color: var(--o-border); background: var(--o-card); }
 .tabs a .count { font-size: .8em; opacity: .8; margin-left: .35em; }
@@ -169,7 +169,6 @@ details.error summary { cursor: pointer; }
 .rel { position: relative; }
 .sticky-bar { position: sticky; bottom: 0; background: var(--pico-background-color); border-top: 1px solid var(--o-border); padding: .6rem 0; display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; margin-top: .5rem; }
 .sticky-bar button { width: auto; margin: 0; }
-.steps { color: var(--o-muted); font-size: .9em; margin: 0 0 .75rem; }
 
 /* footer */
 footer.container { margin-top: 2.5rem; padding: 1rem 0; border-top: 1px solid var(--o-border); color: var(--o-muted); font-size: .82em; display: flex; flex-wrap: wrap; justify-content: center; text-align: center; gap: .5rem 1.25rem; align-items: center; }

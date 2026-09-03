@@ -18,6 +18,7 @@ from outriggarr.matcher import (
     in_scope,
     length_mismatch,
     match,
+    mmss,
     normalise_title,
     parse_with_regex,
     show_number,
@@ -302,7 +303,7 @@ def test_length_check_holds_non_exact_tiers_only_and_pins_never() -> None:
         (1, "a", "contains"),
         (3, "c", "date"),
     }
-    assert all(h.reason == "video runs 2m00s, Sonarr says the episode runs 24 min" for h in r.held)
+    assert all(h.reason == "video runs 2:00, Sonarr says the episode runs 24 min" for h in r.held)
     assert r.unmatched == (), "a held episode is neither matched nor unmatched"
     assert r.matched_video_ids == frozenset({"a", "b", "c", "d"}), "a held video is off the table"
     # a later strategy may still find the right video for a held episode
@@ -421,7 +422,7 @@ def test_part_upload_is_held_unless_the_episode_names_a_part() -> None:
     # the length check speaks first when it has evidence
     long_ep = [Episode(1, 1, 1, "Alpha Beta", date(2026, 1, 8), runtime_minutes=60)]
     r3 = match(long_ep, [Video("a", "Alpha Beta (Part 1)", "https://x/a", duration=120)], [], cfg)
-    assert r3.held[0].reason == "video runs 2m00s, Sonarr says the episode runs 60 min"
+    assert r3.held[0].reason == "video runs 2:00, Sonarr says the episode runs 60 min"
     # both parts listed: two candidates, nobody claims, the episode is plainly unmatched
     r4 = match(eps[:1], videos[:1] + [Video("a2", "Alpha Beta (Part 2)", "https://x/a2")], [], cfg)
     assert [u.episode.id for u in r4.unmatched] == [1] and r4.held == ()
@@ -475,7 +476,7 @@ def test_numbered_containment_settles_claims_but_still_faces_the_length_check() 
     clip = Video("c", "KT #751 - JOE ROGAN + SHANE GILLIS (clip)", "https://x/c", duration=120)
     r = match([ep], [clip], [], MatchConfig(("title",)))
     assert r.matches == () and [(h.video.id, h.tier) for h in r.held] == [("c", "numbered")]
-    assert r.held[0].reason.startswith("video runs 2m00s")
+    assert r.held[0].reason.startswith("video runs 2:00")
     full = Video("f", "KT #751 - JOE ROGAN + SHANE GILLIS", "https://x/f", duration=180 * 60)
     r2 = match([ep], [full], [], MatchConfig(("title",)))
     assert [(m.video.id, m.tier) for m in r2.matches] == [("f", "numbered")]
@@ -601,3 +602,12 @@ def test_containment_length_floor_is_a_boundary() -> None:
         MatchConfig(("title",)),
     )
     assert [(m.episode.id, m.tier) for m in r.matches] == [(1, "contains")]
+
+
+def test_mmss_reads_like_a_player() -> None:
+    assert mmss(0) == "0:00"
+    assert mmss(248) == "4:08"
+    assert mmss(1382) == "23:02"
+    assert mmss(3600) == "1:00:00"
+    assert mmss(3909) == "1:05:09"
+    assert length_mismatch(24, 3909) == "video runs 1:05:09, Sonarr says the episode runs 24 min"

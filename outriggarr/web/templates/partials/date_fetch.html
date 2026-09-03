@@ -3,7 +3,7 @@
 <div id="date-fetch" class="date-fetch"{% if date_progress and date_progress.running %} hx-get="/subscriptions/{{ sub.id }}/dates/status" hx-trigger="every 3s" hx-swap="outerHTML"{% endif %}>
 {% if undated is not none and "date" in sub.strategies and undated %}
 <form hx-post="/subscriptions/{{ sub.id }}/dates" hx-target="#date-fetch" hx-swap="outerHTML">
-  <button type="submit" class="secondary outline" {% if date_progress and date_progress.running %}disabled{% endif %} title="Flat listings carry no upload date and a scan fetches only a few per pass, newest first. This fetches every undated listed video once, in the background, and keeps the dates; then Scan now can pair by date.">Fetch upload dates <span class="count">{{ undated }} undated</span></button>
+  <button type="submit" class="secondary outline" {% if date_progress and date_progress.running %}disabled{% endif %} title="Channel listings carry no upload dates, and a scan fetches only a few per pass, newest first. This fetches every undated listed video once, in the background, and keeps the dates; then the next scan can match by date.">Fetch upload dates <span class="count">{{ undated }} undated</span></button>
 </form>
 {% endif %}
 {% if date_progress_text %}<p class="notice {{ 'bad' if date_progress and date_progress.failure else '' }}" role="status" aria-live="polite" {% if date_progress and date_progress.running %}aria-busy="true"{% endif %}>{{ date_progress_text }}</p>{% endif %}

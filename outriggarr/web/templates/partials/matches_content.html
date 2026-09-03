@@ -2,17 +2,17 @@
 <div id="matches-content"{% if progress.running %} hx-get="/matches/content?{{ qs }}" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
 <nav class="tabs" aria-label="views">
   {% for f in ("review", "all") %}
-    <a href="/matches?view={{ f }}" {% if f == view %}aria-current="page"{% endif %}>{{ "needs a look" if f == "review" else f }}<span class="count">{{ counts[f] }}</span></a>
+    <a href="/matches?view={{ f }}" {% if f == view %}aria-current="page"{% endif %}>{{ ("needs a look" if f == "review" else f) | capitalize }}<span class="count">{{ counts[f] }}</span></a>
   {% endfor %}
 </nav>
 <div class="form-actions">
-  <button class="secondary" hx-post="/matches/recheck?{{ qs }}" hx-target="#matches-content" hx-swap="outerHTML" {% if progress.running or not unchecked %}disabled{% endif %} title="{% if unchecked %}Fetch each unchecked video's length and Sonarr's runtime for the episode; a pairing whose length agrees leaves the list by itself. Runs in the background; you can leave the page.{% else %}Every pairing already has its length evidence{% endif %}">Recheck lengths{% if unchecked %} <span class="count">{{ unchecked }} unchecked</span>{% endif %}</button>
-  {% if view == "review" and entries %}<button class="secondary outline" hx-post="/matches/confirm-all?{{ qs }}" hx-target="#matches-content" hx-swap="outerHTML" hx-confirm="Mark all {{ entries | length }} listed pairings as looked at and right?">Looks right, all {{ entries | length }}</button>{% endif %}
+  <button class="secondary" hx-post="/matches/recheck?{{ qs }}" hx-target="#matches-content" hx-swap="outerHTML" {% if progress.running or not unchecked %}disabled{% endif %} title="{% if unchecked %}Fetch each unchecked video's length and Sonarr's runtime for the episode; a match whose length agrees leaves the list by itself. Runs in the background; you can leave the page.{% else %}Every match already has its length evidence{% endif %}">Recheck lengths{% if unchecked %} <span class="count">{{ unchecked }} unchecked</span>{% endif %}</button>
+  {% if view == "review" and entries %}<button class="secondary outline" hx-post="/matches/confirm-all?{{ qs }}" hx-target="#matches-content" hx-swap="outerHTML" hx-confirm="Confirm all {{ entries | length }} as the right video?">All {{ entries | length }} look right</button>{% endif %}
 </div>
 {% if progress_text %}<p class="notice {{ 'bad' if progress.failure else '' }}" role="status" aria-live="polite" {% if progress.running %}aria-busy="true"{% endif %}>{{ progress_text }}</p>{% endif %}
 {% if notice %}<p class="notice" role="status" aria-live="polite">{{ notice }}</p>{% endif %}
 {% if not entries %}
-<p class="empty">{% if view == "review" %}Nothing needs a look: every pairing is vouched for by an exact title, a pin, a matching length, or you.{% else %}No subscription has matched anything yet.{% endif %}</p>
+<p class="empty">{% if view == "review" %}Nothing needs a look: every match is vouched for by an exact title, a pin, a matching length, or you.{% else %}No subscription has matched anything yet.{% endif %}</p>
 {% else %}
 <div class="table-wrap">
 <table class="matches">
@@ -23,15 +23,15 @@
       <td title="{{ job.subscription.title if job.subscription else '' }}">{{ job.target_label }}</td>
       <td><a href="{{ job.video_url }}" target="_blank" rel="noopener" class="truncate" title="{{ job.video_title }}">{{ job.video_title }}</a></td>
       <td class="evidence nowrap">
-        <span class="chip {{ 'ok' if e.tier in ('exact', 'override') else 'warn' }}" title="{% if e.inferred %}Worked out afterwards from the titles, the subscription's strategies and its pins: this job predates Outriggarr recording how it matched{% if e.tier == 'unknown' %}, and both regex and date were on, so it could have been either{% endif %}{% else %}Recorded by the scheduler when it paired them{% endif %}">{{ e.tier }}{% if e.inferred %}?{% endif %}</span>
-        <span class="length {{ 'warn' if e.reason else 'muted' }}" title="{{ e.reason or e.state }}">{% if job.video_duration and job.target_runtime %}{{ e.video_length }} vs {{ job.target_runtime }} min {% if e.reason %}✗{% else %}✓{% endif %}{% elif job.video_duration %}{{ e.video_length }}, no runtime in Sonarr{% else %}length unchecked{% endif %}</span>
-        {% if e.state == "confirmed" %}<span class="chip ok" title="You marked this pairing as right">confirmed</span>{% endif %}
+        <span class="chip {{ 'ok' if e.tier in ('exact', 'override') else 'warn' }}" title="{% if e.inferred %}Worked out afterwards from the titles, the subscription's strategies and its pins: this job predates Outriggarr recording how it matched{% if e.tier == 'unknown' %}, and both regex and date were on, so it could have been either{% endif %}{% else %}Recorded by the scheduler when it matched them{% endif %}">{% if e.inferred %}likely {% endif %}{{ tier_label(e.tier) }}</span>
+        <span class="length {{ 'warn' if e.reason else 'muted' }}" title="{{ e.reason or e.state }}">{% if job.video_duration and job.target_runtime %}{{ e.video_length }} vs {{ e.runtime_length }} {% if e.reason %}✗{% else %}✓{% endif %}{% elif job.video_duration %}{{ e.video_length }}, no runtime in Sonarr{% else %}length unchecked{% endif %}</span>
+        {% if e.state == "confirmed" %}<span class="chip ok" title="You marked this match as right">confirmed</span>{% endif %}
       </td>
       <td class="muted when">{% if job.status.value != "done" %}<span class="badge badge-{{ job.status.value }}">{{ job.status.value }}</span> {% endif %}{{ (job.finished_at or job.created_at) | ago }}</td>
       <td class="actions">
-        {% if e.state == "confirmed" %}<form class="inline" hx-post="/matches/{{ job.id }}/unconfirm?{{ qs }}" hx-target="#matches-content" hx-swap="outerHTML"><button type="submit" class="secondary outline">undo</button></form>
+        {% if e.state == "confirmed" %}<form class="inline" hx-post="/matches/{{ job.id }}/unconfirm?{{ qs }}" hx-target="#matches-content" hx-swap="outerHTML"><button type="submit" class="secondary outline">Undo</button></form>
         {% elif e.needs_look %}<form class="inline" hx-post="/matches/{{ job.id }}/confirm?{{ qs }}" hx-target="#matches-content" hx-swap="outerHTML"><button type="submit" class="secondary" title="You looked and it is the right video">Looks right</button></form>{% endif %}
-        {% if job.subscription_id %}<span class="two-line"><a href="/subscriptions/{{ job.subscription_id }}" class="muted" title="Open the subscription to pin the right video to this episode">wrong video? pin another</a></span>{% endif %}
+        {% if job.subscription_id %}<span class="two-line"><a href="/subscriptions/{{ job.subscription_id }}" class="muted" title="Open the subscription to pin the right video to this episode">Wrong video? Pin another</a></span>{% endif %}
       </td>
     </tr>
   {% endfor %}

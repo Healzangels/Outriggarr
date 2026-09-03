@@ -66,7 +66,10 @@ def test_activity_page_and_rows(client: TestClient) -> None:
     assert "HTTP 500: &lt;boom&gt;" in r.text, "error text shown verbatim (escaped)"
     assert f'hx-post="/activity/jobs/{job_id}/retry?view=failed"' in r.text
     assert f'hx-post="/activity/jobs/{job_id}/cancel?view=failed"' in r.text
-    assert "No jobs" in client.get("/activity/rows?view=done").text
+    # an empty view says what is empty; the advice to queue something belongs to "all"
+    done = client.get("/activity/rows?view=done").text
+    assert "Nothing finished yet." in done and "Queue one from" not in done
+    assert "Nothing running." in client.get("/activity/rows?view=active").text
     assert "status-failed" in client.get("/activity?view=bogus").text  # unknown view → all
 
 
@@ -143,12 +146,12 @@ def test_series_search_rows_and_subscribe_flow(client: TestClient) -> None:
     r = client.get("/series")
     assert r.status_code == 200 and 'hx-get="/series/rows"' in r.text
     assert 'hx-trigger="input changed delay:300ms, search"' in r.text  # keyup misses paste
-    assert "Type to search" in client.get("/series/rows").text
+    assert client.get("/series/rows").text.strip() == "", "nothing typed: nothing to say"
     rows = client.get("/series/rows?q=hot").text
     assert "Hot Ones" in rows and "Hot Zone" in rows and 'href="/series/5/subscribe"' in rows
 
     form = client.get("/series/5/subscribe")
-    assert form.status_code == 200 and "Subscribe: Hot Ones" in form.text
+    assert form.status_code == 200 and "Subscribe · Hot Ones" in form.text
     r = client.post(
         "/series/5/subscribe",
         data={
@@ -160,7 +163,7 @@ def test_series_search_rows_and_subscribe_flow(client: TestClient) -> None:
         follow_redirects=False,
     )
     assert r.status_code == 303 and r.headers["location"] == "/subscriptions/1"
-    assert "subscribed ✓" in client.get("/series/rows?q=hot%20ones").text
+    assert "Subscribed ✓" in client.get("/series/rows?q=hot%20ones").text
     # subscribing again redirects to the existing one
     assert (
         client.get("/series/5/subscribe", follow_redirects=False).headers["location"]
@@ -184,7 +187,9 @@ def test_subscription_page_preview_scan_and_override(client: TestClient) -> None
     page = client.get(f"/subscriptions/{sub_id}")
     assert page.status_code == 200
     assert f'hx-get="/subscriptions/{sub_id}/preview"' in page.text
-    assert "Scan now" in prev_buttons(client, sub_id) and "Download" in prev_buttons(client, sub_id)
+    assert "Refresh preview" in prev_buttons(client, sub_id) and "Download" in prev_buttons(
+        client, sub_id
+    )
 
     prev = client.get(f"/subscriptions/{sub_id}/preview").text
     assert "select to download" in prev and "S30E06" in prev  # a match, no job yet
@@ -194,13 +199,13 @@ def test_subscription_page_preview_scan_and_override(client: TestClient) -> None
     r = client.post(
         f"/subscriptions/{sub_id}/overrides", data={"video_id": "b", "season": "30", "episode": "7"}
     )
-    assert r.status_code == 200 and "Override set for b" in r.text
+    assert r.status_code == 200 and "Pinned b to S30E07" in r.text
     assert "<code>b</code>" in r.text and "S30E07" in r.text
 
     scan = client.post(f"/subscriptions/{sub_id}/scan")
     assert scan.status_code == 200 and "Nothing queued" in scan.text
     assert "2 matched" in scan.text and "Download all 2" in scan.text
-    assert client.get("/api/jobs").json() == [], "Scan now never queues"
+    assert client.get("/api/jobs").json() == [], "Refresh preview never queues"
     dl = client.post(f"/subscriptions/{sub_id}/download")
     assert dl.status_code == 200 and "Queued 2 jobs." in dl.text
     assert len(client.get("/api/jobs").json()) == 2
@@ -209,7 +214,7 @@ def test_subscription_page_preview_scan_and_override(client: TestClient) -> None
     assert "already have jobs" in client.get(f"/subscriptions/{sub_id}/preview").text
 
     r = client.post(f"/subscriptions/{sub_id}/overrides/b/delete")
-    assert r.status_code == 200 and "Override removed for b" in r.text
+    assert r.status_code == 200 and "Pin removed: b" in r.text
 
     r = client.post(
         f"/subscriptions/{sub_id}/edit",
@@ -240,9 +245,7 @@ def test_subscription_page_preview_scan_and_override(client: TestClient) -> None
 
 def test_settings_page_and_downloads_form(client: TestClient) -> None:
     r = client.get("/settings")
-    assert (
-        r.status_code == 200 and "Add a connection" in r.text and "Default yt-dlp format" in r.text
-    )
+    assert r.status_code == 200 and "Add a connection" in r.text and "Default quality" in r.text
     assert 'name="audio_language"' in r.text and 'value="eng"' in r.text
     r = client.post(
         "/settings/downloads",
@@ -403,7 +406,7 @@ def test_override_form_accepts_a_url(client: TestClient) -> None:
         data={"video_url": "https://y/old7", "season": "30", "episode": "7"},
     )
     assert r.status_code == 200
-    assert "Override set for Seven, older upload (from URL)" in r.text
+    assert "Pinned Seven, older upload to S30E07 (from URL)" in r.text
     assert ">via URL<" in r.text and "S30E07" in r.text
     assert "select to download" in r.text  # S30E07 now matches via the override
     r = client.post(f"/subscriptions/{sub_id}/overrides", data={"season": "30", "episode": "7"})
@@ -517,7 +520,7 @@ def test_activity_delete_button_and_cap_note(client: TestClient) -> None:
     rows = client.get("/activity/rows?view=all").text
     assert f'hx-post="/activity/jobs/{job_id}/delete?view=all"' in rows
     r = client.post(f"/activity/jobs/{job_id}/delete?view=all")
-    assert r.status_code == 200 and f"Job {job_id} deleted" in r.text
+    assert r.status_code == 200 and f"Job #{job_id} deleted" in r.text
     assert client.get("/api/jobs").json() == []
     assert 'aria-current="page"' in client.get("/activity").text
 
@@ -610,8 +613,8 @@ def test_preview_holds_a_length_mismatch_and_pin_releases_it(client: TestClient)
         json={"connection_id": 1, "series_id": 5, "source_url": "https://www.youtube.com/@hotones"},
     ).json()["id"]
     prev = client.get(f"/subscriptions/{sub_id}/preview").text
-    assert "1 held" in prev and "video runs 1m30s, Sonarr says the episode runs 25 min" in prev
-    assert "It's right, pin it" in prev and "select to download" not in prev  # held: no row
+    assert "1 held" in prev and "video runs 1:30, Sonarr says the episode runs 25 min" in prev
+    assert "Looks right, pin it" in prev and "select to download" not in prev  # held: no row
     r = client.post(f"/subscriptions/{sub_id}/download")
     assert r.status_code == 200 and client.get("/api/jobs").json() == []
     # pinning it is the release valve: pins are never held
@@ -629,8 +632,8 @@ def test_preview_holds_a_length_mismatch_and_pin_releases_it(client: TestClient)
     (job,) = client.get("/api/jobs").json()
     assert (job["matched_by"], job["video_duration"], job["target_runtime"]) == ("override", 90, 25)
     page = client.get("/matches?view=review").text
-    assert "Six Spicy Wings" in page and "1m30s vs 25 min ✗" in page, "flagged even though pinned"
-    assert 'Recorded by the scheduler when it paired them">override</span>' in page
+    assert "Six Spicy Wings" in page and "1:30 vs 25:00 ✗" in page, "flagged even though pinned"
+    assert 'Recorded by the scheduler when it matched them">pinned</span>' in page
 
 
 def test_matches_page_tiers_and_fallback_for_old_jobs(client: TestClient) -> None:
@@ -644,7 +647,7 @@ def test_matches_page_tiers_and_fallback_for_old_jobs(client: TestClient) -> Non
     ).json()["id"]
     client.post(f"/subscriptions/{sub_id}/download")
     page = client.get("/matches").text
-    assert "Six Spicy Wings" in page and 'paired them">contains</span>' in page
+    assert "Six Spicy Wings" in page and 'matched them">title contains</span>' in page
     assert f'href="/subscriptions/{sub_id}"' in page
     assert "needs a look" in page and "Matches" in client.get("/activity").text  # nav link
     old = Job(
@@ -689,7 +692,7 @@ def test_matches_page_tiers_and_fallback_for_old_jobs(client: TestClient) -> Non
         )
         s.commit()
     page = client.get("/matches?view=all").text
-    assert "date?" in page and "Worked out afterwards" in page
+    assert "likely by date" in page and "Worked out afterwards" in page
 
 
 def test_subscription_form_takes_one_source_per_line(client: TestClient) -> None:
@@ -779,9 +782,9 @@ def test_matches_recheck_and_confirm_clear_the_review_list(client: TestClient) -
     source.infos["https://y/double"] = VideoRef("double", "x", "https://y/double", 3000, 1, None)
     page = client.get("/matches").text
     assert (
-        'needs a look<span class="count">4</span>' in page and page.count("length unchecked") == 4
+        'Needs a look<span class="count">4</span>' in page and page.count("length unchecked") == 4
     )
-    assert 'aria-current="page">needs a look' in page, "work to do: land on the review view"
+    assert 'aria-current="page">Needs a look' in page, "work to do: land on the review view"
 
     import time
 
@@ -798,19 +801,19 @@ def test_matches_recheck_and_confirm_clear_the_review_list(client: TestClient) -
     r = client.get("/matches/content?view=review")
     assert 'hx-trigger="every 2s"' not in r.text, "polling stops when the run is over"
     assert (
-        "Checked 4 pairings: 3 video lengths and 3 runtimes fetched; 1 contradict their runtime."
+        "Checked 4 matches: 3 video lengths and 3 runtimes fetched; 1 contradict their runtime."
         in r.text
     )
     assert "1 could not be fetched" in r.text
-    assert 'needs a look<span class="count">3</span>' in r.text, "25 min vs 25 min cleared itself"
-    assert "Checked 4 pairings" not in client.get("/matches").text, "the summary shows once"
+    assert 'Needs a look<span class="count">3</span>' in r.text, "25 min vs 25 min cleared itself"
+    assert "Checked 4 matches" not in client.get("/matches").text, "the summary shows once"
     assert "2 unchecked" in r.text, "the button says how much is left"
-    assert 'disabled title="Every pairing' not in r.text, "still something to check: enabled"
+    assert 'disabled title="Every match' not in r.text, "still something to check: enabled"
     jobs = {j["video_id"]: j for j in client.get("/api/jobs").json()}
     assert jobs["double"]["target_runtime"] is None, "a half-known runtime is no evidence"
-    assert "50m00s, no runtime in Sonarr" in r.text
-    assert "2m00s vs 25 min ✗" in r.text
-    assert "25m00s vs 25 min ✓" in client.get("/matches?view=all").text
+    assert "50:00, no runtime in Sonarr" in r.text
+    assert "2:00 vs 25:00 ✗" in r.text
+    assert "25:00 vs 25:00 ✓" in client.get("/matches?view=all").text
     assert (jobs["ok"]["video_duration"], jobs["ok"]["target_runtime"]) == (1500, 25)
     assert client.post("/api/matches/recheck").json()["running"] is True
     for _ in range(100):
@@ -823,22 +826,20 @@ def test_matches_recheck_and_confirm_clear_the_review_list(client: TestClient) -
     short_id = jobs["short"]["id"]
     r = client.post(f"/matches/{short_id}/confirm")
     assert "Confirmed: Show S30E07 - T12." in r.text
-    assert 'needs a look<span class="count">2</span>' in r.text
+    assert 'Needs a look<span class="count">2</span>' in r.text
     assert client.get(f"/api/jobs/{short_id}").json()["reviewed_at"] is not None
     r = client.post(f"/matches/{short_id}/unconfirm?view=review")
-    assert 'needs a look<span class="count">3</span>' in r.text
+    assert 'Needs a look<span class="count">3</span>' in r.text
     r = client.post("/matches/confirm-all")
-    assert (
-        "Confirmed 3 pairings." in r.text and 'needs a look<span class="count">0</span>' in r.text
-    )
+    assert "Confirmed 3 matches." in r.text and 'Needs a look<span class="count">0</span>' in r.text
     assert client.get("/matches?view=all").text.count(">confirmed</span>") == 3
     # nothing left to look at: the page lands on "all" and the recheck button is inert
     landing = client.get("/matches").text
     assert (
-        'aria-current="page">all<' in landing and 'aria-current="page">needs a look' not in landing
+        'aria-current="page">All<' in landing and 'aria-current="page">Needs a look' not in landing
     )
-    assert "Every pairing already has its length evidence" in landing
-    assert 'disabled title="Every pairing already has its length evidence"' in landing
+    assert "Every match already has its length evidence" in landing
+    assert 'disabled title="Every match already has its length evidence"' in landing
     assert "Nothing left to check" not in landing
     assert client.delete(f"/api/jobs/{short_id}/confirm").json()["reviewed_at"] is None
 
@@ -1017,7 +1018,9 @@ def test_subscribe_form_defaults_to_future_and_preview_downloads_selected(
         json={"connection_id": 1, "series_id": 5, "sources": ["https://www.youtube.com/@hotones"]},
     ).json()["id"]
     prev = client.get(f"/subscriptions/{sub_id}/preview").text
-    assert "auto: future only, 0 of 1 would queue" in prev and "select to download" in prev
+    assert (
+        "auto-download: future only · 0 of 1 would queue" in prev and "select to download" in prev
+    )
     assert 'name="episode_id" value="11"' in prev and "Download selected" in prev
     assert 'id="selected-count">0</span>' in prev and 'id="tick-all"' in prev, "a live count"
     untouched = 'name="episode_id" value="11" aria-label="download S30E06">'
@@ -1176,11 +1179,11 @@ def test_missing_episode_with_a_stale_job_offers_a_clear_button(client: TestClie
         stale = s.query(Job).filter_by(video_id="a").one().id
         live = s.query(Job).filter_by(video_id="b").one().id
     panel = client.get(f"/subscriptions/{sub_id}/episodes").text
-    assert f'aria-label="clear job {stale}"' in panel, "missing + done job: clearable"
-    assert f'aria-label="clear job {live}"' not in panel, "a live job is not history"
+    assert f'aria-label="delete job {stale}"' in panel, "missing + done job: clearable"
+    assert f'aria-label="delete job {live}"' not in panel, "a live job is not history"
     assert panel.count("x-clear") == 1
     r = client.post(f"/subscriptions/{sub_id}/episodes/jobs/{stale}/clear")
-    assert r.status_code == 200 and f"Cleared job #{stale}." in r.text
+    assert r.status_code == 200 and f"Deleted job #{stale}." in r.text
     assert 'class="notice" role="status"' in r.text, "an action notice: the page fades it out"
     page = client.get(f"/subscriptions/{sub_id}").text
     assert "htmx:afterSwap', () => arm(document)" in page, (
@@ -1501,14 +1504,14 @@ def test_matches_all_view_is_capped_with_a_show_all_switch(client: TestClient, m
     assert (
         "<th>Evidence</th>" in page and "<th>Status</th>" not in page and "<th>How</th>" not in page
     )
-    assert page.count("1500") == 0 and page.count("25m00s vs 25 min ✓") == 2, "capped at two rows"
+    assert page.count("1500") == 0 and page.count("25:00 vs 25:00 ✓") == 2, "capped at two rows"
     assert (
         "Showing the newest 2 of 3." in page
         and 'href="/matches?view=all&limit=all">Show all 3</a>' in page
     )
     everything = client.get("/matches?view=all&limit=all").text
-    assert everything.count("25m00s vs 25 min ✓") == 3 and "Show all" not in everything
-    assert "How a pairing leaves that list" in page, "the long explanation folds away"
+    assert everything.count("25:00 vs 25:00 ✓") == 3 and "Show all" not in everything
+    assert "How a match leaves that list" in page, "the long explanation folds away"
 
 
 def test_subscription_page_labels_its_facts_and_orders_the_preview(client: TestClient) -> None:
@@ -1541,7 +1544,7 @@ def test_subscription_page_labels_its_facts_and_orders_the_preview(client: TestC
     client.post(f"/api/subscriptions/{sub_id}/scan")
     page = client.get(f"/subscriptions/{sub_id}").text
     head = page.split('id="preview"')[0]
-    assert "<dt>Matching</dt>" in head and "pins → title → date" in head
+    assert "<dt>Match order</dt>" in head and "pins → title → date" in head
     assert "<dt>Last scan</dt>" in head and "just now" in head
     assert f"subscription {sub_id}" not in head, "the internal id is a hover, not a fact"
     assert f"listing depth · #{sub_id}</span>" in page, "…and lives with the settings"
@@ -1585,7 +1588,7 @@ def test_subscribe_validation_error_keeps_what_was_typed(client: TestClient) -> 
         },
     )
     assert r.status_code == 400 and "audio_language" in r.text
-    assert "Subscribe: Hot Ones" in r.text, "the header keeps the series title"
+    assert "Subscribe · Hot Ones" in r.text, "the header keeps the series title"
     assert "https://www.youtube.com/@typed</textarea>" in r.text
     assert 'value="regex" checked' in r.text and 'value="title" checked' in r.text
     assert 'name="title_require" maxlength="100" value="Typed Show"' in r.text
@@ -1665,7 +1668,7 @@ def test_activity_action_notices_survive_the_poll(client: TestClient) -> None:
     )
     assert '<div id="jobs-notice"></div>' in client.get("/activity").text
     ok = client.post("/activity/jobs/1/cancel?view=all")
-    assert 'class="notice" role="status"' in ok.text and "Job 1 cancelled." in ok.text
+    assert 'class="notice" role="status"' in ok.text and "Job #1 cancelled." in ok.text
 
 
 def test_preview_query_count_does_not_grow_with_the_listing(client: TestClient) -> None:
@@ -1817,3 +1820,42 @@ def test_templates_refuse_undefined_names() -> None:
     assert templates.env.from_string("{{ notice }}|{{ notice_bad }}").render() == "None|False", (
         "the optional notice keys default; everything else must be passed"
     )
+
+
+def test_ago_units_read_evenly() -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from outriggarr.web.pages import ago
+
+    now = datetime.now(UTC)
+    assert ago(now - timedelta(minutes=12)) == "12 min ago"
+    assert ago(now - timedelta(hours=16)) == "16 hr ago"
+    assert ago(now - timedelta(days=1, hours=2)) == "1 day ago"
+    assert ago(now - timedelta(days=3)) == "3 days ago"
+    assert ago(now + timedelta(hours=2, minutes=1)) == "in 2 hr"
+    assert ago(now + timedelta(days=2, minutes=1)) == "in 2 days"
+
+
+def test_tier_label_speaks_the_page_language() -> None:
+    from outriggarr.web.pages import tier_label
+
+    assert tier_label("override") == "pinned"
+    assert tier_label("exact") == "exact title"
+    assert tier_label("numbered") == "show number"
+    assert tier_label("contains") == "title contains"
+    assert tier_label("date") == "by date"
+    assert tier_label(None) == "unknown"
+    assert tier_label("something-new") == "something-new", "an unmapped tier still shows"
+
+
+def test_settings_saved_notice_names_the_form(client: TestClient) -> None:
+    r = client.post(
+        "/settings/downloads",
+        data={"_notify_form": "1", "apprise_urls": ""},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303 and r.headers["location"] == "/settings?saved=notifications"
+    assert "Notifications saved." in client.get("/settings?saved=notifications").text
+    assert "Downloads saved." in client.get("/settings?saved=downloads").text
+    assert "Connection saved." in client.get("/settings?saved=connection").text
+    assert "saved" not in client.get("/settings").text.split("<h2>Settings</h2>")[1][:200]

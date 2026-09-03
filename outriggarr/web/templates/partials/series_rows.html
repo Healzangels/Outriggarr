@@ -1,6 +1,6 @@
 {% if error %}<p class="notice bad">{{ error }}</p>
-{% elif not q %}<p class="muted">Type to search.</p>
-{% elif not rows %}<p class="empty">No series match "{{ q }}".</p>
+{% elif not q %}
+{% elif not rows %}<p class="empty">No series match “{{ q }}”.</p>
 {% else %}
 <div class="table-wrap">
 <table>
@@ -11,7 +11,7 @@
       <td>{{ s.title }}{% if not s.monitored %} <span class="badge badge-off">unmonitored</span>{% endif %}</td><td>{{ s.year or "" }}</td>
       <td class="num">{% if s.episode_count is not none %}{{ s.episode_file_count or 0 }}/{{ s.episode_count }}{% if s.episode_count and (s.episode_file_count or 0) < s.episode_count %} <span class="warn">({{ s.episode_count - (s.episode_file_count or 0) }} missing)</span>{% endif %}{% endif %}</td>
       <td class="mono">{{ s.tvdb_id or "" }}</td>
-      <td class="actions">{% if s.id in subscribed %}<a href="/subscriptions/{{ subscribed[s.id].id }}">subscribed ✓</a>
+      <td class="actions">{% if s.id in subscribed %}<a href="/subscriptions/{{ subscribed[s.id].id }}">Subscribed ✓</a>
           {% else %}<a href="/series/{{ s.id }}/subscribe" role="button" class="outline">Subscribe</a>{% endif %}</td>
     </tr>
   {% endfor %}
