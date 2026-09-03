@@ -55,7 +55,8 @@ No built-in authentication: put it behind your reverse proxy / SSO like the othe
 
 | Screen | What it does |
 |---|---|
-| Activity | Every job with status, progress, attempts, verbatim error text; Retry and Cancel. Refreshes every 3 s. |
+| Activity | Every job, newest first and grouped by day: status, progress while it runs, attempts, the verbatim error text with a plain-words likely cause; Retry, Cancel, Delete. Refreshes every 3 s. |
+| Matches | Every pairing a subscription made, riskiest first, with the evidence for each (how it matched, video length against Sonarr's runtime, your confirmation); *needs a look* holds the ones nothing vouches for; *Recheck lengths* fetches the missing evidence in the background. |
 | Series | Search Sonarr's series, subscribe with a source URL and matching options; per subscription: match preview (dry run), unmatched episodes with an override picker, *Scan now*, recent jobs. |
 | Grab | Paste a URL/playlist → pick targets per row (bulk-fill for playlists, newest-first toggle) → queue. |
 | Settings | Connections and download options: scan interval, concurrency, videos per scan, default yt-dlp format, container, cookies file, extra yt-dlp options (JSON, merged last), audio language tag, optional Sonarr tag. |

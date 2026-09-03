@@ -59,7 +59,19 @@ article.card h4 .muted { font-size: .8em; }
 /* tables */
 .table-wrap { overflow-x: auto; }
 table { margin-bottom: .5rem; }
-table td, table th { vertical-align: top; }
+table td, table th { vertical-align: top; padding: .5rem .6rem; }
+.table-wrap table { font-size: .95em; }
+/* long lists read as a diary: a quiet divider where the day changes */
+tr.day-group td { padding: .9rem .6rem .25rem; border-bottom: 0; color: var(--o-muted); font-size: .78em; letter-spacing: .06em; text-transform: uppercase; background: transparent; }
+tr.day-group + tr td { border-top: 1px solid var(--o-border); }
+.job-id { color: var(--o-muted); font-size: .8em; margin-right: .35em; }
+tr.quiet .job-id { opacity: .7; }
+td.evidence .chip { vertical-align: middle; }
+td.evidence .length { font-size: .88em; margin: 0 .35em; }
+tr.attention td:first-child { box-shadow: inset 3px 0 0 var(--o-warn); }
+details.explainer { margin: -.5rem 0 1rem; }
+details.explainer > summary { color: var(--o-muted); font-size: .9em; padding: .2rem 0; }
+details.explainer p { margin: .25rem 0 0; max-width: 80ch; }
 /* links in tables are the norm, not the exception: underline only on hover/focus */
 table a:not([role=button]) { text-decoration: none; }
 table a:not([role=button]):hover, table a:not([role=button]):focus-visible { text-decoration: underline; }

@@ -774,7 +774,9 @@ def test_matches_recheck_and_confirm_clear_the_review_list(client: TestClient) -
         s.commit()
     source.infos["https://y/double"] = VideoRef("double", "x", "https://y/double", 3000, 1, None)
     page = client.get("/matches").text
-    assert 'needs a look<span class="count">4</span>' in page and page.count("not checked") == 4
+    assert (
+        'needs a look<span class="count">4</span>' in page and page.count("length unchecked") == 4
+    )
     assert 'aria-current="page">needs a look' in page, "work to do: land on the review view"
 
     import time
@@ -1404,3 +1406,97 @@ def test_format_preset_pickers_follow_the_text(client: TestClient) -> None:
     assert client.put(f"/api/subscriptions/{sub_id}", json=body).status_code == 200
     page = client.get(f"/subscriptions/{sub_id}").text
     assert 'value="__custom__" selected>Custom' in page and 'name="format" value="worst"' in page
+
+
+def test_activity_reads_as_a_diary(client: TestClient) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from outriggarr.db.models import Job, JobStatus, TargetKind
+
+    client.post("/api/connections", json=SONARR)
+    now = datetime.now(UTC)
+    with client.app.state.session_factory() as s:
+        for i, (status, finished) in enumerate(
+            (
+                (JobStatus.done, now),
+                (JobStatus.done, now - timedelta(days=1)),
+                (JobStatus.queued, None),
+            )
+        ):
+            s.add(
+                Job(
+                    connection_id=1,
+                    subscription_id=None,
+                    target_kind=TargetKind.episode,
+                    series_id=5,
+                    episode_ids=[10 + i],
+                    target_key=f"episode:5:{10 + i}",
+                    video_id=f"v{i}",
+                    video_url=f"https://y/v{i}",
+                    video_title=f"Video {i}",
+                    target_label=f"Show S30E0{i}",
+                    status=status,
+                    finished_at=finished,
+                    progress_pct=100 if status is JobStatus.done else 0,
+                )
+            )
+        s.commit()
+    page = client.get("/activity").text
+    body = page.split("<tbody>")[1]
+    assert body.count('class="day-group"') == 2 and ">Today<" in body and ">Yesterday<" in body
+    assert "<th>Progress</th>" not in page and "100%" not in body, (
+        "a finished job's 100% is not news"
+    )
+    assert "· subscription" not in body and "queued by hand" in body, (
+        "the provenance is a hover, not a line"
+    )
+    assert body.count('class="chip" title="Queued from Grab') == 3
+    assert 'class="job-id mono">#' in body and "status-queued" in body
+
+
+def test_matches_all_view_is_capped_with_a_show_all_switch(client: TestClient, monkeypatch) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from outriggarr.db.models import Job, TargetKind
+    from outriggarr.web import pages
+
+    monkeypatch.setattr(pages, "MATCHES_PAGE", 2)
+    _seed_series(client)
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={"connection_id": 1, "series_id": 5, "sources": ["https://www.youtube.com/@x"]},
+    ).json()["id"]
+    now = datetime.now(UTC)
+    with client.app.state.session_factory() as s:
+        for i in range(3):
+            s.add(
+                Job(
+                    connection_id=1,
+                    subscription_id=sub_id,
+                    target_kind=TargetKind.episode,
+                    series_id=5,
+                    episode_ids=[20 + i],
+                    target_key=f"episode:5:{20 + i}",
+                    video_id=f"m{i}",
+                    video_url=f"https://y/m{i}",
+                    video_title=f"Match {i}",
+                    target_label=f"Show S31E0{i} - Ep {i}",
+                    matched_by="exact",
+                    video_duration=1500,
+                    target_runtime=25,
+                    created_at=now - timedelta(minutes=i),
+                )
+            )
+        s.commit()
+    page = client.get("/matches?view=all").text
+    assert (
+        "<th>Evidence</th>" in page and "<th>Status</th>" not in page and "<th>How</th>" not in page
+    )
+    assert page.count("1500") == 0 and page.count("25m00s vs 25 min ✓") == 2, "capped at two rows"
+    assert (
+        "Showing the newest 2 of 3." in page
+        and 'href="/matches?view=all&limit=all">Show all 3</a>' in page
+    )
+    everything = client.get("/matches?view=all&limit=all").text
+    assert everything.count("25m00s vs 25 min ✓") == 3 and "Show all" not in everything
+    assert "How a pairing leaves that list" in page, "the long explanation folds away"

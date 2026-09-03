@@ -4,34 +4,33 @@
 <p class="empty">No jobs{% if view != "all" %} in "{{ view }}"{% endif %}. Queue one from <a href="/grab">Grab</a> or subscribe to a series under <a href="/series">Series</a>.</p>
 {% else %}
 <div class="table-wrap">
-<table>
-  <thead><tr><th>#</th><th>Status</th><th>Target</th><th>Video</th><th>Progress</th><th>When</th><th class="actions"></th></tr></thead>
+<table class="jobs">
+  <thead><tr><th>Job</th><th>Target</th><th>Video</th><th>When</th><th class="actions"></th></tr></thead>
   <tbody>
+  {% set ns = namespace(day=None) %}
   {% for job in jobs %}
-    <tr id="job-{{ job.id }}">
-      <td class="mono">{{ job.id }}</td>
-      <td><span class="badge badge-{{ job.status.value }} status status-{{ job.status.value }}">{{ job.status.value }}</span>
+    {% set when = job.finished_at or job.created_at %}
+    {% set day = when | day_label %}
+    {% if day != ns.day %}{% set ns.day = day %}<tr class="day-group"><td colspan="5">{{ day }}</td></tr>{% endif %}
+    <tr id="job-{{ job.id }}" class="{{ 'quiet' if job.status.value in ('done', 'cancelled') else '' }}">
+      <td class="nowrap">
+        <span class="job-id mono">#{{ job.id }}</span>
+        <span class="badge badge-{{ job.status.value }} status status-{{ job.status.value }}">{{ job.status.value }}</span>
+        {% if job.status.value == "downloading" %}<span class="two-line"><progress value="{{ job.progress_pct }}" max="100"></progress> <span class="muted">{{ job.progress_pct }}%</span></span>
+        {% elif job.status.value == "importing" %}<span class="two-line"><progress></progress></span>{% endif %}
         {% if job.next_retry_at %}<span class="two-line muted">retry {{ job.next_retry_at | ago }}</span>{% endif %}
         {% if job.attempts > 1 %}<span class="two-line muted">attempt {{ job.attempts }}</span>{% endif %}
       </td>
-      <td>
+      <td title="{{ job.connection.name }}{% if job.subscription_id %} · subscription {{ job.subscription_id }}{% else %} · queued by hand{% endif %}">
         {% if job.target_label %}{{ job.target_label }}{% else %}
           {% if job.target_kind.value == "episode" %}series {{ job.series_id }} · episodes {{ job.episode_ids }}{% else %}movie {{ job.movie_id }}{% endif %}
         {% endif %}
-        <span class="two-line muted">{{ job.connection.name }}{% if job.subscription_id %} · subscription {{ job.subscription_id }}{% endif %}</span>
+        {% if not job.subscription_id %} <span class="chip" title="Queued from Grab, not by a subscription">grab</span>{% endif %}
       </td>
       <td><a href="{{ job.video_url }}" target="_blank" rel="noopener" class="truncate" title="{{ job.video_title or job.video_id }}">{{ job.video_title or job.video_id }}</a>
         {% if job.error %}<details class="error" id="err-{{ job.id }}" hx-preserve><summary class="{{ 'warn' if job.status.value == 'done' else 'bad' }}">{{ job.error.splitlines()[0] | truncate(60) }}</summary><pre>{{ job.error }}</pre></details>{% if causes is defined and causes.get(job.id) %}<span class="cause">{{ causes[job.id] }}</span>{% endif %}{% endif %}
       </td>
-      <td class="num">
-        {% if job.status.value == "downloading" %}<progress value="{{ job.progress_pct }}" max="100"></progress><br>{{ job.progress_pct }}%
-        {% elif job.status.value == "importing" %}<progress></progress><br>importing
-        {% elif job.status.value == "done" %}<span class="muted">100%</span>
-        {% else %}<span class="muted">{{ job.progress_pct }}%</span>{% endif %}
-      </td>
-      <td class="muted when" title="created {{ job.created_at.strftime('%Y-%m-%d %H:%M') }}Z{% if job.finished_at %} · finished {{ job.finished_at.strftime('%Y-%m-%d %H:%M') }}Z{% endif %}">
-        {% if job.finished_at %}{{ job.finished_at | ago }}{% else %}{{ job.created_at | ago }}{% endif %}
-      </td>
+      <td class="muted when" title="created {{ job.created_at.strftime('%Y-%m-%d %H:%M') }}Z{% if job.finished_at %} · finished {{ job.finished_at.strftime('%Y-%m-%d %H:%M') }}Z{% endif %}">{{ when | ago }}</td>
       <td class="actions">
         {% if job.status in RETRYABLE %}<button hx-post="/activity/jobs/{{ job.id }}/retry?view={{ view }}" hx-target="#jobs">Retry</button>{% endif %}
         {% if job.status in CANCELLABLE %}<button class="secondary outline" hx-post="/activity/jobs/{{ job.id }}/cancel?view={{ view }}" hx-target="#jobs" hx-confirm="Cancel job {{ job.id }}?">Cancel</button>{% endif %}

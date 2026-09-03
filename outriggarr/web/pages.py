@@ -95,6 +95,22 @@ templates.env.globals.update(
 )
 
 
+def day_label(dt: datetime | None) -> str:
+    """'Today' / 'Yesterday' / 'Mon 1 Sep' (with the year once it is not this one), for
+    grouping a long list by day so it reads as a diary, not a wall."""
+    if dt is None:
+        return ""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    today = datetime.now(UTC).date()
+    day = dt.date()
+    if day == today:
+        return "Today"
+    if (today - day).days == 1:
+        return "Yesterday"
+    return dt.strftime("%a %-d %b" if day.year == today.year else "%a %-d %b %Y")
+
+
 def ago(dt: datetime | None) -> str:
     """'3 min ago' / 'in 2 h' — coarse, for tables; the exact time goes in a title attr."""
     if dt is None:
@@ -114,6 +130,7 @@ def ago(dt: datetime | None) -> str:
 
 
 templates.env.filters["ago"] = ago
+templates.env.filters["day_label"] = day_label
 
 
 def _tooling(request: Request) -> dict:
@@ -169,7 +186,10 @@ def counts_for(session: DbSession) -> dict[str, int]:
 
 
 def _jobs(session: DbSession, view: str) -> list[Job]:
-    q = select(Job).order_by(Job.created_at.desc(), Job.id.desc())
+    # ordered by the same moment each row shows (finished, else created), so the day
+    # dividers run monotonically down the page
+    when = func.coalesce(Job.finished_at, Job.created_at)
+    q = select(Job).order_by(when.desc(), Job.id.desc())
     statuses = FILTERS.get(view)
     if statuses:
         q = q.where(Job.status.in_(statuses))
@@ -240,6 +260,7 @@ def activity(
 
 
 REVIEW_LIMIT = 500
+MATCHES_PAGE = 100  # the "all" view shows this many unless asked for everything
 RISK_ORDER = ("date", "regex", "unknown", "contains", "exact", "override")  # riskiest first
 
 
@@ -297,6 +318,7 @@ def _matches_context(
     view: str | None,
     notice: str | None = None,
     progress: RecheckProgress | None = None,
+    show_all: bool = False,
 ) -> dict:
     progress = progress or RecheckProgress()
     jobs = session.scalars(
@@ -314,6 +336,9 @@ def _matches_context(
     if view == "review":
         entries = [e for e in entries if e["needs_look"]]
     entries.sort(key=lambda e: (not e["reason"], RISK_ORDER.index(e["tier"])))  # stable
+    total = len(entries)
+    if view == "all" and not show_all:
+        entries = entries[:MATCHES_PAGE]  # the riskiest first, then the newest
     # the recheck summary reads like a notice: shown while it runs, then once when done
     show_progress = progress.running or (progress.finished_at is not None and not progress.reported)
     if show_progress and not progress.running:
@@ -322,7 +347,8 @@ def _matches_context(
         "entries": entries,
         "view": view,
         "counts": counts,
-        "total": counts[view],
+        "total": total,
+        "show_all": show_all,
         "notice": notice,
         "progress": progress,
         "progress_text": progress.summary() if show_progress else "",
@@ -332,23 +358,39 @@ def _matches_context(
 
 @router.get("/matches")
 def matches_page(
-    request: Request, session: DbSession, view: Annotated[str | None, Query()] = None
+    request: Request,
+    session: DbSession,
+    view: Annotated[str | None, Query()] = None,
+    limit: Annotated[str | None, Query()] = None,
 ) -> HTMLResponse:
-    ctx = _matches_context(session, view, progress=progress_of(request.app))
+    ctx = _matches_context(
+        session, view, progress=progress_of(request.app), show_all=limit == "all"
+    )
     return templates.TemplateResponse(request, "matches.html", ctx)
 
 
-def _matches_partial(request: Request, session: DbSession, view: str | None, notice: str | None):
-    ctx = _matches_context(session, view, notice, progress=progress_of(request.app))
+def _matches_partial(
+    request: Request,
+    session: DbSession,
+    view: str | None,
+    notice: str | None,
+    show_all: bool = False,
+):
+    ctx = _matches_context(
+        session, view, notice, progress=progress_of(request.app), show_all=show_all
+    )
     return templates.TemplateResponse(request, "partials/matches_content.html", ctx)
 
 
 @router.get("/matches/content")
 def matches_content(
-    request: Request, session: DbSession, view: Annotated[str | None, Query()] = None
+    request: Request,
+    session: DbSession,
+    view: Annotated[str | None, Query()] = None,
+    limit: Annotated[str | None, Query()] = None,
 ) -> HTMLResponse:
     """The table plus the recheck status; polled while a recheck runs."""
-    return _matches_partial(request, session, view, None)
+    return _matches_partial(request, session, view, None, show_all=limit == "all")
 
 
 @router.post("/matches/recheck")
