@@ -18,6 +18,8 @@
 
   <template x-if="videos.length">
     <div>
+      <article class="card">
+      <header>Where they go <span class="muted">· connection, series, numbering</span></header>
       <div class="grid">
         <label>Send to
           <select x-model.number="connectionId" @change="connectionChanged()">
@@ -36,7 +38,9 @@
             </ul>
           </div>
         </template>
-        <template x-if="kind === 'sonarr' && series">
+      </div>
+      <template x-if="kind === 'sonarr' && series">
+        <div>
           <div class="grid">
             <label>Season
               <select x-model.number="bulk.season"><template x-for="s in seasons" :key="s"><option :value="s" x-text="'Season ' + s"></option></template></select>
@@ -44,15 +48,18 @@
             <label>Start at episode
               <input type="number" min="0" x-model.number="bulk.start">
             </label>
-            <label>&nbsp;<button type="button" @click="fillSequential()">Fill sequentially</button>
-              <br><input type="checkbox" x-model="bulk.reverse"> <span class="muted">newest first (fill from the bottom)</span></label>
+            <div class="form-actions bulk-fill">
+              <button type="button" class="secondary" @click="fillSequential()">Fill sequentially</button>
+              <label class="inline-check"><input type="checkbox" x-model="bulk.reverse"> <span class="muted">newest first (fill from the bottom)</span></label>
+            </div>
           </div>
-        </template>
-      </div>
-      <p class="muted" x-show="kind === 'sonarr' && series" x-text="series ? series.title + ' · ' + episodes.length + ' episodes in Sonarr' : ''"></p>
+          <p class="muted" x-text="series.title + ' · ' + episodes.length + ' episodes in Sonarr'"></p>
+        </div>
+      </template>
+      </article>
 
       <div class="table-wrap"><table class="grab">
-        <thead><tr><th></th><th>#</th><th>Video</th><th x-text="kind === 'sonarr' ? 'Episode' : 'Movie'"></th><th>Status</th></tr></thead>
+        <thead><tr><th><input type="checkbox" aria-label="tick all" :checked="rows.length > 0 && rows.every(r => r.include)" @change="rows.forEach(r => { r.include = $event.target.checked; })"></th><th>#</th><th>Video</th><th x-text="kind === 'sonarr' ? 'Episode' : 'Movie'"></th><th>Status</th></tr></thead>
         <tbody>
           <template x-for="(row, i) in rows" :key="row.video.id">
             <tr>
@@ -62,9 +69,9 @@
                   <br><span class="muted" x-text="fmtDuration(row.video.duration)"></span></td>
               <td>
                 <template x-if="kind === 'sonarr'">
-                  <fieldset role="group" style="margin:0">
-                    <input type="number" min="0" placeholder="S" aria-label="season" x-model.number="row.season" :disabled="!series" style="max-width:5em">
-                    <input type="number" min="0" placeholder="E" aria-label="episode" x-model.number="row.number" :disabled="!series" style="max-width:5em">
+                  <fieldset role="group" class="compact">
+                    <input type="number" min="0" placeholder="S" aria-label="season" x-model.number="row.season" :disabled="!series">
+                    <input type="number" min="0" placeholder="E" aria-label="episode" x-model.number="row.number" :disabled="!series">
                   </fieldset>
                 </template>
                 <template x-if="kind === 'radarr'">
@@ -89,6 +96,7 @@
         </button>
         <span class="muted"><span x-text="rows.filter(r => r.include).length"></span> selected · <span x-text="readyCount()"></span> ready</span>
         <span class="notice" role="status" aria-live="polite" x-show="result" x-html="result" style="margin:0"></span>
+        <span class="notice bad" role="alert" x-show="error && videos.length" x-text="error" style="margin:0"></span>
       </div>
     </div>
   </template>

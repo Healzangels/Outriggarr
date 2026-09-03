@@ -1,5 +1,4 @@
 {% if notice %}<p id="jobs-notice" hx-swap-oob="true" class="notice{{ ' bad' if notice_bad else '' }}" role="{{ 'alert' if notice_bad else 'status' }}" aria-live="polite">{{ notice }}</p>{% endif %}
-{% if total is defined and total > jobs | length %}<p class="muted">Showing the newest {{ jobs | length }} of {{ total }}.</p>{% endif %}
 {% if not jobs %}
 <p class="empty">{% if view == "failed" %}No failed jobs.{% elif view == "active" %}Nothing running.{% elif view == "done" %}Nothing finished yet.{% else %}No jobs yet. Queue one from <a href="/grab">Grab</a> or subscribe to a series under <a href="/series">Series</a>.{% endif %}</p>
 {% else %}
@@ -41,4 +40,5 @@
   </tbody>
 </table>
 </div>
+{% if total is defined and total > jobs | length %}<p class="muted">Showing the newest {{ jobs | length }} of {{ total }}.</p>{% endif %}
 {% endif %}

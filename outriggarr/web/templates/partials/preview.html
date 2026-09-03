@@ -7,25 +7,29 @@
   <span class="chip {{ 'warn' if report.unmatched else 'zero' }}">{{ report.unmatched | length }} unmatched</span>
   {% if report.held %}<span class="chip warn" title="Matched, but something contradicts it: the video's length against the episode's runtime, or the video is one part of a split upload">{{ report.held | length }} held</span>{% endif %}
   <span class="chip {{ '' if report.skipped_existing else 'zero' }}">{{ report.skipped_existing | length }} already have jobs</span>
-  <span class="chip" title="What the scheduler queues by itself; set under Subscription settings">auto-download: {% if sub.auto_download == "future" %}future only · {{ auto_count }} of {{ queueable }} would queue{% elif sub.auto_download == "all" %}everything{% else %}nothing{% endif %}</span>
+  {% if sub.auto_download == "future" and queueable %}<span class="chip" title="Auto-download is set to future episodes only (see the page header); the rest wait for you">{{ auto_count }} of {{ queueable }} would queue by itself</span>{% endif %}
 </p>
 <div class="form-actions">
-  <button class="secondary" hx-post="/subscriptions/{{ sub.id }}/scan" hx-target="#preview" hx-indicator="#scan-busy" title="List the sources again and re-match; nothing is queued">Refresh preview</button>
   <button hx-post="/subscriptions/{{ sub.id }}/download" hx-vals='{"all": "1"}' hx-target="#preview" hx-indicator="#scan-busy" {% if not queueable %}disabled{% endif %} title="Queue every current match, whatever the auto-download setting">Download all{% if queueable %} {{ queueable }}{% endif %}</button>
   <button id="download-selected" class="secondary" hx-post="/subscriptions/{{ sub.id }}/download" hx-include="#match-picks" hx-vals='{"selected": "1"}' hx-target="#preview" hx-indicator="#scan-busy" disabled title="Queue only the selected matches">Download selected <span class="count" id="selected-count" hidden>0</span></button>
   {% include "partials/date_fetch.html" %}
   <span id="scan-busy" class="htmx-indicator muted" aria-busy="true">working…</span>
+  <button class="secondary outline push-right" hx-post="/subscriptions/{{ sub.id }}/scan" hx-target="#preview" hx-indicator="#scan-busy" title="List the sources again and re-match; nothing is queued">Refresh preview</button>
 </div>
 {% if notice %}<p class="notice{{ ' bad' if notice_bad else '' }}" role="{{ 'alert' if notice_bad else 'status' }}" aria-live="polite">{{ notice }}</p>{% endif %}
 {% if report.error %}<p class="notice bad">Scan failed: {{ report.error }}</p>{% endif %}
 {# "this source may not carry the series" is only a fair reading when the subscription has never matched anything; a fully imported series with a few absent episodes looks the same to the matcher #}
 {% set nothing_seen = report.unmatched and not report.matches and not report.skipped_existing and not has_history and (report.unmatched | map(attribute="candidates") | map("dictsort") | map("map", attribute="1") | map("sum", start=[]) | map("length") | sum == 0) %}
+{% if not report.error and not (report.matches or report.unmatched or report.held or report.skipped_existing) %}
+<p class="empty">Sonarr wants nothing from this series right now, so there is nothing to match.</p>
+{% endif %}
 {% if nothing_seen %}
 <p class="notice warn">None of the {{ report.videos | length }} listed videos resembles any wanted episode. This source may not carry these episodes (a different playlist, an older web series, or a channel that posts under other titles). Try the channel's uploads or another playlist, or pin videos below.</p>
 {% endif %}
 
 {% if report.matches %}
 <h4>Matches</h4>
+{% if report.dry_run and queueable and not auto_count %}<p class="muted">Nothing here queues by itself: tick the episodes you want and press Download selected, or Download all.</p>{% endif %}
 <div class="table-wrap">
 <table>
   <thead><tr><th><input type="checkbox" id="tick-all" aria-label="tick all"></th><th>Episode</th><th>Video</th><th>Matched by</th><th>Job</th></tr></thead>
@@ -36,7 +40,7 @@
       <td><strong>{{ m.code }}</strong> {{ m.title }}<span class="two-line muted">{{ m.air_date or "" }}</span></td>
       <td><a href="{{ m.video_url }}" target="_blank" rel="noopener" class="truncate" title="{{ m.video_title }}">{{ m.video_title }}</a><span class="two-line muted mono">{{ m.video_id }}</span></td>
       <td><span class="chip">{{ tier_label(m.tier if m.strategy == "title" else m.strategy) }}</span></td>
-      <td>{% if m.job_id %}<a href="/activity" class="job-ref">#{{ m.job_id }}</a>{% elif m.skipped %}<span class="muted">{{ m.skipped }}</span>{% elif report.dry_run %}<span class="muted">{% if m.auto %}queues on the next scan{% else %}select to download{% endif %}</span>{% endif %}</td>
+      <td>{% if m.job_id %}<a href="/activity" class="job-ref">#{{ m.job_id }}</a>{% elif m.skipped %}<span class="muted">{{ m.skipped }}</span>{% elif report.dry_run and m.auto %}<span class="muted nowrap">queues on the next scan</span>{% endif %}</td>
     </tr>
   {% endfor %}
   </tbody>
@@ -102,19 +106,20 @@
   {% for u in shown %}
     <tr>
       <td><strong>{{ u.code }}</strong> {{ u.title }}<span class="two-line muted">{{ u.air_date or "" }}</span></td>
-      <td class="muted">
-        {% for strategy, cands in u.candidates.items() %}
-          <span class="chip">{{ "pins" if strategy == "override" else strategy }}</span>
-          {% if not cands %}no candidate{% else %}<span class="warn">{{ cands | length }} candidates:</span>
-            {% for c in cands %}{{ c.title | truncate(50) }}{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}<br>
-        {% endfor %}
+      <td>
+        {% if not (u.candidates.values() | map("length") | sum) %}<span class="muted">no candidate from {% for strategy in u.candidates %}{{ "pins" if strategy == "override" else strategy }}{% if not loop.last %}{{ " or " if loop.revindex == 2 else ", " }}{% endif %}{% endfor %}</span>
+        {% else %}{% for strategy, cands in u.candidates.items() %}
+          <span class="nowrap"><span class="chip">{{ "pins" if strategy == "override" else strategy }}</span>
+          {% if not cands %}<span class="muted">no candidate</span>{% else %}<span class="warn">{{ cands | length }} candidates:</span>{% endif %}</span>
+            {% for c in cands %}{{ c.title | truncate(50) }}{% if not loop.last %}, {% endif %}{% endfor %}<br>
+        {% endfor %}{% endif %}
       </td>
       <td>
         <form hx-post="/subscriptions/{{ sub.id }}/overrides" hx-target="#preview">
           <input type="hidden" name="season" value="{{ u.season }}"><input type="hidden" name="episode" value="{{ u.number }}">
           <fieldset role="group" class="pin">
             <input type="url" name="video_url" list="listed-videos" placeholder="pick a listed video or paste a URL" aria-label="video to pin to {{ u.code }}" title="Type part of a title to filter the listed videos, or paste any video URL (it need not be in the listing)">
-            <button type="submit">Pin</button>
+            <button type="submit" class="secondary">Pin</button>
           </fieldset>
         </form>
       </td>
@@ -127,7 +132,7 @@
 
 {% if sub.overrides %}
 <h4>Your pins</h4>
-<ul>
+<ul class="pins">
 {% for o in sub.overrides %}
   <li><code>{{ o.video_id }}</code>{% if o.video_title %} <span class="muted">{{ o.video_title | truncate(60) }}</span>{% endif %} → S{{ "%02d" % o.season }}E{{ "%02d" % o.episode }}{% if o.video_url %} <span class="chip" title="Pinned by pasting a URL; the video need not be in the listing">via URL</span>{% endif %}
     <form class="inline" hx-post="/subscriptions/{{ sub.id }}/overrides/{{ o.video_id }}/delete" hx-target="#preview"><button type="submit" class="secondary outline">Remove</button></form></li>
@@ -141,7 +146,7 @@
 </details>
 {% endif %}
 
-<details class="plain"><summary>{% set n = report.videos | length %}{{ n }} video{{ '' if n == 1 else 's' }} listed from the source{% if report.sources > 1 %}s{% endif %}</summary>
+<details class="plain"><summary>The listing <span class="muted">· every video the source{{ 's' if report.sources > 1 else '' }} returned</span></summary>
 {% set shown_videos = report.videos[:LISTED_VIDEOS_SHOWN] %}
 <ol>{% for v in shown_videos %}<li>{% if v.title == v.id %}<span class="muted">unavailable video</span>{% else %}<a href="{{ v.url }}" target="_blank" rel="noopener">{{ v.title }}</a>{% endif %} <span class="muted mono">{{ v.id }}{% if v.upload_date %} · {{ v.upload_date }}{% elif v.approx_age %} · <span title="What the listing page says; the exact date needs a per-video fetch (Fetch upload dates)">~{{ v.approx_age }}</span>{% endif %}</span></li>{% endfor %}</ol>
 {% if report.videos | length > shown_videos | length %}<p class="muted">…and {{ report.videos | length - shown_videos | length }} more; the pin picker above still offers every one.</p>{% endif %}

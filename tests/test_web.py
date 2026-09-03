@@ -192,7 +192,7 @@ def test_subscription_page_preview_scan_and_override(client: TestClient) -> None
     )
 
     prev = client.get(f"/subscriptions/{sub_id}/preview").text
-    assert "select to download" in prev and "S30E06" in prev  # a match, no job yet
+    assert "Nothing here queues by itself" in prev and "S30E06" in prev  # a match, no job yet
     assert "S30E07" in prev and "no candidate" in prev
     assert f'hx-post="/subscriptions/{sub_id}/overrides"' in prev
 
@@ -370,7 +370,7 @@ def test_subscription_episodes_panel_states_and_jobs(client: TestClient) -> None
     html = client.get(f"/subscriptions/{sub_id}/episodes").text
     assert html.index("Season 30") < html.index("Season 29"), "newest season first"
     assert "1/4 files" in html and "1 missing" in html
-    assert "1/1 files" in html
+    assert "1 complete season" in html and "S29 1/1" in html, "complete seasons fold"
     for needle in ("✓ file", ">missing<", ">unaired<", ">unmonitored<"):
         assert needle in html, needle
     assert "status-queued" in html and "#1" in html, "the queued job is linked to S30E06"
@@ -408,7 +408,7 @@ def test_override_form_accepts_a_url(client: TestClient) -> None:
     assert r.status_code == 200
     assert "Pinned Seven, older upload to S30E07 (from URL)" in r.text
     assert ">via URL<" in r.text and "S30E07" in r.text
-    assert "select to download" in r.text  # S30E07 now matches via the override
+    assert 'aria-label="download S30E07"' in r.text  # S30E07 now matches via the override
     r = client.post(f"/subscriptions/{sub_id}/overrides", data={"season": "30", "episode": "7"})
     assert "Pick a video or paste a URL" in r.text
     prev = client.get(f"/subscriptions/{sub_id}/preview").text
@@ -625,7 +625,7 @@ def test_preview_holds_a_length_mismatch_and_pin_releases_it(client: TestClient)
     assert (
         r.status_code == 200 and "held" not in r.text.split("Your pins")[0].split("unmatched")[-1]
     )
-    assert "select to download" in r.text  # pinned: a plain match row now
+    assert 'name="episode_id"' in r.text  # pinned: a plain match row now
     page = client.get("/matches?view=review").text
     assert "Nothing needs a look" in page
     client.post(f"/subscriptions/{sub_id}/download")
@@ -649,7 +649,7 @@ def test_matches_page_tiers_and_fallback_for_old_jobs(client: TestClient) -> Non
     page = client.get("/matches").text
     assert "Six Spicy Wings" in page and 'matched them">title contains</span>' in page
     assert f'href="/subscriptions/{sub_id}"' in page
-    assert "needs a look" in page and "Matches" in client.get("/activity").text  # nav link
+    assert "Needs a look" in page and "Matches" in client.get("/activity").text  # nav link
     old = Job(
         connection_id=1,
         target_kind=TargetKind.episode,
@@ -1018,9 +1018,7 @@ def test_subscribe_form_defaults_to_future_and_preview_downloads_selected(
         json={"connection_id": 1, "series_id": 5, "sources": ["https://www.youtube.com/@hotones"]},
     ).json()["id"]
     prev = client.get(f"/subscriptions/{sub_id}/preview").text
-    assert (
-        "auto-download: future only · 0 of 1 would queue" in prev and "select to download" in prev
-    )
+    assert "0 of 1 would queue by itself" in prev and "Nothing here queues by itself" in prev
     assert 'name="episode_id" value="11"' in prev and "Download selected" in prev
     assert 'id="selected-count" hidden>0</span>' in prev and 'id="tick-all"' in prev, (
         "a live count, hidden while nothing is ticked"
@@ -1509,6 +1507,7 @@ def test_matches_all_view_is_capped_with_a_show_all_switch(client: TestClient, m
     assert page.count("1500") == 0 and page.count("25:00 vs 25:00 ✓") == 2, "capped at two rows"
     assert (
         "Showing the newest 2 of 3." in page
+        and page.index("Showing the newest 2 of 3.") > page.index("</table>")
         and 'href="/matches?view=all&limit=all">Show all 3</a>' in page
     )
     everything = client.get("/matches?view=all&limit=all").text
@@ -1805,7 +1804,7 @@ def test_listed_videos_panel_is_capped(client: TestClient) -> None:
         prev = client.get(f"/subscriptions/{sub_id}/preview").text
     finally:
         templates.env.globals["LISTED_VIDEOS_SHOWN"] = 100
-    listed = prev.split("<summary>7 videos listed")[1]
+    listed = prev.split("<summary>The listing")[1]
     assert listed.count("<li>") == 5 and "…and 2 more" in listed
     assert prev.count('<option value="https://y/v') == 7, "the pin picker still offers every one"
 
@@ -1856,7 +1855,8 @@ def test_settings_saved_notice_names_the_form(client: TestClient) -> None:
         data={"_notify_form": "1", "apprise_urls": ""},
         follow_redirects=False,
     )
-    assert r.status_code == 303 and r.headers["location"] == "/settings?saved=notifications"
+    assert r.status_code == 303
+    assert r.headers["location"] == "/settings?saved=notifications#notifications"
     assert "Notifications saved." in client.get("/settings?saved=notifications").text
     assert "Downloads saved." in client.get("/settings?saved=downloads").text
     assert "Connection saved." in client.get("/settings?saved=connection").text
@@ -1910,3 +1910,164 @@ def test_matches_rank_needs_a_look_first_and_confirmed_rows_sink(client: TestCli
     assert order == ["B", "D", "C", "A"], order
     review = client.get("/matches?view=review").text
     assert "Row B" in review and not any(f"Row {n}" in review for n in "ACD")
+
+
+def test_matches_show_one_row_per_target_the_newest_job(client: TestClient) -> None:
+    # A re-download of the same episode (say at a higher quality) made the episode
+    # appear twice with identical evidence; only the newest job for a target is shown
+    from datetime import UTC, datetime, timedelta
+
+    from outriggarr.db.models import Job, JobStatus, TargetKind
+
+    _seed_series(client)
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={"connection_id": 1, "series_id": 5, "source_url": "https://www.youtube.com/@hotones"},
+    ).json()["id"]
+    now = datetime.now(UTC)
+    with client.app.state.session_factory() as s:
+        # only a finished job can share its target and video with a newer one
+        for name, age, duration in (("Old", 2, None), ("New", 1, 1500)):
+            s.add(
+                Job(
+                    connection_id=1,
+                    subscription_id=sub_id,
+                    target_kind=TargetKind.episode,
+                    series_id=5,
+                    episode_ids=[11],
+                    target_key="episode:5:11",
+                    video_id="same",
+                    video_url="https://y/same",
+                    video_title=f"Video {name}",
+                    target_label="Show S30E06 - Six",
+                    matched_by="contains",
+                    target_runtime=25,
+                    video_duration=duration,
+                    created_at=now - timedelta(days=age),
+                    status=JobStatus.done if name == "Old" else JobStatus.queued,
+                )
+            )
+        s.commit()
+    page = client.get("/matches?view=all").text
+    assert "Video New" in page and "Video Old" not in page
+    assert page.count("Show S30E06 - Six") == 1
+    assert 'All<span class="count">1</span>' in page
+    assert 'Needs a look<span class="count">0</span>' in page, "the superseded job's gap is moot"
+
+
+def test_settings_errors_keep_typed_values_and_sit_in_the_failing_card(client: TestClient) -> None:
+    client.post("/api/connections", json=SONARR)
+    r = client.post(
+        "/settings/downloads",
+        data={"ytdlp_extra_opts": "{bad", "cookies_path": "/typed/cookies.txt"},
+    )
+    assert r.status_code == 400
+    assert 'value="/typed/cookies.txt"' in r.text, "a typo elsewhere must not empty the form"
+    assert "{bad" in r.text and 'class="notice bad"' in r.text
+    r = client.post(
+        "/settings/connections/1",
+        data={
+            "kind": "sonarr",
+            "name": "Typed Name",
+            "url": "not a url",
+            "api_key": "typed-secret",
+            "staging_path_remote": "/data/x",
+        },
+    )
+    assert r.status_code == 400
+    card = r.text.split('action="/settings/connections/1"')[1].split("</article>")[0]
+    assert 'value="Typed Name"' in card and 'class="notice bad"' in card, "error inside the card"
+    assert "typed-secret" not in r.text and "k1" not in r.text, "keys are never echoed"
+    assert 'id="downloads"' in r.text and 'id="notifications"' in r.text
+
+
+def test_matches_chip_colour_follows_need_not_tier(client: TestClient) -> None:
+    from datetime import UTC, datetime
+
+    from outriggarr.db.models import Job, JobStatus, TargetKind
+
+    _seed_series(client)
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={"connection_id": 1, "series_id": 5, "source_url": "https://www.youtube.com/@hotones"},
+    ).json()["id"]
+    with client.app.state.session_factory() as s:
+        for eid, duration, reviewed in ((11, 1500, None), (12, 120, datetime.now(UTC))):
+            s.add(
+                Job(
+                    connection_id=1,
+                    subscription_id=sub_id,
+                    target_kind=TargetKind.episode,
+                    series_id=5,
+                    episode_ids=[eid],
+                    target_key=f"episode:5:{eid}",
+                    video_id=f"v{eid}",
+                    video_url=f"https://y/v{eid}",
+                    video_title=f"Video {eid}",
+                    target_label=f"Show S30E{eid - 5:02d} - T{eid}",
+                    matched_by="contains",
+                    target_runtime=25,
+                    video_duration=duration,
+                    reviewed_at=reviewed,
+                    status=JobStatus.done,
+                )
+            )
+        s.commit()
+    page = client.get("/matches?view=all").text
+    rows = page.split("<tbody>")[1].split("</tbody>")[0].split("<tr")[1:]
+    ok_row = next(r for r in rows if "Video 11" in r)
+    confirmed_row = next(r for r in rows if "Video 12" in r)
+    assert '<span class="chip " title=' in ok_row, "length vouches: no orange on a contains tier"
+    assert 'class="chip warn"' not in ok_row and 'class="chip warn"' not in confirmed_row
+    assert ">confirmed</span> <form" in confirmed_row, "the chip sits beside its Undo"
+    assert (
+        ">Pin another…</a>" in ok_row and "Wrong video?" in ok_row
+    )  # the sentence lives in the title
+
+
+def test_preview_says_so_when_sonarr_wants_nothing(client: TestClient) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from outriggarr.arr.base import EpisodeRef, SeriesRef
+    from tests.fakes import FakeArrClient
+
+    aired = datetime.now(UTC) - timedelta(days=1)
+    client.app.state.arr_factory.by_url["http://sonarr-host:1234"] = FakeArrClient(
+        series_list=[SeriesRef(5, "Done Show", 2015, 1, True)],
+        episodes_by_series={5: [EpisodeRef(11, 1, 1, "One", True, True, aired)]},
+    )
+    client.app.state.source.recent = []
+    client.post("/api/connections", json=SONARR)
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={"connection_id": 1, "series_id": 5, "source_url": "https://www.youtube.com/@done"},
+    ).json()["id"]
+    prev = client.get(f"/subscriptions/{sub_id}/preview").text
+    assert "Sonarr wants nothing from this series right now" in prev
+    assert "None of the" not in prev, "not the wrong-source warning"
+
+
+def test_series_rows_say_nothing_new_and_have_no_open_button(client: TestClient) -> None:
+    from datetime import UTC, datetime
+
+    from outriggarr.db.models import Subscription
+
+    _seed_series(client)
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={"connection_id": 1, "series_id": 5, "source_url": "https://www.youtube.com/@hotones"},
+    ).json()["id"]
+    with client.app.state.session_factory() as s:
+        sub = s.get(Subscription, sub_id)
+        sub.last_scan_at = datetime.now(UTC)
+        sub.last_scan_result = {"matched": 0, "created": 0, "unmatched": 0, "error": None}
+        s.commit()
+    page = client.get("/series").text
+    assert ">nothing new</span>" in page and "0 matched" not in page
+    assert ">Open</a>" not in page, "the title is already the link"
+    with client.app.state.session_factory() as s:
+        sub = s.get(Subscription, sub_id)
+        sub.last_scan_result = {"matched": 3, "created": 0, "unmatched": 1, "error": None}
+        s.commit()
+    page = client.get("/series").text
+    assert '<span class="chip ok">3 matched</span>' in page and "1 unmatched" in page

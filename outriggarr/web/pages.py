@@ -391,7 +391,16 @@ def _matches_context(
         .order_by(Job.created_at.desc(), Job.id.desc())
         .limit(REVIEW_LIMIT)
     ).all()
-    entries = [review_entry(j) for j in jobs]
+    # One row per target: a re-download of the same episode supersedes the older job,
+    # whose evidence is the same video's and would only show as a puzzling duplicate.
+    seen_targets: set[tuple[int | None, str]] = set()
+    current = []
+    for j in jobs:  # newest first
+        key = (j.subscription_id, j.target_key)
+        if key not in seen_targets:
+            seen_targets.add(key)
+            current.append(j)
+    entries = [review_entry(j) for j in current]
     counts = {"review": sum(1 for e in entries if e["needs_look"]), "all": len(entries)}
     if view not in ("review", "all"):
         # land where the work is; with nothing to look at, show everything
@@ -1166,8 +1175,10 @@ async def subscription_delete(
 # ---- Settings ----------------------------------------------------------------------
 
 
-def _settings_context(session: DbSession, **extra) -> dict:
-    settings = all_settings(session)
+def _settings_context(session: DbSession, submitted: dict | None = None, **extra) -> dict:
+    """`submitted` is a rejected form's values: they overlay the stored settings so a
+    typo does not throw away everything else that was typed."""
+    settings = {**all_settings(session), **(submitted or {})}
     return {
         "connections": list(session.scalars(select(Connection).order_by(Connection.id))),
         "settings": settings,
@@ -1178,6 +1189,9 @@ def _settings_context(session: DbSession, **extra) -> dict:
         "kinds": [k.value for k in ConnectionKind],
         "conn_error": None,
         "settings_error": None,
+        "notify_error": None,
+        "failed_connection_id": None,
+        "submitted": submitted or {},
         "notice": None,
         **extra,
     }
@@ -1205,14 +1219,21 @@ async def settings_downloads_post(request: Request, session: DbSession) -> HTMLR
     except Exception as exc:
         session.rollback()
         detail = getattr(exc, "detail", None) or str(exc)
+        error = {"notify_error": detail} if data.get("_notify_form") else {"settings_error": detail}
         return templates.TemplateResponse(
             request,
             "settings.html",
-            _settings_context(session, settings_error=detail),
+            _settings_context(session, submitted=changes, **error),
             status_code=400,
         )
     saved = "notifications" if data.get("_notify_form") else "downloads"
-    return RedirectResponse(f"/settings?saved={saved}", status_code=303)
+    return RedirectResponse(f"/settings?saved={saved}#{saved}", status_code=303)
+
+
+def _without_key(data: dict[str, str]) -> dict[str, str]:
+    """A rejected connection form comes back with what was typed, minus the API key: a
+    secret is never echoed into a page."""
+    return {k: v for k, v in data.items() if k != "api_key"}
 
 
 def _connection_body(data: dict[str, str]) -> ConnectionIn:
@@ -1254,10 +1275,10 @@ async def settings_connection_create(request: Request, session: DbSession) -> HT
         return templates.TemplateResponse(
             request,
             "settings.html",
-            _settings_context(session, conn_error=detail),
+            _settings_context(session, submitted=_without_key(data), conn_error=detail),
             status_code=400,
         )
-    return RedirectResponse("/settings?saved=connection", status_code=303)
+    return RedirectResponse("/settings?saved=connection#connections", status_code=303)
 
 
 @router.post("/settings/connections/{connection_id}")
@@ -1276,10 +1297,15 @@ async def settings_connection_update(
         return templates.TemplateResponse(
             request,
             "settings.html",
-            _settings_context(session, conn_error=detail),
+            _settings_context(
+                session,
+                submitted=_without_key(data),
+                conn_error=detail,
+                failed_connection_id=connection_id,
+            ),
             status_code=400,
         )
-    return RedirectResponse("/settings?saved=connection", status_code=303)
+    return RedirectResponse("/settings?saved=connection#connections", status_code=303)
 
 
 @router.post("/settings/connections/{connection_id}/delete")

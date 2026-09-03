@@ -4,10 +4,11 @@
 <div class="page-header">
   <div>
     <h2>{{ sub.title or ("series " ~ sub.series_id) }} {% if not sub.enabled %}<span class="badge badge-off">disabled</span>{% endif %}</h2>
-    <p class="sub">{% for u in sub.sources %}<a href="{{ u }}" target="_blank" rel="noopener" class="truncate" title="{{ u }}">{{ u | replace("https://www.youtube.com/", "youtube.com/") }}</a>{% if not loop.last %} <span class="muted">·</span> {% endif %}{% endfor %}</p>
+    <p class="sub">{% for u in sub.sources %}<a href="{{ u }}" target="_blank" rel="noopener" title="{{ u }}">{{ u | replace("https://www.youtube.com/", "youtube.com/") }}</a>{% if not loop.last %} <span class="muted">·</span> {% endif %}{% endfor %}</p>
   </div>
   <dl class="meta" title="Subscription {{ sub.id }}">
     <div><dt>Match order</dt><dd title="Videos you pin to an episode always win, then the automatic strategies in this order">pins{% for st in sub.strategies %} → {{ st }}{% endfor %}</dd></div>
+    <div><dt>Auto-download</dt><dd title="What the scheduler queues by itself; set under Subscription settings">{% if sub.auto_download == "future" %}future episodes only{% elif sub.auto_download == "all" %}everything it matches{% else %}nothing{% endif %}</dd></div>
     <div><dt>Last scan</dt><dd>{% if sub.last_scan_at %}<span title="{{ sub.last_scan_at.strftime('%Y-%m-%d %H:%M') }}Z">{{ sub.last_scan_at | ago }}</span>{% else %}never{% endif %}</dd></div>
   </dl>
 </div>
@@ -29,9 +30,9 @@
 
 <article class="card">
   <header>Recent jobs from this subscription</header>
-  {% if not jobs %}<p class="muted">No jobs yet. Download from the preview above, or leave it to the scheduler and the auto-download setting.</p>{% else %}
-  <div class="table-wrap"><table><thead><tr><th>Job</th><th>Episode</th><th>Video</th><th>When</th></tr></thead><tbody>
-  {% for job in jobs %}<tr><td class="nowrap"><a href="/activity" class="job-ref">#{{ job.id }}</a> <span class="badge badge-{{ job.status.value }} status status-{{ job.status.value }}">{{ job.status.value }}</span></td><td>{{ job.target_label }}</td><td><span class="truncate" title="{{ job.video_title }}">{{ job.video_title }}</span></td><td class="muted when">{{ (job.finished_at or job.created_at) | ago }}</td></tr>{% endfor %}
+  {% if not jobs %}<p class="empty">No jobs yet. Download from the preview above, or leave it to the scheduler and the auto-download setting.</p>{% else %}
+  <div class="table-wrap"><table class="recent"><thead><tr><th>Job</th><th>Episode</th><th>Video</th><th>When</th></tr></thead><tbody>
+  {% for job in jobs %}<tr><td class="nowrap"><a href="/activity" class="job-ref">#{{ job.id }}</a> <span class="badge badge-{{ job.status.value }} status status-{{ job.status.value }}">{{ job.status.value }}</span></td><td>{% set label = job.target_label | replace(sub.title ~ " ", "", 1) %}{% if " - " in label %}<strong>{{ label.split(" - ", 1)[0] }}</strong> {{ label.split(" - ", 1)[1] }}{% else %}{{ label }}{% endif %}</td><td><span class="truncate" title="{{ job.video_title }}">{{ job.video_title }}</span></td><td class="muted when">{{ (job.finished_at or job.created_at) | ago }}</td></tr>{% endfor %}
   </tbody></table></div>{% endif %}
 </article>
 

@@ -32,15 +32,15 @@ a.brand svg { border-radius: 6px; flex: none; }
 
 /* cards & sections */
 article.card { padding: 1rem 1.25rem; margin-bottom: var(--o-gap); }
-article.card > header { margin: -1rem -1.25rem .75rem; padding: .6rem 1.25rem; font-weight: 600; }
+article.card > header { margin: -1rem -1.25rem .75rem; padding: .6rem 1.25rem; font-weight: 600; font-size: 1.05rem; }
 article.card > header .muted { font-weight: 400; }
 section + section { margin-top: 1.5rem; }
 h3.section { margin-bottom: .5rem; }
-article.card h4 { margin: 1.1rem 0 .5rem; font-size: 1.05rem; }
+article.card h4 { margin: 1.1rem 0 .5rem; font-size: 1rem; }  /* under the card's own title */
 article.card h4 .muted { font-size: .8em; }
 
 /* badges & chips */
-.badge { display: inline-block; font-size: .8em; line-height: 1.6; padding: 0 .55em; border-radius: var(--o-badge-radius); white-space: nowrap; color: #fff; background: #555; vertical-align: middle; }
+.badge { display: inline-block; font-size: .78rem; line-height: 1.6; padding: 0 .55em; border-radius: var(--o-badge-radius); white-space: nowrap; color: #fff; background: #555; vertical-align: middle; }
 .badge-queued, .badge-downloading, .badge-importing { background: #2a4a7a; }
 .badge-done, .badge-ok { background: #2f6b3a; }
 .badge-failed { background: #7a2a2a; }
@@ -48,7 +48,7 @@ article.card h4 .muted { font-size: .8em; }
 .badge-kind { background: #3b3b5c; }
 .badge-outline { background: transparent; border: 1px solid var(--o-border); color: var(--o-muted); }
 .chips { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; }
-.chip { font-size: .8em; padding: .05em .55em; border: 1px solid var(--o-border); border-radius: 1em; color: var(--o-muted); white-space: nowrap; }
+.chip { font-size: .78rem; padding: .05em .55em; border: 1px solid var(--o-border); border-radius: 1em; color: var(--o-muted); white-space: nowrap; }
 .chip.ok { border-color: var(--o-ok); color: var(--o-ok); }
 .chip.warn { border-color: var(--o-warn); color: var(--o-warn); }
 .chip.bad { border-color: var(--o-bad); color: var(--o-bad); }
@@ -74,29 +74,38 @@ tr.day-group + tr td { border-top: 1px solid var(--o-border); }
 .job-id, .job-ref { display: inline-block; min-width: 4.5ch; font-family: var(--pico-font-family-monospace); font-size: .85em; }
 .job-id { color: var(--o-muted); margin-right: .35em; }
 tr.quiet .job-id { opacity: .85; }
+/* a settled row (done, cancelled) keeps its badge as an outline: two hundred filled green
+   badges would be the loudest thing on the page, and only work in progress needs the fill */
+tr.quiet .badge { background: transparent; border: 1px solid #2f6b3a; color: var(--o-ok); line-height: 1.45; }
+tr.quiet .badge-cancelled { border-color: #555; color: var(--o-muted); }
 td.evidence .chip { vertical-align: middle; }
 td.evidence .length { font-size: .88em; margin: 0 .35em; }
+table.matches th:first-child { width: 32%; }  /* episode labels mostly fit one line */
+#matches-content .form-actions { margin: 0 0 .75rem; }
 tr.attention td:first-child { box-shadow: inset 3px 0 0 var(--o-warn); }
 details.explainer { margin: -.5rem 0 1rem; }
 details.explainer > summary { color: var(--o-muted); font-size: .9em; padding: .2rem 0; }
 details.explainer p { margin: .25rem 0 0; max-width: 80ch; }
+details.explainer > summary::after, details.plain > summary::after { float: none; display: inline-block; vertical-align: middle; margin-inline-start: .35em; }
 /* links in tables are the norm, not the exception: underline only on hover/focus */
 table a:not([role=button]) { text-decoration: none; }
 table a:not([role=button]):hover, table a:not([role=button]):focus-visible { text-decoration: underline; }
 @media (hover: hover) {
   tbody tr:hover { background: rgba(255, 255, 255, .03); }
   /* per-row buttons recede until the row is in play */
-  td.actions button, td.actions a[role=button], td.actions form.inline button { opacity: .65; }
-  tbody tr:hover td.actions button, tbody tr:hover td.actions a[role=button], td.actions button:focus-visible { opacity: 1; }
+  td.actions button, td.actions a[role=button], td.actions form.inline button, td.actions a.muted { opacity: .65; }
+  tbody tr:hover td.actions button, tbody tr:hover td.actions a[role=button], tbody tr:hover td.actions a.muted, td.actions button:focus-visible { opacity: 1; }
 }
 td.actions, th.actions { white-space: nowrap; text-align: right; }
-td.actions button, td.actions a[role=button] { margin: 0 0 0 .3em; padding: .15em .6em; font-size: .82em; display: inline-block; width: auto; }
+td.actions button, td.actions a[role=button], td.actions form.inline button { margin: 0 0 0 .3em; padding: .15em .6em; font-size: .82em; display: inline-block; width: auto; }
+td.actions a.muted { margin-left: .5em; }
 td.actions .two-line { margin-top: .25em; }
 td.num { text-align: right; white-space: nowrap; }
 td.when { white-space: nowrap; }
 .truncate { display: inline-block; max-width: 34ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: text-bottom; }
+table.jobs .truncate, table.recent .truncate { max-width: 48ch; }  /* fewer columns than Matches: room for the whole title */
 .two-line { display: block; }
-.two-line .muted { display: block; }
+.two-line > progress { width: 6rem; vertical-align: middle; }  /* the bar and its percentage share a line */
 progress { margin: 0; height: .5rem; }
 
 /* tabs (filters) */
@@ -129,18 +138,18 @@ form.inline button { padding: .2em .6em; font-size: .85em; width: auto; display:
 button.x-clear { background: none; border: 0; color: var(--o-bad); padding: 0 .3em; font-size: .9em; line-height: 1; vertical-align: middle; cursor: pointer; opacity: .75; }
 button.x-clear:hover, button.x-clear:focus { opacity: 1; background: none; }
 fieldset[role=group].compact { margin: 0; }
-label .hint { display: block; color: var(--o-muted); font-size: .82em; font-weight: 400; }
+label .hint { display: block; color: var(--o-muted); font-size: .82em; font-weight: 400; max-width: 80ch; }
 /* Side-by-side fields: hints differ in length, so without this the controls sit at
    different depths and a row of inputs looks jumbled. Each label becomes a column with
    its control pinned to the bottom of the (equal-height) grid cell; checkbox labels are
    left alone, their control comes first. */
-.grid > label:has(> input:not([type=checkbox]):not([type=radio]), > select, > textarea, > .fill-row) { display: flex; flex-direction: column; }
-.grid > label > input:not([type=checkbox]):not([type=radio]), .grid > label > select, .grid > label > textarea, .grid > label > .fill-row { margin-top: auto; }
+.grid > label:has(> input:not([type=checkbox]):not([type=radio]), > select, > textarea, > .fill-row) { display: flex; flex-direction: column; justify-content: flex-end; }
 .grid > label > .hint { margin-bottom: .35rem; }
 .form-actions { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; margin-top: .5rem; }
 .form-actions button { width: auto; margin: 0; }
 [role=group] > button { white-space: nowrap; }  /* a two-word button beside a wide input stays on one line */
-.form-actions .danger { margin-left: auto; }
+.form-actions .danger, .form-actions .push-right { margin-left: auto; }
+.form-actions [role=status]:not(:empty) { flex-basis: 100%; order: 99; }
 .form-actions form { margin: 0; }
 /* the date-fetch partial is swapped as one unit but lays out as two: its button joins
    the row, its progress line takes a full row underneath */
@@ -148,6 +157,13 @@ label .hint { display: block; color: var(--o-muted); font-size: .82em; font-weig
 .form-actions .date-fetch .notice { flex-basis: 100%; order: 99; margin: .25rem 0 0; }
 .scan-summary { margin: 0 0 .6rem; }
 fieldset[role=group].pin { margin: 0; }
+ul.pins { list-style: none; padding-left: 0; }
+ul.pins li { display: flex; flex-wrap: wrap; gap: .5em; align-items: baseline; margin-bottom: .35rem; }
+details.season > summary { color: inherit; }
+details.season > summary .muted { font-weight: 400; }
+.bulk-fill { align-self: end; margin: 0 0 var(--pico-spacing); }
+label.inline-check { display: inline-flex; align-items: center; gap: .35em; margin: 0; }
+
 /* a preset picker beside the free-text field it fills */
 .fill-row { display: grid; grid-template-columns: minmax(16rem, 2fr) 3fr; gap: .5rem; align-items: start; }
 .fill-row select, .fill-row input { margin-bottom: 0; }
@@ -155,10 +171,14 @@ ul.presets { padding-left: 1.2rem; }
 ul.presets li { margin-bottom: .5rem; }
 ul.presets code { font-size: .78em; word-break: break-all; }
 fieldset[role=group].pin input { min-width: 16em; }
+table.grab fieldset[role=group] input { max-width: 5em; }
+details.error { margin: .15rem 0 0; }
+details.error[open] > summary { margin-bottom: .3rem; }
 details.error pre { white-space: pre-wrap; font-size: .8em; max-width: 60ch; margin: .3rem 0 0; }
-details.error summary { cursor: pointer; }
+details.error summary { cursor: pointer; display: block; max-width: 48ch; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+details.error summary::after { float: none; display: inline-block; vertical-align: middle; margin-inline-start: .35em; }
 /* the plain-words reading of a failed job's error, under the verbatim text */
-.cause { display: block; color: var(--o-muted); font-size: .82em; max-width: 60ch; margin-top: .2rem; }
+.cause { display: block; color: var(--o-muted); font-size: .82em; max-width: 60ch; margin-top: .1rem; }
 .cause::before { content: "Likely cause: "; color: var(--pico-color); }
 .htmx-indicator { opacity: 0; transition: opacity .2s; }
 .htmx-request .htmx-indicator, .htmx-request.htmx-indicator { opacity: 1; }
@@ -172,6 +192,8 @@ details.error summary { cursor: pointer; }
 .sticky-bar button { width: auto; margin: 0; }
 
 /* footer */
+footer .ok { color: var(--o-muted); }
+footer [title] { text-decoration: underline dotted; text-underline-offset: .2em; }
 footer.container { margin-top: 2.5rem; padding: 1rem 0; border-top: 1px solid var(--o-border); color: var(--o-muted); font-size: .82em; display: flex; flex-wrap: wrap; justify-content: center; text-align: center; gap: .5rem 1.25rem; align-items: center; }
 
 @media (max-width: 720px) {
@@ -183,6 +205,8 @@ footer.container { margin-top: 2.5rem; padding: 1rem 0; border-top: 1px solid va
   a.brand strong { display: none; }
   nav.container ul:last-child { gap: 0; }
   nav.container ul:last-child li { padding: .25rem .45rem; }
-  .form-actions .danger { margin-left: 0; }
+  .form-actions .danger, .form-actions .push-right { margin-left: 0; }
   .fill-row { grid-template-columns: 1fr; }
+  td.actions button, td.actions form.inline button { padding: .45em .8em; font-size: .9em; }
+  table [type=checkbox] { width: 1.4em; height: 1.4em; }
 }

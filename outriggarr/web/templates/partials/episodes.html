@@ -1,10 +1,13 @@
 {% if notice %}<p class="notice{{ ' bad' if notice_bad else '' }}" role="{{ 'alert' if notice_bad else 'status' }}" aria-live="polite">{{ notice }}</p>{% endif %}
 {% if error %}<p class="notice bad">{{ error }}</p>
-{% elif not seasons %}<p class="muted">Sonarr lists no episodes for this series.</p>
+{% elif not seasons %}<p class="empty">Sonarr lists no episodes for this series.</p>
 {% else %}
-<p class="chips">{% for s in seasons %}<span class="chip {{ 'warn' if s.missing else '' }}" title="Season {{ s.season }}: {{ s.files }} of {{ s.total }} episodes have a file{% if s.missing %}, {{ s.missing }} missing{% endif %}">S{{ s.season }} {{ s.files }}/{{ s.total }}</span>{% endfor %}</p>
-{% for s in seasons %}
-<details class="plain" {% if loop.first %}open{% endif %}>
+{# A season earns its own table when something is missing or a job touched it, and the
+   newest season always does; the rest are complete and fold into one line. #}
+{% set ns = namespace(open=[], folded=[]) %}
+{% for s in seasons %}{% if loop.first or s.missing or (s.rows | selectattr("job") | list) %}{% set ns.open = ns.open + [s] %}{% else %}{% set ns.folded = ns.folded + [s] %}{% endif %}{% endfor %}
+{% for s in ns.open %}
+<details class="plain season" {% if loop.first %}open{% endif %}>
   <summary>Season {{ s.season }} <span class="muted">· {{ s.files }}/{{ s.total }} files{% if s.missing %} · <span class="warn">{{ s.missing }} missing</span>{% endif %}</span></summary>
   <div class="table-wrap">
   <table>
@@ -27,4 +30,10 @@
   </div>
 </details>
 {% endfor %}
+{% if ns.folded %}
+<details class="plain season">
+  <summary>{% set n = ns.folded | length %}{{ n }} complete season{{ '' if n == 1 else 's' }} <span class="muted">· {{ ns.folded | map(attribute="files") | sum }} files, nothing missing</span></summary>
+  <p class="chips">{% for s in ns.folded %}<span class="chip" title="Season {{ s.season }}: {{ s.files }} of {{ s.total }} episodes have a file">S{{ s.season }} {{ s.files }}/{{ s.total }}</span>{% endfor %}</p>
+</details>
+{% endif %}
 {% endif %}

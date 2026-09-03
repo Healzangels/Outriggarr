@@ -4,28 +4,29 @@
 <div class="page-header">
   <div><h2>Settings</h2></div>
 </div>
-{% set saved = request.query_params.get("saved") %}{% if saved %}<p class="notice" role="status" aria-live="polite">{{ {"connection": "Connection saved.", "downloads": "Downloads saved.", "notifications": "Notifications saved."}.get(saved, "Saved.") }}</p>{% endif %}
-
-<section>
+{% set saved = request.query_params.get("saved") %}
+<section id="connections">
 <h3 class="section">Connections</h3>
-{% if conn_error %}<p class="notice bad">{{ conn_error }}</p>{% endif %}
-{% for c in connections %}
+{% if saved == "connection" %}<p class="notice" role="status" aria-live="polite">Connection saved.</p>{% endif %}
+{% if conn_error and failed_connection_id is none %}<p class="notice bad">{{ conn_error }}</p>{% endif %}
+{% for c in connections %}{% set f = (submitted if failed_connection_id == c.id else {}) %}
 <article class="card">
   <header><span class="badge badge-kind">{{ c.kind.value }}</span> {{ c.name }} <span class="muted">· {{ c.url }}</span>{% if not c.enabled %} <span class="badge badge-off">disabled</span>{% endif %}</header>
   <form method="post" action="/settings/connections/{{ c.id }}">
     <div class="grid">
-      <label>App<select name="kind">{% for k in kinds %}<option value="{{ k }}" {% if k == c.kind.value %}selected{% endif %}>{{ k }}</option>{% endfor %}</select></label>
-      <label>Name<input name="name" value="{{ c.name }}" required></label>
+      <label>App<select name="kind">{% for k in kinds %}<option value="{{ k }}" {% if k == f.get("kind", c.kind.value) %}selected{% endif %}>{{ k }}</option>{% endfor %}</select></label>
+      <label>Name<input name="name" value="{{ f.get("name", c.name) }}" required></label>
     </div>
     <div class="grid">
-      <label>URL<input name="url" value="{{ c.url }}" required placeholder="http://sonarr:8989"></label>
+      <label>URL<input name="url" value="{{ f.get("url", c.url) }}" required placeholder="http://sonarr:8989"></label>
       <label>API key <span class="hint">Blank = keep the stored key.</span><input name="api_key" type="password" autocomplete="new-password" placeholder="••••••••"></label>
     </div>
-    <label>Staging path as {{ c.name }} sees it <span class="hint">The staging folder's path inside {{ c.name }}'s own container.</span><input name="staging_path_remote" value="{{ c.staging_path_remote }}" required></label>
-    <label><input type="checkbox" name="enabled" value="1" {% if c.enabled %}checked{% endif %}> Enabled</label>
+    <label>Staging path as {{ c.name }} sees it <span class="hint">The staging folder's path inside {{ c.name }}'s own container.</span><input name="staging_path_remote" value="{{ f.get("staging_path_remote", c.staging_path_remote) }}" required></label>
+    <label><input type="checkbox" name="enabled" value="1" {% if ((f.get("enabled") is not none) if f else c.enabled) %}checked{% endif %}> Enabled</label>
+    {% if failed_connection_id == c.id %}<p class="notice bad">{{ conn_error }}</p>{% endif %}
     <div class="form-actions">
       <button type="submit">Save connection</button>
-      <button type="button" class="secondary" hx-post="/settings/connections/{{ c.id }}/test" hx-target="#test-{{ c.id }}" hx-swap="innerHTML" hx-indicator="#test-busy-{{ c.id }}">Test</button>
+      <button type="button" class="secondary" hx-post="/settings/connections/{{ c.id }}/test" hx-target="#test-{{ c.id }}" hx-swap="innerHTML" hx-indicator="#test-busy-{{ c.id }}">Test connection</button>
       <span id="test-busy-{{ c.id }}" class="htmx-indicator muted">testing…</span>
       <span id="test-{{ c.id }}" role="status" aria-live="polite"></span>
       <button type="submit" form="delete-connection-{{ c.id }}" class="secondary outline danger">Delete</button>
@@ -34,29 +35,31 @@
   <form id="delete-connection-{{ c.id }}" method="post" action="/settings/connections/{{ c.id }}/delete" data-confirm="Delete connection {{ c.name }}?" onsubmit="return confirm(this.dataset.confirm)"></form>
 </article>
 {% endfor %}
-<details class="panel" {% if not connections or conn_error %}open{% endif %}>
+{% set f = (submitted if (conn_error and failed_connection_id is none) else {}) %}
+<details class="panel" {% if not connections or f %}open{% endif %}>
   <summary>Add a connection <span class="muted">· Sonarr or Radarr</span></summary>
   <article class="card">
   <form method="post" action="/settings/connections">
     <div class="grid">
-      <label>App<select name="kind">{% for k in kinds %}<option value="{{ k }}">{{ k }}</option>{% endfor %}</select></label>
-      <label>Name<input name="name" required placeholder="Sonarr"></label>
+      <label>App<select name="kind">{% for k in kinds %}<option value="{{ k }}" {% if k == f.get("kind") %}selected{% endif %}>{{ k }}</option>{% endfor %}</select></label>
+      <label>Name<input name="name" value="{{ f.get("name", "") }}" required placeholder="Sonarr"></label>
     </div>
     <div class="grid">
-      <label>URL<input name="url" required placeholder="http://sonarr:8989"></label>
+      <label>URL<input name="url" value="{{ f.get("url", "") }}" required placeholder="http://sonarr:8989"></label>
       <label>API key<input name="api_key" type="password" autocomplete="new-password" required></label>
     </div>
-    <label>Staging path as Sonarr or Radarr sees it<input name="staging_path_remote" required placeholder="/data/outriggarr"></label>
+    <label>Staging path as Sonarr or Radarr sees it<input name="staging_path_remote" value="{{ f.get("staging_path_remote", "") }}" required placeholder="/data/outriggarr"></label>
     <input type="hidden" name="enabled" value="1">
-    <div class="form-actions"><button type="submit">Add</button></div>
+    <div class="form-actions"><button type="submit">Add connection</button></div>
   </form>
   </article>
 </details>
 </section>
 
-<section>
+<section id="downloads">
 <h3 class="section">Downloads</h3>
-{% if settings_error %}<p class="notice bad">{{ settings_error }}</p>{% endif %}
+{% if saved == "downloads" %}<p class="notice" role="status" aria-live="polite">Downloads saved.</p>{% endif %}
+{% if settings_error and not notify_error %}<p class="notice bad">{{ settings_error }}</p>{% endif %}
 <article class="card">
 <form method="post" action="/settings/downloads">
   <div class="grid">
@@ -95,17 +98,20 @@
 </article>
 </section>
 
-<section>
+<section id="notifications">
 <h3 class="section">Notifications</h3>
+{% if saved == "notifications" %}<p class="notice" role="status" aria-live="polite">Notifications saved.</p>{% endif %}
+{% if notify_error %}<p class="notice bad">{{ notify_error }}</p>{% endif %}
 <article class="card">
 <form method="post" action="/settings/downloads">
   <label>Apprise URLs <span class="hint">Apprise sends to Discord, ntfy, Pushover and dozens more. One per line, e.g. <code>discord://webhook_id/webhook_token</code>, <code>ntfy://topic</code>, <code>pover://user@token</code>. See the Apprise wiki for every service.</span>
     <textarea name="apprise_urls" rows="3" placeholder="discord://…">{{ settings.apprise_urls }}</textarea></label>
-  <div class="grid">
-    <label><input type="checkbox" name="notify_on_failed" value="1" {% if settings.notify_on_failed == "1" %}checked{% endif %}> Job failed for good</label>
-    <label><input type="checkbox" name="notify_on_scan_error" value="1" {% if settings.notify_on_scan_error == "1" %}checked{% endif %}> Subscription scan error</label>
-    <label><input type="checkbox" name="notify_on_done" value="1" {% if settings.notify_on_done == "1" %}checked{% endif %}> Job imported <span class="muted">(Sonarr/Radarr usually announce this)</span></label>
-  </div>
+  <fieldset>
+    <legend>Notify when</legend>
+    <label><input type="checkbox" name="notify_on_failed" value="1" {% if settings.notify_on_failed == "1" %}checked{% endif %}> a job fails for good</label>
+    <label><input type="checkbox" name="notify_on_scan_error" value="1" {% if settings.notify_on_scan_error == "1" %}checked{% endif %}> a subscription scan errors</label>
+    <label><input type="checkbox" name="notify_on_done" value="1" {% if settings.notify_on_done == "1" %}checked{% endif %}> a job is imported <span class="muted">(Sonarr and Radarr usually announce this themselves)</span></label>
+  </fieldset>
   <input type="hidden" name="_notify_form" value="1">
   <div class="form-actions">
     <button type="submit">Save notifications</button>
