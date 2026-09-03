@@ -413,9 +413,17 @@ def remove_override(subscription_id: int, video_id: str, session: DbSession) -> 
     delete_override(session, subscription_id, video_id)
 
 
+def _report_or_502(report) -> dict:
+    """A listing or matching failure is folded into `report.error` for the pages; the
+    JSON contract says it with the status code too."""
+    if report.error:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail=report.as_dict())
+    return report.as_dict()
+
+
 @router.post("/{subscription_id}/scan")
 async def scan(subscription_id: int, deps: RunnerDepsDep) -> dict:
-    return (await run_scan(deps, subscription_id, dry_run=False)).as_dict()
+    return _report_or_502(await run_scan(deps, subscription_id, dry_run=False))
 
 
 @router.post("/{subscription_id}/download")
@@ -425,11 +433,11 @@ async def download(
     """A manual download: every current match, or just the given episodes, whatever
     the subscription's auto-download policy says."""
     ids = set(body.episode_ids) if body and body.episode_ids is not None else None
-    return (
+    return _report_or_502(
         await run_scan(deps, subscription_id, dry_run=False, manual=True, episode_ids=ids)
-    ).as_dict()
+    )
 
 
 @router.get("/{subscription_id}/preview")
 async def preview(subscription_id: int, deps: RunnerDepsDep) -> dict:
-    return (await run_scan(deps, subscription_id, dry_run=True)).as_dict()
+    return _report_or_502(await run_scan(deps, subscription_id, dry_run=True))

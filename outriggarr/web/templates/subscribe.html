@@ -5,6 +5,7 @@
   <div><h1>Subscribe · {{ title or ("series " ~ series_id) }}</h1><p class="sub">Give this series a YouTube source. Episodes stay wanted or not according to Sonarr.</p></div>
 </div>
 {% if error %}<p class="notice bad">{{ error }}</p>{% endif %}
+{% if warning %}<p class="notice warn" role="status" data-sticky>{{ warning }}</p>{% endif %}
 <article class="card">
 <form method="post" action="/series/{{ series_id }}/subscribe">
   {% include "partials/subscription_fields.html" %}

@@ -69,3 +69,29 @@ def test_specific_reading_beats_general() -> None:
     # sign-in reading wins because it tells the user what to do
     text = "ERROR: [youtube] a: Video unavailable. Join this channel to get access"
     assert likely_cause(text, youtube_session="signed in").startswith("Members-only")
+
+
+@pytest.mark.parametrize(
+    ("error", "expect"),
+    [
+        (
+            "ERROR: [youtube] a: Unable to download webpage: HTTP Error 404: Not Found",
+            "page is gone",
+        ),
+        ("ERROR: unable to download video data: HTTP Error 404: Not Found", "expires quickly"),
+        ("ERROR: [youtube] a: This video is DRM protected", "DRM-protected"),
+        (
+            "audio language tag failed (file imported untagged): ffmpeg exited 1",
+            "imported fine, only untagged",
+        ),
+        (
+            "rate-limited answer 4 times in a row for this video while other downloads "
+            "went through: x",
+            "Only this video",
+        ),
+        ("https://x is a playlist or channel, not a single video", "Queue it from Grab"),
+    ],
+)
+def test_causes_agree_with_the_runner(error: str, expect: str) -> None:
+    cause = likely_cause(error, youtube_session="none")
+    assert cause is not None and expect in cause, cause

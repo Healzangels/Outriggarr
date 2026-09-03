@@ -375,3 +375,17 @@ def test_moving_a_subscription_to_another_series_moves_the_tag(client, arr, sour
     assert r.status_code == 200, r.text
     assert ("set_series_tag", (5, tag, False)) in fake.calls, "the old series loses the tag"
     assert ("set_series_tag", (6, tag, True)) in fake.calls, "the new one gains it"
+
+
+def test_a_failed_scan_is_a_502_not_a_200(client, monkeypatch) -> None:
+    from outriggarr.api import subscriptions as api
+    from outriggarr.worker.scheduler import ScanReport
+
+    async def broken(deps, subscription_id, **kw):
+        from datetime import UTC, datetime
+
+        return ScanReport(subscription_id, datetime.now(UTC), dry_run=True, error="listing failed")
+
+    monkeypatch.setattr(api, "run_scan", broken)
+    r = client.get("/api/subscriptions/1/preview")
+    assert r.status_code == 502 and r.json()["detail"]["error"] == "listing failed"

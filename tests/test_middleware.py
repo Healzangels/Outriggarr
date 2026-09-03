@@ -98,3 +98,26 @@ def test_origin_null_is_cross_site(client) -> None:
         follow_redirects=False,
     )
     assert same.status_code in (200, 303), "an HTMX-style same-origin post passes"
+
+
+def test_origin_null_with_a_same_origin_verdict_passes() -> None:
+    # a same-origin form under Referrer-Policy: no-referrer sends Origin: null; the
+    # browser's Sec-Fetch-Site verdict is the truth
+    from starlette.requests import Request
+
+    from outriggarr.web.middleware import cross_site
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/x",
+        "headers": [
+            (b"host", b"app:8080"),
+            (b"origin", b"null"),
+            (b"sec-fetch-site", b"same-origin"),
+        ],
+        "query_string": b"",
+    }
+    assert cross_site(Request(scope)) is None
+    scope["headers"][2] = (b"sec-fetch-site", b"cross-site")
+    assert cross_site(Request(scope)) == "Sec-Fetch-Site: cross-site"

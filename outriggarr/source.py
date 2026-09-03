@@ -94,6 +94,13 @@ class VideoSource(Protocol):
         ...
 
 
+# yt-dlp "info" lines that mean the download is poorer than asked for
+DEGRADED_NOTICE = re.compile(
+    r"age-restricted|po token|proof of origin|missing subtitles|some formats may be missing",
+    re.IGNORECASE,
+)
+
+
 class _YtDlpLogger:
     def __init__(self, expected_login: bool = False) -> None:
         # On a first, cookie-less attempt a "sign in" error is expected and answered by
@@ -101,8 +108,13 @@ class _YtDlpLogger:
         self._expected_login = expected_login
 
     def debug(self, msg: str) -> None:
-        # yt-dlp routes its normal progress/info lines through debug() too.
-        if not msg.startswith("[debug] "):
+        # yt-dlp routes its normal progress/info lines through debug() too. A few of
+        # them mean a quieter download than asked for; those deserve a WARNING line.
+        if msg.startswith("[debug] "):
+            return
+        if DEGRADED_NOTICE.search(msg):
+            log.warning("%s", msg)
+        else:
             log.debug("%s", msg)
 
     def info(self, msg: str) -> None:
@@ -192,10 +204,17 @@ RATE_LIMITED = re.compile(
     r"rate[- ]limited|rate limit|try again later|http error 429|too many requests",
     re.IGNORECASE,
 )
+_HOSTS_IN_TEXT = re.compile(r"https?://([^/\s'\"]+)|\b(archive\.org)\b", re.IGNORECASE)
 
 
 def is_rate_limited(message: str) -> bool:
-    return RATE_LIMITED.search(message) is not None
+    """YouTube's wall, the one that pauses everything. A 429 that names another host
+    (archive.org's search, a caption CDN) is that request's own problem: the job's
+    ordinary retry ladder, not an hour's pause for every scan and download."""
+    if RATE_LIMITED.search(message) is None:
+        return False
+    hosts = {(a or b).lower() for a, b in _HOSTS_IN_TEXT.findall(message)}
+    return not hosts or any("youtu" in h or "googlevideo" in h for h in hosts)
 
 
 # Answers that time will not change: the video is gone, walled off, or the request
@@ -204,11 +223,14 @@ def is_rate_limited(message: str) -> bool:
 # string, the owner's mind). A bot check is deliberately NOT here: it is the address
 # being busy, and it passes again by itself.
 PERMANENT_FAILURE = re.compile(
-    r"video unavailable|has been removed|no longer available|account associated with this "
-    r"video has been terminated|this video is private|private video|members[- ]only|"
-    r"join this channel|sign in to confirm your age|age[- ]restricted|not available in your "
-    r"country|not made this video available|blocked it in your country|"
-    r"unsupported url|http error 404|http error 410|"
+    r"video unavailable|video is unavailable|has been removed|no longer available|"
+    r"account associated with this video has been terminated|this video is private|"
+    r"private video|members[- ]only|join this channel|sign in to confirm your age|"
+    r"age[- ]restricted|not available in your country|not made this video available|"
+    r"blocked it in your country|not available from your location|drm protected|"
+    r"requires payment|unsupported url|is a playlist or channel, not a single video|"
+    # a 404/410 on the video PAGE is final; one on a data URL is an expired manifest
+    r"unable to download webpage: http error 40[4]|unable to download webpage: http error 410|"
     r"is not a valid url",
     re.IGNORECASE,
 )
@@ -234,6 +256,7 @@ class CoolOff:
     until: float = 0.0
     strikes: int = 0
     message: str | None = None
+    hit_at: float = 0.0  # when the current pause began; a download older than that proves nothing
 
     def hit(self, message: str) -> float:
         """Record a rate-limit answer; returns how long the pause is, in seconds. Answers
@@ -247,11 +270,17 @@ class CoolOff:
             self.strikes = 0  # the last pause was long over: start the ladder again
         wait = min(self.base_seconds * 2**self.strikes, self.cap_seconds)
         self.strikes += 1
-        self.until = self.clock() + wait
+        self.hit_at = self.clock()
+        self.until = self.hit_at + wait
         self.message = message
         return wait
 
-    def clear(self) -> None:
+    def clear(self, since: float | None = None) -> None:
+        """A download succeeded: the source serves us again. One that STARTED before
+        the wall went up (`since` < `hit_at`) was already streaming through it and says
+        nothing about the wall, so it leaves the pause and the ladder alone."""
+        if since is not None and self.hit_at and since < self.hit_at:
+            return
         self.until = 0.0
         self.strikes = 0
         self.message = None
@@ -619,6 +648,7 @@ class YtDlpSource:
             "merge_output_format": merge_container,
             "outtmpl": str(dest_dir / "%(id)s.%(ext)s"),
             "noplaylist": True,
+            "playlistend": 1,  # a playlist URL given as a video: one entry at most, then refused
             "quiet": True,
             "no_warnings": False,
             "noprogress": True,
@@ -837,6 +867,11 @@ def detected_audio_language(info: dict[str, Any]) -> str | None:
 
 
 def _result_from_info(info: dict[str, Any], dest_dir: Path | None = None) -> DownloadResult:
+    if info.get("_type") == "playlist":  # a job wants one file; retrying would not change that
+        raise SourceError(
+            f"{info.get('webpage_url') or info.get('id')} is a playlist or channel, not a "
+            "single video"
+        )
     downloads = info.get("requested_downloads") or []
     filepath = downloads[0].get("filepath") if downloads else None
     if not filepath:

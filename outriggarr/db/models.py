@@ -220,6 +220,9 @@ class Job(Base):
         Enum(JobStatus), nullable=False, default=JobStatus.queued, index=True
     )
     progress_pct: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # consecutive rate-limit answers to THIS video's download: the wall is the session's
+    # the first few times, this video's own after that (see runner.RATE_LIMIT_MAX_REQUEUES)
+    rate_limit_hits: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     staged_path: Mapped[str | None] = mapped_column(String(1000))
     error: Mapped[str | None] = mapped_column(Text)
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

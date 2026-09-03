@@ -10,7 +10,7 @@
   <Support>https://github.com/Healzangels/Outriggarr/issues</Support>
   <Project>https://github.com/Healzangels/Outriggarr</Project>
   <ReadMe>https://github.com/Healzangels/Outriggarr#readme</ReadMe>
-  <Overview>YouTube to Sonarr/Radarr bridge. Fills wanted lists from YouTube (or any yt-dlp site) via subscriptions and manual grabs, stages downloads in a shared folder, and hands files to Sonarr/Radarr through their manual-import API so they rename, move and notify as usual. Run with the same PUID/PGID as your *arr containers and mount the staging folder into all of them.</Overview>
+  <Overview>YouTube to Sonarr/Radarr bridge. Fills wanted lists from YouTube (or any yt-dlp site) via subscriptions and manual grabs, stages downloads in a shared folder, and hands files to Sonarr/Radarr through their manual-import API so they rename, move and notify as usual. Run with the same PUID/PGID as your *arr containers and mount the staging folder into all of them. Put it on the same custom Docker network as Sonarr/Radarr (change Network Type from the default bridge) so their container names resolve.</Overview>
   <Category>Downloaders: MediaApp:Video</Category>
   <WebUI>http://[IP]:[PORT:8080]</WebUI>
   <TemplateURL/>

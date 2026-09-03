@@ -5,6 +5,7 @@
   <div><h1>Settings</h1></div>
 </div>
 {% set saved = request.query_params.get("saved") %}
+{% if settings_error and not notify_error %}<p class="notice bad">Downloads not saved: <a href="#downloads">see the form below</a>.</p>{% elif notify_error %}<p class="notice bad">Notifications not saved: <a href="#notifications">see the form below</a>.</p>{% endif %}
 <section id="connections">
 <h3 class="section">Connections</h3>
 {% if saved == "connection" %}<p class="notice" role="status" aria-live="polite">Connection saved{% if request.query_params.get("test") %}; testing it now, the result shows on its card{% endif %}.</p>{% endif %}

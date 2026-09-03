@@ -210,7 +210,7 @@ def _code(season: int, episode: int) -> str:
 templates.env.globals["tier_label"] = tier_label
 templates.env.globals["tier_help"] = tier_help
 # pages re-rendered on a form error do not recompute the scan timing; the header simply omits it
-templates.env.globals.update(next_scan=None, next_scans={})
+templates.env.globals.update(next_scan=None, next_scans={}, warning=None)
 
 
 def _tooling(request: Request) -> dict:
@@ -228,6 +228,13 @@ def _tooling(request: Request) -> dict:
         "ffmpeg": shutil.which("ffmpeg") is not None,
         "po_token_provider": pot_provider_ready(request.app.state.settings.pot_server_home),
         "staging_writable": staging_writable(staging),
+        # a worker or scheduler task that ended is a dead loop behind a live page: say so
+        "dead_loops": [
+            name
+            for name, task in (getattr(request.app.state, "background_tasks", {}) or {}).items()
+            if task is not None and task.done()
+        ],
+        "worker_note": getattr(request.app.state, "worker_note", None),
     }
 
 
@@ -698,15 +705,17 @@ async def subscribe_form(
     if existing is not None:
         return RedirectResponse(f"/subscriptions/{existing.id}", status_code=302)
     title = ""
+    warning = None
     try:
         hit = next((s for s in await _series_list(conn, arr_factory) if s.id == series_id), None)
         title = hit.title if hit else ""
-    except ArrError:
-        pass
+    except ArrError as exc:  # the form still works; say why the title is missing
+        warning = f"{conn.name} did not answer, so the series title is missing: {exc}"
     return templates.TemplateResponse(
         request,
         "subscribe.html",
         {
+            "warning": warning,
             "connection": conn,
             "series_id": series_id,
             "title": title,
@@ -1008,6 +1017,10 @@ async def subscription_clear_job(
     sub = session.get(Subscription, subscription_id)
     if sub is None:
         return RedirectResponse("/series", status_code=302)
+    job = session.get(Job, job_id)
+    if job is None or job.connection_id != sub.connection_id or job.series_id != sub.series_id:
+        notice = f"Job #{job_id} does not belong to this series."
+        return await _episodes_response(request, sub, session, arr_factory, notice, notice_bad=True)
     try:
         delete_job(session, job_id, deps.staging_dir)
         notice = f"Deleted job #{job_id}."
@@ -1168,13 +1181,15 @@ async def subscription_add_override(
 async def subscription_delete_override(
     request: Request, subscription_id: int, video_id: str, session: DbSession, deps: RunnerDepsDep
 ) -> HTMLResponse:
+    failed = False
     try:
         delete_override(session, subscription_id, video_id)
         notice = f"Pin removed: {video_id}."
     except HTTPException as exc:
-        notice = str(exc.detail)
+        notice = f"Pin not removed: {exc.detail}"
+        failed = True
     report = await run_scan(deps, subscription_id, dry_run=True)
-    return _preview_response(request, session, report, notice)
+    return _preview_response(request, session, report, notice, notice_bad=failed)
 
 
 @router.post("/subscriptions/{subscription_id}/edit")
@@ -1367,9 +1382,18 @@ async def settings_connection_update(
     request: Request, connection_id: int, session: DbSession
 ) -> HTMLResponse:
     data = await _read_form(request)
+    conn = session.get(Connection, connection_id)
+    if conn is None:  # a stale form: deleted in another tab; the card to show it on is gone
+        return templates.TemplateResponse(
+            request,
+            "settings.html",
+            _settings_context(
+                session, conn_error=f"Connection {connection_id} no longer exists; nothing saved."
+            ),
+            status_code=404,
+        )
     try:
-        conn = session.get(Connection, connection_id)
-        if conn is not None and not data.get("api_key"):
+        if not data.get("api_key"):
             data["api_key"] = conn.api_key  # blank field keeps the stored key
         update_connection(connection_id, _connection_body(data), session)
     except Exception as exc:

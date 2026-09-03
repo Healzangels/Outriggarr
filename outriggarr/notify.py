@@ -46,18 +46,25 @@ class AppriseNotifier:
         urls = self._urls()
         if not urls:
             return False
-        client = apprise.Apprise()
+        # one Apprise per target: its notify() answers all-or-nothing, and one dead
+        # Discord webhook must not read as "nothing delivered" when ntfy got it
+        delivered = 0
         for u in urls:
+            scheme = u.split("://", 1)[0]
+            client = apprise.Apprise()
             if not client.add(u):
-                log.warning("apprise rejected a configured URL (%s://…)", u.split("://", 1)[0])
-        try:
-            ok = bool(client.notify(title=title, body=body))
-        except Exception as exc:  # apprise plugins raise all sorts; never let it out
-            log.warning("notification failed: %s", exc)
-            return False
-        if not ok:
+                log.warning("apprise rejected a configured URL (%s://…)", scheme)
+                continue
+            try:
+                if client.notify(title=title, body=body):
+                    delivered += 1
+                else:
+                    log.warning("notification not delivered via %s://…", scheme)
+            except Exception as exc:  # apprise plugins raise all sorts; never let it out
+                log.warning("notification via %s://… failed: %s", scheme, exc)
+        if not delivered:
             log.warning("notification not delivered to any target (%d configured)", len(urls))
-        return ok
+        return delivered > 0
 
 
 class NullNotifier:

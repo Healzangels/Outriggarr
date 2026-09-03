@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 SONARR = {
     "kind": "sonarr",
@@ -236,3 +238,77 @@ def test_jobs_refused_for_a_disabled_connection(client: TestClient) -> None:
     conn_id = client.post("/api/connections", json={**SONARR, "enabled": False}).json()["id"]
     r = client.post("/api/jobs", json=[episode_job(conn_id)])
     assert r.status_code == 422 and "disabled" in r.json()["detail"]
+
+
+def test_delete_keeps_the_row_when_the_staging_folder_will_not_go(
+    client, tmp_path, monkeypatch
+) -> None:
+    import os
+    import stat
+
+    from outriggarr.db.models import Job, JobStatus, TargetKind
+
+    if os.geteuid() == 0:
+        pytest.skip("root removes anything")
+    client.post("/api/connections", json=SONARR)
+    with client.app.state.session_factory() as s:
+        s.add(
+            Job(
+                connection_id=1,
+                target_kind=TargetKind.episode,
+                series_id=5,
+                episode_ids=[1],
+                target_key="episode:5:1",
+                video_id="v",
+                video_url="https://y/v",
+                status=JobStatus.done,
+            )
+        )
+        s.commit()
+        job_id = s.scalars(select(Job.id)).one()
+    staging = client.app.state.runner_deps.staging_dir
+    folder = staging / str(job_id) / "locked"
+    folder.mkdir(parents=True)
+    (folder / "file.mkv").write_bytes(b"x")
+    folder.chmod(stat.S_IRUSR | stat.S_IXUSR)  # no write bit: its file cannot be unlinked
+    try:
+        r = client.delete(f"/api/jobs/{job_id}")
+        assert r.status_code == 409 and "could not be removed" in r.json()["detail"]
+        assert client.get(f"/api/jobs/{job_id}").status_code == 200, "the row stays"
+    finally:
+        folder.chmod(stat.S_IRWXU)
+    assert client.delete(f"/api/jobs/{job_id}").status_code in (200, 204)
+
+
+@pytest.mark.parametrize(
+    ("url", "listing"),
+    [
+        ("https://www.youtube.com/playlist?list=PL123", True),
+        ("https://www.youtube.com/@FirstWeFeast", True),
+        ("https://www.youtube.com/@FirstWeFeast/videos", True),
+        ("https://www.youtube.com/channel/UCabc", True),
+        ("https://www.youtube.com/watch?v=abc&list=PL123", False),
+        ("https://youtu.be/abc", False),
+        ("https://www.youtube.com/watch?v=abc", False),
+        ("https://archive.org/details/x", False),
+    ],
+)
+def test_a_listing_url_is_not_a_video(url: str, listing: bool) -> None:
+    from outriggarr.api.jobs import looks_like_a_listing
+
+    assert looks_like_a_listing(url) is listing
+
+
+def test_jobs_api_refuses_a_playlist_url(client) -> None:
+    client.post("/api/connections", json=SONARR)
+    r = client.post(
+        "/api/jobs",
+        json=[
+            {
+                "connection_id": 1,
+                "target": {"kind": "episode", "series_id": 5, "episode_ids": [1]},
+                "video": {"url": "https://www.youtube.com/playlist?list=PL1", "id": "PL1"},
+            }
+        ],
+    )
+    assert r.status_code == 422 and "playlist or channel" in r.text

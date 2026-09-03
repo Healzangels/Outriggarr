@@ -215,7 +215,7 @@ def test_migrations_are_transactional_and_downgrade_keeps_dedupe(settings) -> No
     assert version == "0004", "0013→…→0004 applied; the failing 0004→0003 step rolled back"
     command.upgrade(cfg, "head")  # and the DB is still usable: back to head cleanly
     with engine.connect() as conn:
-        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0013"
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0014"
     engine.dispose()
 
 
@@ -258,3 +258,18 @@ def test_sources_migration_backfills_from_source_url(settings) -> None:
             == "https://www.youtube.com/@show"
         )
     engine.dispose()
+
+
+def test_a_schema_upgrade_backs_the_database_up_first(tmp_path) -> None:
+    from alembic import command
+
+    from outriggarr.db.session import alembic_config, backup_before_upgrade, run_migrations
+
+    url = f"sqlite:///{tmp_path / 'app.db'}"
+    assert backup_before_upgrade(url) is None, "no database yet: nothing to back up"
+    run_migrations(url)
+    assert backup_before_upgrade(url) is None, "at head: nothing to back up"
+    command.downgrade(alembic_config(url), "0012")
+    run_migrations(url)
+    bak = tmp_path / "app.db.bak-0012"
+    assert bak.is_file() and bak.stat().st_size > 0

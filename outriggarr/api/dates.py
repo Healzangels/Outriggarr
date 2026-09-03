@@ -91,7 +91,12 @@ async def fetch_dates(
     """Network first, small commits: SQLite's single write lock is shared with the
     worker, and each cached date is useful on its own."""
     limit = sub.video_limit or int(get_setting(session, "scan_video_limit"))
-    refs = await list_source_videos(deps, sub, limit)
+    try:
+        refs = await list_source_videos(deps, sub, limit)
+    except SourceError as exc:
+        if is_rate_limited(str(exc)):
+            deps.cooloff.hit(str(exc))  # the wall is everyone's, not this fetch's
+        raise
     with session.no_autoflush:
         need = [
             r

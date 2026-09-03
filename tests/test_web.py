@@ -4,6 +4,7 @@ import re
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from outriggarr.db.models import Job, JobStatus
 
@@ -2205,3 +2206,126 @@ def test_activity_poll_waits_while_the_keyboard_is_in_the_table(client: TestClie
     page = client.get("/activity").text
     assert "hx-trigger=\"every 3s [!document.activeElement.closest('#jobs')]\"" in page
     assert '<nav class="container" aria-label="Primary">' in page and "<h1>Activity</h1>" in page
+
+
+def test_a_dead_worker_loop_is_announced_on_every_page(client: TestClient) -> None:
+    import asyncio
+
+    async def boom() -> None:
+        raise RuntimeError("worker crashed")
+
+    loop = asyncio.new_event_loop()
+    try:
+        task = loop.create_task(boom())
+        with pytest.raises(RuntimeError):
+            loop.run_until_complete(task)
+        assert task.done()
+        client.app.state.background_tasks = {"worker": task, "scheduler": None}
+        page = client.get("/series").text
+        assert "The worker loop has stopped" in page and 'role="alert"' in page
+        assert client.get("/health").status_code == 503
+    finally:
+        client.app.state.background_tasks = {}
+        loop.close()
+    assert "loop has stopped" not in client.get("/series").text
+    client.app.state.worker_note = "Another Outriggarr instance holds this database"
+    try:
+        assert "Another Outriggarr instance holds this database" in client.get("/grab").text
+    finally:
+        del client.app.state.worker_note
+
+
+def test_pins_only_subscription_preview_renders(client: TestClient) -> None:
+    # no strategies at all: every unmatched row used to hit names[-1] on an empty list
+    _seed_series(client)
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={
+            "connection_id": 1,
+            "series_id": 5,
+            "source_url": "https://www.youtube.com/@hotones",
+            "strategies": [],
+        },
+    ).json()["id"]
+    r = client.get(f"/subscriptions/{sub_id}/preview")
+    assert r.status_code == 200, r.text[:300]
+    assert "pins only, and none set yet" in r.text and "Pin a video" in r.text
+
+
+def test_stale_connection_form_says_so(client: TestClient) -> None:
+    client.post("/api/connections", json=SONARR)
+    r = client.post(
+        "/settings/connections/999",
+        data={"kind": "sonarr", "name": "x", "url": "http://h:1", "staging_path_remote": "/d"},
+    )
+    assert r.status_code == 404
+    assert 'class="notice bad">Connection 999 no longer exists; nothing saved.' in r.text
+
+
+def test_page_scripts_cover_network_errors_and_sticky_banners(client: TestClient) -> None:
+    page = client.get("/activity").text
+    assert "htmx:sendError" in page and "htmx:timeout" in page
+    assert "htmx:afterRequest" in page and "bar.remove()" in page
+    assert ":not([data-sticky])" in page
+
+
+def test_removing_a_missing_pin_is_an_error_notice(client: TestClient) -> None:
+    _seed_series(client)
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={"connection_id": 1, "series_id": 5, "source_url": "https://www.youtube.com/@hotones"},
+    ).json()["id"]
+    r = client.post(f"/subscriptions/{sub_id}/overrides/nope/delete")
+    assert r.status_code == 200
+    assert 'class="notice bad" role="alert"' in r.text and "Pin not removed:" in r.text
+
+
+def test_rejected_downloads_form_has_a_pointer_at_the_top(client: TestClient) -> None:
+    r = client.post("/settings/downloads", data={"ytdlp_extra_opts": "{bad"})
+    assert r.status_code == 400
+    assert 'Downloads not saved: <a href="#downloads">see the form below</a>.' in r.text
+
+
+def test_clearing_a_job_of_another_series_is_refused(client: TestClient) -> None:
+    from outriggarr.db.models import Job, JobStatus, TargetKind
+
+    _seed_series(client)
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={"connection_id": 1, "series_id": 5, "source_url": "https://www.youtube.com/@hotones"},
+    ).json()["id"]
+    with client.app.state.session_factory() as s:
+        s.add(
+            Job(
+                connection_id=1,
+                target_kind=TargetKind.episode,
+                series_id=6,
+                episode_ids=[77],
+                target_key="episode:6:77",
+                video_id="other",
+                video_url="https://y/other",
+                video_title="Other show",
+                target_label="Hot Zone S01E01",
+                status=JobStatus.done,
+            )
+        )
+        s.commit()
+        job_id = s.scalars(select(Job.id).where(Job.video_id == "other")).one()
+    r = client.post(f"/subscriptions/{sub_id}/episodes/jobs/{job_id}/clear")
+    assert r.status_code == 200 and "does not belong to this series" in r.text
+    assert client.get(f"/api/jobs/{job_id}").status_code == 200, "untouched"
+
+
+def test_subscribe_form_says_when_sonarr_did_not_answer(client: TestClient, monkeypatch) -> None:
+    from outriggarr.arr.base import ArrError
+    from outriggarr.web import pages
+
+    _seed_series(client)
+
+    async def dead(conn, factory):
+        raise ArrError("Sonarr: connection refused")
+
+    monkeypatch.setattr(pages, "_series_list", dead)
+    page = client.get("/series/5/subscribe").text
+    assert "did not answer, so the series title is missing: Sonarr: connection refused" in page
+    assert 'name="sources"' in page, "the form still works"

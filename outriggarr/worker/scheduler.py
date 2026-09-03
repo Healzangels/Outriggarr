@@ -12,6 +12,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import or_, select
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
@@ -29,7 +30,7 @@ from outriggarr.matcher import (
 )
 from outriggarr.naming import episode_code
 from outriggarr.settings import get_setting
-from outriggarr.source import SourceError, VideoRef, is_rate_limited
+from outriggarr.source import SourceError, VideoRef, is_permanent_failure, is_rate_limited
 from outriggarr.worker.runner import RunnerDeps, notify
 
 log = logging.getLogger(__name__)
@@ -296,7 +297,10 @@ async def _scan(
     report.sources = len(sub.sources)
     ages = {r.id: r.approx_age for r in refs}  # "3 years ago" from the listing page, if any
     taken = live_video_ids_for_series(session, conn.id, sub.series_id)
-    videos = [_video(v) for v in refs if v.id not in taken]
+    # a pinned video stays in the pool even while the job it corrects still holds it:
+    # the pin is the user's word that the old pairing was wrong
+    pinned = {o.video_id for o in sub.overrides}
+    videos = [_video(v) for v in refs if v.id not in taken or v.id in pinned]
     _apply_cached_dates(session, videos)
     cfg = MatchConfig(
         strategies=tuple(sub.strategies or ()),
@@ -326,9 +330,21 @@ async def _scan(
             try:
                 info = await asyncio.to_thread(deps.source.fetch_info, v.url)
             except SourceError as exc:
+                text = str(exc)
+                if is_rate_limited(text):
+                    # the session's wall: stop fetching, pause everything, remember nothing
+                    wait = deps.cooloff.hit(text)
+                    log.warning(
+                        "subscription %d: the source rate-limited us during date fetches; "
+                        "pausing for %d s",
+                        sub.id,
+                        int(wait),
+                    )
+                    break
                 log.warning("subscription %d: fetch_info(%s) failed: %s", sub.id, v.id, exc)
-                learned[v.id] = None
-                continue
+                if is_permanent_failure(text):
+                    learned[v.id] = None  # a final answer: no date to be had, for a week
+                continue  # a transient answer says nothing about the date: ask again next scan
             by_id[v.id] = _video(info)
             learned[v.id] = info.upload_date
         with session.no_autoflush:
@@ -410,13 +426,17 @@ def _date_known(session: Session, video_id: str, now: datetime | None = None) ->
 
 
 def _remember_date(session: Session, video_id: str, upload_date: str | None) -> None:
-    m = session.get(VideoMeta, video_id)
-    if m is None:
-        session.add(
-            VideoMeta(video_id=video_id, upload_date=upload_date, fetched_at=datetime.now(UTC))
+    """An upsert: the scheduler and a background date fetch can learn the same video's
+    date at the same time, and the loser must not crash on the primary key."""
+    now = datetime.now(UTC)
+    stmt = sqlite_insert(VideoMeta).values(
+        video_id=video_id, upload_date=upload_date, fetched_at=now
+    )
+    session.execute(
+        stmt.on_conflict_do_update(
+            index_elements=["video_id"], set_={"upload_date": upload_date, "fetched_at": now}
         )
-    else:
-        m.upload_date, m.fetched_at = upload_date, datetime.now(UTC)
+    )
 
 
 def _fill_report(report: ScanReport, result: MatchResult, videos: list[Video]) -> None:

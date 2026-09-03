@@ -7,8 +7,10 @@ stop event and awaits the task, so the container stops cleanly under `docker sto
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 from collections.abc import AsyncIterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 
 import httpx
@@ -38,6 +40,13 @@ from outriggarr.worker.scheduler import run_scheduler
 log = logging.getLogger(__name__)
 
 
+def _log_task_death(name: str, task: asyncio.Task) -> None:
+    """The traceback of a loop that died, when it dies (health and the pages already
+    say it stopped; without this the log only learned why at shutdown)."""
+    if not task.cancelled() and task.exception() is not None:
+        log.error("%s task died", name, exc_info=task.exception())
+
+
 def create_app(
     settings: Settings | None = None,
     *,
@@ -55,8 +64,26 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         settings.config_dir.mkdir(parents=True, exist_ok=True)
-        run_migrations(settings.database_url)
+        # The lock comes before the migrations: a second instance on this database must
+        # not upgrade the schema under the one that is running it.
+        lock = acquire_instance_lock(settings.config_dir) if start_worker else None
+        if start_worker and lock is None:
+            log.error(
+                "another Outriggarr instance already runs this database; "
+                "this one serves the pages only (no worker, no scheduler, no migrations)"
+            )
+            app.state.worker_note = (
+                "Another Outriggarr instance holds this database, so this one serves "
+                "the pages only: nothing downloads or scans from here."
+            )
+        else:
+            run_migrations(settings.database_url)
         engine = make_engine(settings.database_url)
+        # downloads block a thread for hours each; the default pool (cpu + 4) would let
+        # them starve scans, notifications and Grab on a small host
+        asyncio.get_running_loop().set_default_executor(
+            ThreadPoolExecutor(max_workers=32, thread_name_prefix="outriggarr")
+        )
         app.state.settings = settings
         app.state.engine = engine
         app.state.session_factory = make_session_factory(engine)
@@ -91,22 +118,16 @@ def create_app(
         stop = asyncio.Event()
         task = None
         scheduler_task = None
-        lock = None
         app.state.tasks = set()  # rechecks and date fetches, owned so shutdown can await them
         settings.staging_dir.mkdir(parents=True, exist_ok=True)
-        if start_worker:
+        if start_worker and lock is not None:
             deps = app.state.runner_deps
             # one lock for both loops: a second instance on the same database must not
             # scan and queue jobs either, not just refrain from downloading them
-            lock = acquire_instance_lock(settings.config_dir)
-            if lock is None:
-                log.error(
-                    "another Outriggarr instance already runs this database; "
-                    "this one serves the pages only (no worker, no scheduler)"
-                )
-            else:
-                task = asyncio.create_task(run_worker(deps, stop, lock=lock))
-                scheduler_task = asyncio.create_task(run_scheduler(deps, stop))
+            task = asyncio.create_task(run_worker(deps, stop, lock=lock))
+            scheduler_task = asyncio.create_task(run_scheduler(deps, stop))
+            for name, t in (("worker", task), ("scheduler", scheduler_task)):
+                t.add_done_callback(functools.partial(_log_task_death, name))
         app.state.background_tasks = {"worker": task, "scheduler": scheduler_task}
         log.info("outriggarr %s ready (db=%s)", __version__, settings.database_url)
         try:

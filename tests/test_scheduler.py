@@ -835,3 +835,89 @@ async def test_scheduler_stops_its_batch_when_the_source_rate_limits(deps, sessi
     with session_factory() as s:
         stamped = [s.get(Subscription, i).last_scan_at is not None for i in ids]
     assert stamped.count(True) == 1, "only the subscription that hit the wall carries the error"
+
+
+async def test_rate_limited_date_fetch_pauses_and_remembers_nothing(deps, session_factory) -> None:
+    from outriggarr.db.models import VideoMeta
+
+    sub_id, conn_id = make_sub(session_factory, strategies=["title", "date"])
+    fake_client(deps, conn_id)
+    deps.source.recent = [
+        VideoRef("u1", "Unrelated one", "https://y/u1", 1, 1, None),
+        VideoRef("u2", "Unrelated two", "https://y/u2", 1, 2, None),
+    ]
+    calls: list[str] = []
+
+    def walled(url):
+        calls.append(url)
+        raise SourceError(
+            "ERROR: [youtube] u: This content isn't available, try again later. "
+            "The current session has been rate-limited by YouTube for up to an hour."
+        )
+
+    deps.source.fetch_info = walled
+    report = await scan_subscription(deps, sub_id)
+    assert report.error is None
+    assert calls == ["https://y/u1"], "the first wall stops the loop; no more fetches thrown at it"
+    assert deps.cooloff.active(), "everything pauses"
+    with session_factory() as s:
+        assert s.query(VideoMeta).count() == 0, "a wall is not 'this video has no date'"
+
+
+async def test_transient_date_fetch_errors_are_not_remembered_as_no_date(
+    deps, session_factory
+) -> None:
+    from outriggarr.db.models import VideoMeta
+
+    sub_id, conn_id = make_sub(session_factory, strategies=["title", "date"])
+    fake_client(deps, conn_id)
+    deps.source.recent = [
+        VideoRef("gone", "Unrelated gone", "https://y/gone", 1, 1, None),
+        VideoRef("blip", "Unrelated blip", "https://y/blip", 1, 2, None),
+    ]
+
+    def answer(url):
+        if url.endswith("gone"):
+            raise SourceError("ERROR: [youtube] gone: Video unavailable")  # final
+        raise SourceError("ERROR: [youtube] blip: HTTP Error 503: Service Unavailable")  # not
+
+    deps.source.fetch_info = answer
+    await scan_subscription(deps, sub_id)
+    assert not deps.cooloff.active()
+    with session_factory() as s:
+        rows = {m.video_id: m.upload_date for m in s.query(VideoMeta).all()}
+    assert rows == {"gone": None}, "only the final answer is remembered for the week"
+
+
+async def test_a_pin_takes_effect_while_the_wrong_job_still_holds_the_video(
+    deps, session_factory
+) -> None:
+    # the pin names the SAME video the cancelled job holds; it used to be filtered out
+    # of the pool as "taken", so the pin was silently inert until that job was deleted
+    sub_id, conn_id = make_sub(session_factory)
+    fake_client(deps, conn_id)
+    await scan_subscription(deps, sub_id)  # v6 → S30E06 queued
+    with session_factory() as s:
+        wrong = s.query(Job).filter(Job.video_id == "v6").one()
+        wrong.status = JobStatus.cancelled
+        s.add(Override(subscription_id=sub_id, video_id="v6", season=30, episode=9))
+        s.commit()
+    report = await scan_subscription(deps, sub_id)
+    (m,) = [m for m in report.matches if m["code"] == "S30E09"]
+    assert m["video_id"] == "v6" and m["strategy"] == "override" and m["job_id"], m
+    assert "v6" in {v["id"] for v in report.videos}, "and it shows in the listing panel"
+
+
+def test_remember_date_is_an_upsert(session_factory) -> None:
+    from outriggarr.db.models import VideoMeta
+    from outriggarr.worker.scheduler import _remember_date
+
+    with session_factory() as a:
+        _remember_date(a, "same", "20260101")
+        a.commit()
+    with session_factory() as b:  # learned again by the other loop: an update, not a clash
+        _remember_date(b, "same", None)
+        b.commit()
+    with session_factory() as s:
+        rows = s.query(VideoMeta).filter(VideoMeta.video_id == "same").all()
+        assert len(rows) == 1 and rows[0].upload_date is None

@@ -14,7 +14,9 @@ if [ "${OUTRIGGARR_YTDLP_UPDATE:-0}" = "1" ]; then
     # ejs is pinned by yt-dlp per release: upgrade them together or the JS challenge
     # solver stops loading; the PO-token plugin tracks yt-dlp too. Cache under /tmp so
     # nothing root-owned lands in /config.
-    UV_CACHE_DIR=/tmp/uv-cache uv pip install --python /app/.venv/bin/python --upgrade yt-dlp yt-dlp-ejs bgutil-ytdlp-pot-provider \
+    # umask 022 here whatever the operator's UMASK: the upgraded files must stay readable
+    # by the app user, or "import yt_dlp" fails far from this message
+    (umask 022 && UV_CACHE_DIR=/tmp/uv-cache uv pip install --python /app/.venv/bin/python --upgrade yt-dlp yt-dlp-ejs bgutil-ytdlp-pot-provider) \
         || echo "entrypoint: yt-dlp upgrade failed; continuing with the bundled version"
     /app/.venv/bin/python -c "import yt_dlp, importlib.metadata as m; print('entrypoint: yt-dlp', yt_dlp.version.__version__, 'yt-dlp-ejs', m.version('yt-dlp-ejs'))" || true
 fi

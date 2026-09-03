@@ -45,6 +45,11 @@ _SESSION_ADVICE = {
 
 _GENERAL: tuple[tuple[re.Pattern[str], str], ...] = (
     (
+        re.compile(r"rate-limited answer \d+ times in a row for this video", _R),
+        "Only this video's requests are refused (a caption or fragment URL), not the whole "
+        "session; the job retries on the normal ladder.",
+    ),
+    (
         re.compile(r"rate[- ]limited|try again later|http error 429|too many requests", _R),
         "YouTube rate-limited the session. Everything pauses and resumes by itself; nothing to do.",
     ),
@@ -60,7 +65,7 @@ _GENERAL: tuple[tuple[re.Pattern[str], str], ...] = (
     (
         re.compile(
             r"not available in your country|not made this video available|blocked it in "
-            r"your country",
+            r"your country|not available from your location",
             _R,
         ),
         "Geo-blocked from this network. Only a route through another country would fetch it.",
@@ -78,6 +83,33 @@ _GENERAL: tuple[tuple[re.Pattern[str], str], ...] = (
     (
         re.compile(r"unsupported url|is not a valid url", _R),
         "yt-dlp has no extractor for this address. Check the URL; some sites are not supported.",
+    ),
+    (
+        re.compile(
+            r"unable to download webpage: http error 40[4]|unable to download webpage: "
+            r"http error 410",
+            _R,
+        ),
+        "The video's page is gone (404): removed, or a wrong URL. Pin another upload to the "
+        "episode.",
+    ),
+    (
+        re.compile(r"drm protected", _R),
+        "DRM-protected: yt-dlp cannot download it, and no retry will. Pin another upload.",
+    ),
+    (
+        re.compile(r"requires payment", _R),
+        "A paid video: the account has not bought it. Pin another upload to the episode.",
+    ),
+    (
+        re.compile(r"is a playlist or channel, not a single video", _R),
+        "The URL is a playlist or channel, not a video. Queue it from Grab, which lists the "
+        "videos and lets you pick.",
+    ),
+    (
+        re.compile(r"audio language tag failed", _R),
+        "The file imported fine, only untagged: ffmpeg could not write the audio language. "
+        "Playback is unaffected.",
     ),
     (
         re.compile(r"http error 40[34]|http error 410", _R),

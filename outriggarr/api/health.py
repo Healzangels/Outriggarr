@@ -82,6 +82,8 @@ def health(request: Request, response: Response) -> dict[str, object]:
     }
     problems = [k for k in ("ffmpeg", "staging_writable") if not body[k]]
     problems += [k for k, alive in liveness.items() if alive is False]
+    if getattr(request.app.state, "worker_note", None):
+        problems.append("instance_lock")  # another instance holds the database: no loops here
     if problems:
         body["status"] = "degraded"
         body["problems"] = problems

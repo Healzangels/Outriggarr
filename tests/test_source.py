@@ -6,6 +6,7 @@ from outriggarr.source import (
     CoolOff,
     SourceError,
     VideoRef,
+    _YtDlpLogger,
     is_permanent_failure,
     is_rate_limited,
     relative_age,
@@ -1208,3 +1209,76 @@ def test_archive_search_answers_with_lists_and_odd_docs_are_tolerated() -> None:
         ("Scam_School_7", "Lists", "20111130"),
         ("Scam_School_8", "Scam School 8", None),
     ]
+
+
+@pytest.mark.parametrize(
+    ("message", "limited"),
+    [
+        ("archive.org: Client error '429 Too Many Requests' for url https://archive.org/x", False),
+        (
+            "ERROR: Unable to download video subtitles for 'en': HTTP Error 429: Too Many Requests",
+            True,
+        ),
+        (
+            "ERROR: [youtube] abc: HTTP Error 429 while fetching https://www.youtube.com/watch?v=abc",
+            True,
+        ),
+        ("HTTP Error 429 for https://captions.example.net/x.vtt", False),
+    ],
+)
+def test_another_hosts_429_is_not_youtubes_wall(message: str, limited: bool) -> None:
+    assert is_rate_limited(message) is limited
+
+
+@pytest.mark.parametrize(
+    ("message", "permanent"),
+    [
+        ("ERROR: [youtube] a: This video is unavailable", True),
+        ("ERROR: [youtube] a: This video is DRM protected", True),
+        ("ERROR: [youtube] a: This video requires payment to watch", True),
+        ("ERROR: [site] a: not available from your location due to geo restriction", True),
+        ("ERROR: [youtube] a: Unable to download webpage: HTTP Error 404: Not Found", True),
+        ("ERROR: unable to download video data: HTTP Error 404: Not Found", False),
+        (
+            "ERROR: [youtube] a: https://www.youtube.com/playlist?list=P is a playlist or "
+            "channel, not a single video",
+            True,
+        ),
+    ],
+)
+def test_permanent_failure_gaps(message: str, permanent: bool) -> None:
+    assert is_permanent_failure(message) is permanent
+
+
+def test_a_playlist_result_is_refused_not_retried(tmp_path) -> None:
+    from outriggarr.source import _result_from_info
+
+    with pytest.raises(SourceError, match="playlist or channel, not a single video"):
+        _result_from_info({"_type": "playlist", "id": "PL1", "entries": []}, tmp_path)
+
+
+def test_cooloff_ignores_a_download_that_started_before_the_wall() -> None:
+    clock = [1000.0]
+    c = CoolOff(clock=lambda: clock[0])
+    started = clock[0]
+    clock[0] += 60
+    c.hit("rate-limited by YouTube")
+    assert c.active() and c.strikes == 1
+    c.clear(since=started)  # an old download finishing says nothing about the wall
+    assert c.active() and c.strikes == 1
+    clock[0] += 10
+    c.clear(since=clock[0])  # one that started after the wall does
+    assert not c.active() and c.strikes == 0
+
+
+def test_degraded_ytdlp_notices_are_warnings(caplog) -> None:
+    import logging
+
+    with caplog.at_level(logging.DEBUG, logger="outriggarr.source"):
+        _YtDlpLogger().debug(
+            "[youtube] x: This video is age-restricted; some formats may be missing "
+            "without authentication"
+        )
+        _YtDlpLogger().debug("[download] Destination: x.mkv")
+    levels = [r.levelno for r in caplog.records]
+    assert levels == [logging.WARNING, logging.DEBUG]

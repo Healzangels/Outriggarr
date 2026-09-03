@@ -1413,3 +1413,80 @@ def test_claim_loses_to_a_cancel_that_lands_between_its_select_and_update(
         assert claim_next_jobs(s, 1, NOW) == [], "the cancel is the user's word"
     with session_factory() as s:
         assert s.get(Job, job_id).status is JobStatus.cancelled
+
+
+async def test_a_video_that_keeps_answering_rate_limited_takes_the_normal_ladder(
+    deps, session_factory
+) -> None:
+    from outriggarr.worker.runner import RATE_LIMIT_MAX_REQUEUES
+
+    conn_id = add_connection(session_factory)
+    job_id = add_job(session_factory, conn_id)
+    with session_factory() as s:
+        s.get(Job, job_id).rate_limit_hits = RATE_LIMIT_MAX_REQUEUES
+        s.commit()
+    fake_for(deps, conn_id)
+    deps.source.error = SourceError(
+        "ERROR: Unable to download video subtitles for 'en': HTTP Error 429: Too Many Requests"
+    )
+    await process_job(deps, job_id)
+    job = get_job(deps, job_id)
+    assert job.status is JobStatus.failed and job.attempts == 1, "an attempt spent this time"
+    assert job.next_retry_at is not None, "ordinary retry ladder"
+    assert job.error.startswith("rate-limited answer 4 times in a row for this video")
+    assert not deps.cooloff.active(), "nothing else pauses"
+
+
+async def test_rate_limit_requeues_count_and_a_success_resets_them(deps, session_factory) -> None:
+    conn_id = add_connection(session_factory)
+    job_id = add_job(session_factory, conn_id)
+    fake_for(deps, conn_id)
+    t = [0.0]
+    deps.cooloff.clock = lambda: t[0]
+    deps.source.error = SourceError(
+        "ERROR: [youtube] v1: The current session has been rate-limited by YouTube"
+    )
+    await process_job(deps, job_id)
+    assert get_job(deps, job_id).rate_limit_hits == 1 and deps.cooloff.active()
+    deps.source.error = None
+    t[0] += 3600
+    deps.cooloff.clear()
+    with session_factory() as s:
+        s.get(Job, job_id).next_retry_at = None
+        s.commit()
+    await process_job(deps, job_id)
+    job = get_job(deps, job_id)
+    assert job.status is JobStatus.done and job.rate_limit_hits == 0
+
+
+async def test_a_download_older_than_the_wall_does_not_lift_the_pause(
+    deps, session_factory
+) -> None:
+    conn_id = add_connection(session_factory)
+    job_id = add_job(session_factory, conn_id)
+    fake_for(deps, conn_id)
+    t = [1000.0]
+    deps.cooloff.clock = lambda: t[0]
+    real = deps.source.download
+
+    def slow_then_wall(*a, **kw):
+        t[0] += 60  # while this download runs, a listing elsewhere hits the wall
+        deps.cooloff.hit("rate-limited by YouTube")
+        return real(*a, **kw)
+
+    deps.source.download = slow_then_wall
+    await process_job(deps, job_id)
+    assert get_job(deps, job_id).status is JobStatus.done
+    assert deps.cooloff.active() and deps.cooloff.strikes == 1, "the old download proves nothing"
+
+
+def test_recover_stale_jobs_leaves_the_jobs_this_worker_runs_alone(session_factory) -> None:
+    from outriggarr.worker.runner import recover_stale_jobs
+
+    conn_id = add_connection(session_factory)
+    mine = add_job(session_factory, conn_id, video_id="a", status=JobStatus.downloading, attempts=1)
+    orphan = add_job(session_factory, conn_id, video_id="b", status=JobStatus.importing, attempts=1)
+    with session_factory() as s:
+        assert recover_stale_jobs(s, exclude={mine}) == 1
+        assert s.get(Job, mine).status is JobStatus.downloading
+        assert s.get(Job, orphan).status is JobStatus.queued

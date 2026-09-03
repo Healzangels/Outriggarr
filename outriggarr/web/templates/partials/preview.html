@@ -108,7 +108,7 @@
     <tr>
       <td><strong>{{ u.code }}</strong> {{ u.title }}<span class="two-line muted">{{ u.air_date or "" }}</span></td>
       <td>
-        {% if not (u.candidates.values() | map("length") | sum) %}{% set names = [] %}{% for strategy in u.candidates if strategy != "override" or sub.overrides %}{% set _ = names.append("pins" if strategy == "override" else strategy) %}{% endfor %}<span class="muted">no candidate by {{ names[:-1] | join(", ") ~ (" or " if names | length > 1 else "") ~ names[-1] }}</span>
+        {% if not (u.candidates.values() | map("length") | sum) %}{% set names = [] %}{% for strategy in u.candidates if strategy != "override" or sub.overrides %}{% set _ = names.append("pins" if strategy == "override" else strategy) %}{% endfor %}<span class="muted">{% if names %}no candidate by {{ names[:-1] | join(", ") ~ (" or " if names | length > 1 else "") ~ names[-1] }}{% else %}pins only, and none set yet{% endif %}</span>
         {% else %}{% for strategy, cands in u.candidates.items() %}
           <span class="nowrap"><span class="chip">{{ "pins" if strategy == "override" else strategy }}</span>
           {% if not cands %}<span class="muted">no candidate</span>{% else %}<span class="warn">{{ cands | length }} candidates:</span>{% endif %}</span>

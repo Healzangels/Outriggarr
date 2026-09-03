@@ -133,6 +133,12 @@ class _Retry(Exception):
     """A transient failure; the runner schedules a retry with backoff."""
 
 
+# A rate-limit answer re-queues the job without spending an attempt, because the wall
+# is the session's. When the same video keeps answering that way while everything else
+# flows, the wall is that video's own (a caption or fragment URL): the normal ladder.
+RATE_LIMIT_MAX_REQUEUES = 3
+
+
 class _RateLimited(Exception):
     """The source rate-limited the session: the job waits out the shared cool-off
     without spending an attempt, and the worker starts nothing else meanwhile."""
@@ -250,14 +256,19 @@ def claim_next_jobs(
     return claimed
 
 
-def recover_stale_jobs(session: Session) -> int:
+def recover_stale_jobs(session: Session, exclude: Iterable[int] = ()) -> int:
     """Jobs left in downloading/importing by a crash or a hard kill go back to queued.
-    A staged file that survived is reused (the download stage skips it)."""
-    rows = list(
-        session.scalars(
+    A staged file that survived is reused (the download stage skips it). `exclude` are
+    the jobs this worker is running now: anything else in those states is an orphan
+    (its task died without recording an outcome)."""
+    owned = set(exclude)
+    rows = [
+        j
+        for j in session.scalars(
             select(Job).where(Job.status.in_((JobStatus.downloading, JobStatus.importing)))
         )
-    )
+        if j.id not in owned
+    ]
     for job in rows:
         job.status = JobStatus.queued
         job.next_retry_at = None
@@ -315,10 +326,14 @@ async def run_worker(deps: RunnerDeps, stop: asyncio.Event, lock: object | None 
     running: dict[int, asyncio.Task[None]] = {}
     paused_logged = False
     while not stop.is_set():
+        for jid, t in running.items():  # a task that died is a log line, not a mystery
+            if t.done() and not t.cancelled() and t.exception() is not None:
+                log.error("job %d: task ended with %r", jid, t.exception())
         running = {jid: t for jid, t in running.items() if not t.done()}
         try:
             with deps.session_factory() as session:
                 sweep_cancelled(session, deps.staging_dir)
+                recover_stale_jobs(session, exclude=running.keys())  # orphans, not ours
                 if deps.cooloff.active():
                     # rate-limited: running jobs finish, nothing new starts until it lifts
                     ids = []
@@ -352,15 +367,18 @@ async def _guarded(deps: RunnerDeps, job_id: int, stop_is_set: Callable[[], bool
         await process_job(deps, job_id, abort_check(deps, job_id, stop_is_set))
     except Exception as exc:  # a bug, not a job outcome: record it, keep the worker alive
         log.exception("job %d crashed", job_id)
-        with deps.session_factory() as session:
-            job = session.get(Job, job_id)
-            if job is not None:
-                if job.staged_path is None:
-                    # nothing usable to keep for a Retry: do not leave a multi-GB orphan
-                    shutil.rmtree(deps.staging_dir / str(job.id), ignore_errors=True)
-                if _fail(session, job, f"internal error: {exc!r}", retry=False, now=deps.now()):
-                    session.commit()
-                    await _notify_failed(deps, session, job)
+        try:
+            with deps.session_factory() as session:
+                job = session.get(Job, job_id)
+                if job is not None:
+                    if job.staged_path is None:
+                        # nothing usable to keep for a Retry: do not leave a multi-GB orphan
+                        shutil.rmtree(deps.staging_dir / str(job.id), ignore_errors=True)
+                    if _fail(session, job, f"internal error: {exc!r}", retry=False, now=deps.now()):
+                        session.commit()
+                        await _notify_failed(deps, session, job)
+        except Exception:  # the row stays downloading; the next tick's orphan sweep requeues it
+            log.exception("job %d: recording the crash failed", job_id)
 
 
 async def process_job(
@@ -420,6 +438,7 @@ async def process_job(
                 # the wall was the source's, not this job's: back to the queue, no attempt spent
                 job.status = JobStatus.queued
                 job.attempts -= 1
+                job.rate_limit_hits += 1
                 job.next_retry_at = deps.now() + timedelta(seconds=exc.wait_seconds)
                 job.error = (
                     f"rate-limited by the source; all downloads paused for "
@@ -567,6 +586,7 @@ async def _download_stage(
     def abort_or_stalled() -> bool:
         return should_abort() or guard.tripped()
 
+    started = deps.cooloff.clock()
     try:
         result = await asyncio.to_thread(
             deps.source.download,
@@ -579,7 +599,8 @@ async def _download_stage(
             subtitle_langs=sub_langs,
             auto_subtitles=auto_subs,
         )
-        deps.cooloff.clear()  # the source is serving us again
+        deps.cooloff.clear(since=started)  # the source is serving us again
+        job.rate_limit_hits = 0
         quality = quality_for_height(result.height)
         staged = dest / _staging_name(target, info, quality, result.ext)
         result.path.rename(staged)
@@ -591,6 +612,11 @@ async def _download_stage(
     except SourceError as exc:
         shutil.rmtree(dest, ignore_errors=True)
         if is_rate_limited(str(exc)):
+            if job.rate_limit_hits >= RATE_LIMIT_MAX_REQUEUES:
+                raise _Retry(
+                    f"rate-limited answer {job.rate_limit_hits + 1} times in a row for this "
+                    f"video while other downloads went through: {exc}"
+                ) from exc
             raise _RateLimited(str(exc), deps.cooloff.hit(str(exc))) from exc
         if is_permanent_failure(str(exc)):
             # gone, walled off, or a wrong request: a day of retries changes nothing

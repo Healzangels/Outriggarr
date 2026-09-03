@@ -66,6 +66,23 @@ jobs:
             node /opt/bgutil/server/build/generate_once.js --help >/dev/null
             id -u | grep -qx 99
           '
+      - name: Boot the image and ask it for its health
+        # the lifespan is what production runs: migrations, the instance lock, the
+        # worker and scheduler tasks; /health says whether both loops are alive
+        run: |
+          mkdir -p "$RUNNER_TEMP/cfg" "$RUNNER_TEMP/staging"
+          docker run -d --name smoke -e PUID=99 -e PGID=100 -p 18080:8080 \
+            -v "$RUNNER_TEMP/cfg:/config" -v "$RUNNER_TEMP/staging:/staging" outriggarr:ci
+          for i in $(seq 1 30); do
+            if body=$(curl -sf http://127.0.0.1:18080/health); then break; fi
+            sleep 2
+          done
+          echo "$body"
+          docker logs smoke | tail -20
+          docker rm -f smoke >/dev/null
+          echo "$body" | grep -q '"status":"ok"'
+          echo "$body" | grep -q '"worker_alive":true'
+          echo "$body" | grep -q '"scheduler_alive":true'
       - name: Push
         uses: docker/build-push-action@v6
         with:

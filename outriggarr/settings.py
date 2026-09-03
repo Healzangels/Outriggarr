@@ -163,6 +163,17 @@ RESERVED_YTDLP_KEYS = frozenset(
     {
         # "verbose" prints yt-dlp's debug header on every probe and every download
         "verbose",
+        # these change what the runner sees: swallowed errors, no file, another cookie jar
+        "ignoreerrors",
+        "simulate",
+        "skip_download",
+        "cookiesfrombrowser",  # cookiefile is how the app passes its own cookies path
+        "match_filter",
+        "daterange",
+        "playlist_items",
+        "playliststart",
+        "playlistreverse",
+        "playlistrandom",
         "outtmpl",
         "paths",
         "postprocessors",
@@ -181,7 +192,6 @@ RESERVED_YTDLP_KEYS = frozenset(
         "ffmpeg_location",
         "noplaylist",
         "extract_flat",
-        "skip_download",
         "playlistend",
         # yt-dlp stop conditions raise DownloadCancelled, which would look like our abort
         "download_archive",

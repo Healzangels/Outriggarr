@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import re
 import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated
+from urllib.parse import parse_qs, urlsplit
 
 from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -50,9 +52,27 @@ class VideoIn(BaseModel):
     @classmethod
     def _http_only(cls, v: str) -> str:
         v = v.strip()
-        if not (v.startswith("http://") or v.startswith("https://")):
+        if not v.startswith(("http://", "https://")):
             raise ValueError("video url must start with http:// or https://")
+        if looks_like_a_listing(v):
+            raise ValueError(
+                "video url is a playlist or channel, not a video; list it with /api/resolve "
+                "(or Grab) and queue the videos you want"
+            )
         return v
+
+
+def looks_like_a_listing(url: str) -> bool:
+    """A YouTube playlist, channel or user page given where one video belongs: yt-dlp
+    would download every entry into the job's folder and then report no file."""
+    parts = urlsplit(url)
+    path = parts.path.rstrip("/")
+    query = parse_qs(parts.query)
+    if "v" in query:  # a watch URL, even one carrying a list= (noplaylist handles it)
+        return False
+    if path == "/playlist" or "list" in query:
+        return True
+    return bool(re.match(r"^/(?:@[^/]+|channel/[^/]+|c/[^/]+|user/[^/]+)(?:/\w+)?$", path))
 
 
 class JobIn(BaseModel):
@@ -241,7 +261,17 @@ def delete_job(session: Session, job_id: int, staging_dir: Path | None = None) -
             "jobs can be deleted",
         )
     if staging_dir is not None:
-        shutil.rmtree(staging_dir / str(job.id), ignore_errors=True)
+        folder = staging_dir / str(job.id)
+        errors: list[str] = []
+        shutil.rmtree(
+            folder,
+            onexc=lambda fn, path, exc: errors.append(f"{path}: {exc}"),
+        )
+        if folder.exists():  # the row stays: a folder nothing points at would never be swept
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"staging folder {folder} could not be removed: {'; '.join(errors[:3])}",
+            )
     session.delete(job)
     session.commit()
 

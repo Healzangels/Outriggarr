@@ -26,6 +26,10 @@ def cross_site(request: Request) -> str | None:
     fetch_site = request.headers.get("sec-fetch-site", "").lower()
     if fetch_site == "cross-site":
         return "Sec-Fetch-Site: cross-site"
+    if fetch_site in ("same-origin", "same-site", "none"):
+        # the browser's own verdict; it also covers "Origin: null", which a same-origin
+        # form sends when the page's referrer policy is no-referrer (a common proxy header)
+        return None
     host = request.headers.get("host", "")
     for header in ("origin", "referer"):
         value = request.headers.get(header)

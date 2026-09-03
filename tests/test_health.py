@@ -106,3 +106,12 @@ def test_health_and_footer_show_a_rate_limit_pause(client: TestClient) -> None:
     cooloff.clear()
     assert client.get("/health").json()["youtube_cooloff"] is None
     assert "rate-limited: paused" not in client.get("/activity").text
+
+
+def test_health_is_degraded_when_another_instance_holds_the_database(client) -> None:
+    client.app.state.worker_note = "Another Outriggarr instance holds this database"
+    try:
+        r = client.get("/health")
+        assert r.status_code == 503 and "instance_lock" in r.json()["problems"]
+    finally:
+        del client.app.state.worker_note

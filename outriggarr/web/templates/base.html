@@ -12,15 +12,30 @@
   <script src="{{ static('htmx.min.js') }}"></script>
   <script>
     // Any 4xx/5xx from an HTMX action shows up instead of silently doing nothing.
+    const flash = (text) => {
+      const bar = document.getElementById('flash') || document.body.insertBefore(Object.assign(document.createElement('p'), { id: 'flash', className: 'notice bad container' }), document.querySelector('main'));
+      bar.textContent = text;
+      bar.setAttribute('role', 'alert');
+    };
     document.addEventListener('htmx:responseError', (e) => {
+      const xhr = e.detail.xhr;
       let detail = '';
       try {
-        const d = JSON.parse(e.detail.xhr.responseText).detail;
+        const d = JSON.parse(xhr.responseText).detail;
         detail = typeof d === 'string' ? d : (d ? JSON.stringify(d) : '');
-      } catch (_) { detail = e.detail.xhr.statusText; }
-      const bar = document.getElementById('flash') || document.body.insertBefore(Object.assign(document.createElement('p'), { id: 'flash', className: 'notice bad container' }), document.querySelector('main'));
-      bar.textContent = `Request failed (${e.detail.xhr.status}): ${detail}`;
-      bar.setAttribute('role', 'alert');
+      } catch (_) { detail = (xhr.responseText || xhr.statusText || '').slice(0, 300); }
+      flash(`Request failed (${xhr.status}): ${detail}`);
+      // a loading placeholder in the target would otherwise spin forever
+      const target = e.detail.target;
+      const busy = target && target.querySelector && target.querySelector('[aria-busy]');
+      if (busy) { busy.removeAttribute('aria-busy'); busy.textContent = `Could not load this (${xhr.status}).`; }
+    });
+    // a server that is not there at all (restarting, gone) says so too, instead of nothing
+    document.addEventListener('htmx:sendError', () => flash('Outriggarr is not reachable right now; the request was not sent.'));
+    document.addEventListener('htmx:timeout', () => flash('Outriggarr did not answer in time; try again.'));
+    // the next request that succeeds clears the bar, so a transient poll error is transient
+    document.addEventListener('htmx:afterRequest', (e) => {
+      if (e.detail.successful) { const bar = document.getElementById('flash'); if (bar) bar.remove(); }
     });
     // A notice that answers an action ("Cleared job #5.", "Queued 3 job(s).") fades out
     // by itself; errors and in-progress notices stay until something replaces them.
@@ -29,7 +44,7 @@
       const dismiss = (el) => { el.style.transition = 'opacity .6s'; el.style.opacity = '0'; setTimeout(() => el.remove(), 650); };
       const arm = (root) => {
         if (!root || !root.querySelectorAll) return;
-        root.querySelectorAll('.notice[role=status]:not(.bad):not([aria-busy]), [role=status] > .notice:not(.bad)').forEach((el) => {
+        root.querySelectorAll('.notice[role=status]:not(.bad):not([aria-busy]):not([data-sticky]), [role=status] > .notice:not(.bad)').forEach((el) => {
           if (el.dataset.armed) return;
           el.dataset.armed = '1';
           setTimeout(() => dismiss(el), LINGER_MS);
@@ -80,7 +95,9 @@
   {# trouble that stops downloads is said where the user is looking, not only in the footer #}
   {% if not tooling.ffmpeg %}<p class="notice bad container" role="alert">Downloads will fail: ffmpeg is missing from the image. The footer has the details.</p>
   {% elif not tooling.staging_writable %}<p class="notice bad container" role="alert">Downloads will fail: the staging folder is not writable by the app user. Fix the mount's ownership or mode; the container log says what the probe saw.</p>{% endif %}
-  {% if tooling.youtube_cooloff %}<p class="notice warn container" role="status">Paused {{ (tooling.youtube_cooloff.remaining_seconds + 59) // 60 }} min: the source answered with a rate limit. Downloads, scans and date fetches resume by themselves.</p>{% endif %}
+  {% if tooling.dead_loops %}<p class="notice bad container" role="alert">The {{ tooling.dead_loops | join(" and ") }} loop{{ "s have" if tooling.dead_loops | length > 1 else " has" }} stopped, so nothing downloads or scans until the container restarts. The container log has the traceback.</p>{% endif %}
+  {% if tooling.worker_note %}<p class="notice warn container" role="status" data-sticky>{{ tooling.worker_note }}</p>{% endif %}
+  {% if tooling.youtube_cooloff %}<p class="notice warn container" role="status" data-sticky>Paused {{ (tooling.youtube_cooloff.remaining_seconds + 59) // 60 }} min: the source answered with a rate limit. Downloads, scans and date fetches resume by themselves.</p>{% endif %}
   <main class="container">
     {% block content %}{% endblock %}
   </main>

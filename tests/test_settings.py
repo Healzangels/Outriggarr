@@ -171,10 +171,32 @@ def test_apprise_notifier_reads_urls_per_send(monkeypatch) -> None:
     assert n.send("t", "b") is True
     urls.append("json://b/2")
     assert n.send("t2", "b") is True
-    assert calls == [(["json://a/1"], "t"), (["json://a/1", "json://b/2"], "t2")]
+    # one Apprise per target: Apprise's own notify() is all-or-nothing across targets
+    assert calls == [(["json://a/1"], "t"), (["json://a/1"], "t2"), (["json://b/2"], "t2")]
     urls.clear()
     assert n.send("t3", "b") is False, "no URLs → nothing sent"
     assert NullNotifier().send("x", "y") is False
+
+
+def test_notifier_reports_delivered_when_one_of_two_targets_accepts(monkeypatch) -> None:
+    import apprise
+
+    from outriggarr.notify import AppriseNotifier
+
+    class FlakyApprise:
+        def __init__(self):
+            self.urls = []
+
+        def add(self, u):
+            self.urls.append(u)
+            return True
+
+        def notify(self, title, body):
+            return "good" in self.urls[0]
+
+    monkeypatch.setattr(apprise, "Apprise", FlakyApprise)
+    assert AppriseNotifier(lambda: ["json://dead/1", "json://good/2"]).send("t", "b") is True
+    assert AppriseNotifier(lambda: ["json://dead/1"]).send("t", "b") is False
 
 
 def test_extra_opts_cannot_override_runner_keys() -> None:
@@ -274,3 +296,14 @@ def test_noisy_ytdlp_keys_are_reserved() -> None:
     with pytest.raises(ValueError, match="Outriggarr owns those options"):
         validate_setting("ytdlp_extra_opts", '{"verbose": true}')
     assert validate_setting("ytdlp_extra_opts", '{"quiet": false}'), "quiet stays the operator's"
+
+
+@pytest.mark.parametrize(
+    "key",
+    ["ignoreerrors", "simulate", "cookiesfrombrowser", "playlist_items", "playlistreverse"],
+)
+def test_options_that_change_what_the_runner_sees_are_reserved(key: str) -> None:
+    from outriggarr.settings import RESERVED_YTDLP_KEYS
+
+    assert key in RESERVED_YTDLP_KEYS
+    assert "cookiefile" not in RESERVED_YTDLP_KEYS, "the app passes its own cookies path this way"
