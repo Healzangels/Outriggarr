@@ -1,6 +1,7 @@
 import logging
 import os
 import shutil
+import sqlite3
 import stat
 from pathlib import Path
 
@@ -48,12 +49,33 @@ def cooloff_status(cooloff) -> dict[str, object] | None:
     return {"remaining_seconds": int(cooloff.remaining()), "message": cooloff.message}
 
 
+def _write_lock_free(engine) -> bool:
+    raw = engine.raw_connection()
+    try:
+        cur = raw.cursor()
+        cur.execute("PRAGMA busy_timeout=2000")
+        try:
+            cur.execute("BEGIN IMMEDIATE")
+            cur.execute("ROLLBACK")
+        except sqlite3.OperationalError:
+            return False
+        finally:
+            cur.execute("PRAGMA busy_timeout=30000")
+            cur.close()
+    finally:
+        raw.close()
+    return True
+
+
 @router.get("/health")
 def health(request: Request, response: Response) -> dict[str, object]:
     """200 when downloads can work; 503 "degraded" with the reasons when they cannot."""
     with request.app.state.session_factory() as session:
         session.execute(text("SELECT 1"))
         cookies_path = get_setting(session, "cookies_path")
+    # a reader never blocks under WAL, so SELECT 1 cannot see a wedged writer; ask for
+    # the write lock for two seconds and give it straight back
+    write_lock_ok = _write_lock_free(request.app.state.engine)
     from yt_dlp.version import __version__ as ytdlp_version
 
     staging = request.app.state.settings.staging_dir
@@ -67,7 +89,8 @@ def health(request: Request, response: Response) -> dict[str, object]:
         "js_runtime": next((r for r in ("deno", "node", "bun") if shutil.which(r)), None),
         "ffmpeg": shutil.which("ffmpeg") is not None,
         # off = age-gated videos top out at 480p (YouTube wants a proof-of-origin token)
-        "po_token_provider": pot_provider_ready(request.app.state.settings.pot_server_home),
+        "po_token_provider": pot_provider_ready(request.app.state.settings.pot_server_home)
+        and not getattr(request.app.state, "pot_probe", None),
         # none / unreadable / signed in / signed out — "signed out" means age-gated videos
         # will fail until the cookies file is exported again
         "youtube_session": cookies_state(cookies_path),
@@ -80,7 +103,9 @@ def health(request: Request, response: Response) -> dict[str, object]:
         "worker_alive": liveness.get("worker"),
         "scheduler_alive": liveness.get("scheduler"),
     }
-    problems = [k for k in ("ffmpeg", "staging_writable") if not body[k]]
+    body["write_lock"] = write_lock_ok
+    body["po_token_probe"] = getattr(request.app.state, "pot_probe", None)
+    problems = [k for k in ("ffmpeg", "staging_writable", "write_lock") if not body[k]]
     problems += [k for k, alive in liveness.items() if alive is False]
     if getattr(request.app.state, "worker_note", None):
         problems.append("instance_lock")  # another instance holds the database: no loops here

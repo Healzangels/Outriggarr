@@ -115,3 +115,19 @@ def test_health_is_degraded_when_another_instance_holds_the_database(client) -> 
         assert r.status_code == 503 and "instance_lock" in r.json()["problems"]
     finally:
         del client.app.state.worker_note
+
+
+def test_health_sees_a_wedged_write_lock(client) -> None:
+    import sqlite3
+
+    url = client.app.state.settings.database_url
+    path = url.removeprefix("sqlite:///")
+    holder = sqlite3.connect(path, isolation_level=None)
+    try:
+        holder.execute("BEGIN IMMEDIATE")  # a writer that never finishes
+        r = client.get("/health")
+        assert r.status_code == 503 and "write_lock" in r.json()["problems"]
+    finally:
+        holder.execute("ROLLBACK")
+        holder.close()
+    assert client.get("/health").json()["write_lock"] is True

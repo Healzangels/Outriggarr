@@ -1282,3 +1282,160 @@ def test_degraded_ytdlp_notices_are_warnings(caplog) -> None:
         _YtDlpLogger().debug("[download] Destination: x.mkv")
     levels = [r.levelno for r in caplog.records]
     assert levels == [logging.WARNING, logging.DEBUG]
+
+
+def test_bytes_reach_a_callback_that_wants_them_when_the_size_is_unknown(
+    monkeypatch, tmp_path
+) -> None:
+    script = [
+        {"status": "downloading", "downloaded_bytes": 10},  # no total: a chunked stream
+        {"status": "downloading", "downloaded_bytes": 20},
+        {"status": "finished"},
+    ]
+    seen: list[tuple[float, int]] = []
+    _drive_download(monkeypatch, tmp_path, script, lambda pct, done: seen.append((pct, done)))
+    assert seen == [(-1.0, 10), (-1.0, 20)]
+    old: list[float] = []
+    _drive_download(monkeypatch, tmp_path, script, old.append)  # a pct-only callback
+    assert old == [], "no percentage to report, and no TypeError either"
+
+
+class _AgeGateYDL:
+    """No cookies: an age-gated video served by the embedded client (age_limit 18, a
+    poorer file). With cookies: the real thing."""
+
+    instances: list[dict] = []
+
+    def __init__(self, opts):
+        self.opts = opts
+        _AgeGateYDL.instances.append(opts)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def extract_info(self, url, download=False):
+        dest = Path(self.opts["outtmpl"]).parent
+        dest.mkdir(parents=True, exist_ok=True)
+        if self.opts.get("skip_download"):
+            (dest / "v1.en.srt").write_text("1\n00:00:00,000 --> 00:00:01,000\nhi\n")
+            return {"id": "v1"}
+        with_cookies = "cookiefile" in self.opts
+        path = dest / "v1.mkv"
+        path.write_bytes(b"real" if with_cookies else b"poor")
+        return {
+            "id": "v1",
+            "title": "t",
+            "age_limit": 18,
+            "height": 1080 if with_cookies else 480,
+            "requested_downloads": [{"filepath": str(path)}],
+        }
+
+
+def test_an_age_gated_video_is_downloaded_again_with_the_session(monkeypatch, tmp_path) -> None:
+    import yt_dlp
+
+    from outriggarr.source import YtDlpSource
+
+    _AgeGateYDL.instances = []
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", _AgeGateYDL)
+    jar = tmp_path / "c.txt"
+    jar.write_text("# cookies")
+    src = YtDlpSource(extra_opts=lambda: {"cookiefile": str(jar)})
+    monkeypatch.setattr(src, "_pot_ready", lambda: True)
+    result = src.download(
+        "https://youtu.be/v1",
+        tmp_path / "out",
+        fmt="best",
+        merge_container="mkv",
+        progress=lambda p: None,
+        should_abort=lambda: False,
+        subtitle_langs=("en",),
+    )
+    kinds = [
+        ("subs" if o.get("skip_download") else "video", "cookiefile" in o)
+        for o in _AgeGateYDL.instances
+    ]
+    assert kinds == [("video", False), ("video", True), ("subs", True)]
+    assert result.path.read_bytes() == b"real" and result.height == 1080
+    assert [p.name for p in result.subtitles] == ["v1.en.srt"], "captions from the second pass"
+
+
+def test_captions_are_best_effort(monkeypatch, tmp_path) -> None:
+    import yt_dlp
+
+    from outriggarr.source import YtDlpSource
+
+    class NoCaptions(_AgeGateYDL):
+        def extract_info(self, url, download=False):
+            if self.opts.get("skip_download"):
+                raise RuntimeError("HTTP Error 429: Too Many Requests")  # the caption CDN
+            info = super().extract_info(url, download)
+            info["age_limit"] = 0
+            return info
+
+    _AgeGateYDL.instances = []
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", NoCaptions)
+    result = YtDlpSource().download(
+        "https://youtu.be/v1",
+        tmp_path / "out",
+        fmt="best",
+        merge_container="mkv",
+        progress=lambda p: None,
+        should_abort=lambda: False,
+        subtitle_langs=("en",),
+    )
+    assert result.path.exists() and result.subtitles == (), "the video is staged, captions are not"
+    assert "writesubtitles" not in _AgeGateYDL.instances[0], "the video pass carries no captions"
+    assert _AgeGateYDL.instances[1]["ignoreerrors"] is True
+
+
+def test_pot_provider_probe(monkeypatch, tmp_path) -> None:
+    import subprocess
+
+    from outriggarr.source import pot_provider_probe
+
+    assert pot_provider_probe(None) == "no PO-token server home configured"
+    assert "is missing" in pot_provider_probe(tmp_path)
+    script = tmp_path / "build" / "generate_once.js"
+    script.parent.mkdir()
+    script.write_text("// stub")
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/node" if name == "node" else None)
+
+    class Proc:
+        returncode = 0
+        stdout = "1.0"
+        stderr = ""
+
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: Proc())
+    assert pot_provider_probe(tmp_path) is None
+    Proc.returncode = 1
+    Proc.stderr = "node too old"
+    assert "node too old" in pot_provider_probe(tmp_path)
+
+
+def test_a_failed_replace_after_tagging_is_the_sources_error(monkeypatch, tmp_path) -> None:
+    import subprocess
+
+    from outriggarr.source import YtDlpSource
+
+    src_file = tmp_path / "a.mkv"
+    src_file.write_bytes(b"orig")
+
+    class Proc:
+        returncode = 0
+        stderr = ""
+
+    def fake_run(cmd, **kw):
+        Path(cmd[-1]).write_bytes(b"tagged")
+        return Proc()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        Path, "replace", lambda self, target: (_ for _ in ()).throw(OSError("EBUSY"))
+    )
+    with pytest.raises(SourceError, match="could not replace the file after tagging"):
+        YtDlpSource().tag_audio_language(src_file, "eng")
+    assert src_file.read_bytes() == b"orig" and not (tmp_path / "a.lang.mkv").exists()

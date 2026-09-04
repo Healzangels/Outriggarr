@@ -94,10 +94,12 @@ class ArrHttp:
         # /filesystem returns an empty listing for a missing directory, which is
         # indistinguishable from an empty (e.g. fresh staging) directory. So list the
         # PARENT and look for the directory itself.
-        target = path.rstrip("/")
+        target = path.rstrip("/\\")
         if not target:
             return False
-        parent = target.rsplit("/", 1)[0] + "/"
+        cut = max(target.rfind("/"), target.rfind("\\"))  # a Windows-hosted *arr uses "\"
+        sep = target[cut] if cut >= 0 else "/"
+        parent = (target[:cut] if cut >= 0 else "") + sep
         data = await self.get(
             "filesystem",
             {"path": parent, "includeFiles": "false", "allowFoldersWithoutTrailingSlashes": "true"},

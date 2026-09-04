@@ -30,7 +30,7 @@ from outriggarr.arr import ArrFactory, make_client
 from outriggarr.db.session import make_engine, make_session_factory, run_migrations
 from outriggarr.notify import AppriseNotifier, Notifier
 from outriggarr.settings import Settings, apprise_urls, ytdlp_options
-from outriggarr.source import VideoSource, YtDlpSource
+from outriggarr.source import VideoSource, YtDlpSource, pot_provider_probe
 from outriggarr.web.middleware import SameOriginGuard, StaticCacheHeaders
 from outriggarr.web.pages import STATIC_DIR
 from outriggarr.web.pages import router as pages_router
@@ -106,6 +106,10 @@ def create_app(
             with sf_notify() as s:
                 return apprise_urls(s)
 
+        # the PO-token plugin's own check, once: it takes a second and does not change
+        app.state.pot_probe = await asyncio.to_thread(pot_provider_probe, settings.pot_server_home)
+        if app.state.pot_probe:
+            log.warning("PO-token provider not usable: %s", app.state.pot_probe)
         app.state.runner_deps = RunnerDeps(
             session_factory=app.state.session_factory,
             arr_factory=app.state.arr_factory,

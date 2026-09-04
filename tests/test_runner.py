@@ -1490,3 +1490,59 @@ def test_recover_stale_jobs_leaves_the_jobs_this_worker_runs_alone(session_facto
         assert recover_stale_jobs(s, exclude={mine}) == 1
         assert s.get(Job, mine).status is JobStatus.downloading
         assert s.get(Job, orphan).status is JobStatus.queued
+
+
+def test_stall_guard_hears_bytes_when_the_size_is_unknown() -> None:
+    from outriggarr.worker.runner import _StallGuard
+
+    t = [0.0]
+    g = _StallGuard(idle=60, cap=3600, clock=lambda: t[0])
+    g.advanced(-1.0, 100)
+    t[0] += 50
+    g.advanced(-1.0, 200)  # same "percentage", more bytes: not stuck
+    t[0] += 50
+    assert not g.tripped()
+    t[0] += 61
+    g.advanced(-1.0, 200)  # the same bytes again: stuck
+    assert g.tripped() and "stuck at 0%" in g.reason
+
+
+def test_a_cancel_that_lands_between_read_and_write_is_never_overwritten(
+    deps, session_factory
+) -> None:
+    from outriggarr.worker.runner import _fail, _set_unless_cancelled
+
+    conn_id = add_connection(session_factory)
+    job_id = add_job(session_factory, conn_id, status=JobStatus.downloading)
+    with session_factory() as worker_session:
+        job = worker_session.get(Job, job_id)  # the worker read it as downloading
+        with session_factory() as api_session:  # the user cancels meanwhile
+            api_session.get(Job, job_id).status = JobStatus.cancelled
+            api_session.commit()
+        assert _fail(worker_session, job, "boom", retry=True, now=NOW) is False
+        worker_session.commit()
+        assert _set_unless_cancelled(worker_session, job, error="late") is False
+        worker_session.commit()
+    assert get_job(deps, job_id).status is JobStatus.cancelled
+    assert get_job(deps, job_id).error != "late"
+
+
+async def test_staged_path_is_recorded_before_the_audio_tag_remux(deps, session_factory) -> None:
+    conn_id = add_connection(session_factory)
+    job_id = add_job(session_factory, conn_id)
+    fake_for(deps, conn_id)
+    seen: list[str | None] = []
+
+    def tag(path, language):
+        with session_factory() as s:
+            seen.append(s.get(Job, job_id).staged_path)  # what a hard stop here would find
+
+    deps.source.tag_audio_language = tag
+    with session_factory() as s:
+        from outriggarr.settings import set_setting
+
+        set_setting(s, "audio_language", "eng")
+        s.commit()
+    await process_job(deps, job_id)
+    assert get_job(deps, job_id).status is JobStatus.done
+    assert seen and seen[0] and seen[0].endswith(".mkv"), "committed before the remux ran"

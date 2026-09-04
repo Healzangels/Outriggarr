@@ -9,7 +9,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -280,17 +280,26 @@ def cancel_job(session: Session, job_id: int, now: datetime | None = None) -> Jo
     """queued | downloading | failed → cancelled. A running download notices via the
     runner's abort check; staged files are swept by the worker."""
     job = _get_or_404(session, job_id)
-    if job.status not in CANCELLABLE:
+    # one conditional UPDATE: the worker may move the row (downloading → importing)
+    # between this read and the write, and an import in flight must not be "cancelled"
+    res = session.execute(
+        update(Job)
+        .where(Job.id == job_id, Job.status.in_(tuple(CANCELLABLE)))
+        .values(
+            status=JobStatus.cancelled,
+            next_retry_at=None,
+            error=func.coalesce(Job.error, "cancelled"),
+            finished_at=now or utcnow(),
+        )
+    )
+    session.commit()
+    session.refresh(job)
+    if res.rowcount != 1:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             f"job {job_id} is {job.status.value}; only queued, downloading or failed jobs "
             "can be cancelled",
         )
-    job.status = JobStatus.cancelled
-    job.next_retry_at = None
-    job.error = job.error or "cancelled"
-    job.finished_at = now or utcnow()
-    session.commit()
     return job
 
 

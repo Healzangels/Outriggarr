@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import contextlib
+import dataclasses
+import inspect
 import logging
 import os
 import re
@@ -52,9 +54,11 @@ class DownloadResult:
     video_id: str
     subtitles: tuple[Path, ...] = ()  # .srt sidecars written next to `path`
     audio_language: str | None = None  # ISO 639-2, as the source declared it; None = unknown
+    age_limit: int = 0  # YouTube's age gate: 18 means the embedded client served this
 
 
-ProgressCallback = Callable[[float], None]
+# progress(pct, downloaded_bytes): pct is -1 when the size is unknown; bytes still count
+ProgressCallback = Callable[..., None]
 AbortCheck = Callable[[], bool]
 
 
@@ -315,6 +319,31 @@ def cookies_state(path: str | Path | None) -> str:
     except OSError:
         return "unreadable"
     return "signed in" if has_signin_cookie(text) else "signed out"
+
+
+def pot_provider_probe(server_home: Path | None, timeout: float = 20.0) -> str | None:
+    """Run the bgutil script the way the plugin does (`<runtime> generate_once.js
+    --version`); None when it answers, else what went wrong. The file check alone let
+    the footer say "on" while the plugin, seeing a too-old runtime, minted nothing."""
+    if server_home is None:
+        return "no PO-token server home configured"
+    script = server_home / "build" / "generate_once.js"
+    if not script.is_file():
+        return f"{script} is missing"
+    runtime = shutil.which("node") or shutil.which("deno")
+    if runtime is None:
+        return "no node or deno runtime on the path"
+    cmd = [runtime, str(script), "--version"]
+    if runtime.endswith("deno"):
+        cmd = [runtime, "run", "-A", str(script), "--version"]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return f"{' '.join(cmd)}: {exc}"
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout).strip()[:300]
+        return f"{' '.join(cmd)} exited {proc.returncode}: {detail}"
+    return None
 
 
 def pot_provider_ready(server_home: Path | None) -> bool:
@@ -595,7 +624,11 @@ class YtDlpSource:
         if proc.returncode != 0:
             tmp.unlink(missing_ok=True)
             raise SourceError(f"ffmpeg exited {proc.returncode}: {proc.stderr.strip()}")
-        tmp.replace(path)
+        try:
+            tmp.replace(path)
+        except OSError as exc:  # the original is intact; the note goes on the job, not a crash
+            tmp.unlink(missing_ok=True)
+            raise SourceError(f"could not replace the file after tagging: {exc}") from exc
 
     def download(
         self,
@@ -616,6 +649,22 @@ class YtDlpSource:
 
         finished_formats = 0
 
+        # a callback written for progress(pct) alone (tests, older callers) keeps working;
+        # one that takes a second argument also hears the byte count
+        params = list(inspect.signature(progress).parameters.values())
+        wants_bytes = len(params) >= 2 or any(
+            p.kind is inspect.Parameter.VAR_POSITIONAL for p in params
+        )
+
+        def report(pct: float, done: int) -> None:
+            try:
+                if wants_bytes:
+                    progress(pct, done)
+                else:
+                    progress(pct)
+            except Exception:  # a hiccup writing progress must not discard the download
+                log.warning("progress callback failed", exc_info=True)
+
         def hook(d: dict[str, Any]) -> None:
             nonlocal finished_formats
             if should_abort():
@@ -628,7 +677,13 @@ class YtDlpSource:
                 return
             total = d.get("total_bytes") or d.get("total_bytes_estimate")
             done = d.get("downloaded_bytes")
-            if not total or done is None:
+            if done is None:
+                return
+            if not total:
+                # no size known (a chunked stream): no percentage, but bytes are flowing
+                # and the stall guard must hear it
+                if wants_bytes:
+                    report(-1.0, done)
                 return
             # bestvideo+bestaudio is two downloads, each reported 0→100 by yt-dlp: fold
             # them into one monotonic figure so the UI never drops back and the stall
@@ -638,10 +693,7 @@ class YtDlpSource:
             pct = min(
                 100.0, 100.0 * (finished_formats + share) / max(formats, finished_formats + 1)
             )
-            try:
-                progress(pct)
-            except Exception:  # a hiccup writing progress must not discard the download
-                log.warning("progress callback failed", exc_info=True)
+            report(pct, done)
 
         opts: dict[str, Any] = {
             "format": fmt,
@@ -654,10 +706,10 @@ class YtDlpSource:
             "noprogress": True,
             "progress_hooks": [hook],
         }
-        if subtitle_langs:
-            opts.update(subtitle_opts(subtitle_langs, auto_subtitles))
+        used = {"cookies": False}
 
         def attempt(with_cookies: bool) -> DownloadResult:
+            used["cookies"] = with_cookies
             info = None
             try:
                 with (
@@ -687,7 +739,59 @@ class YtDlpSource:
                 raise SourceError(f"yt-dlp returned no info for {url}")
             return _result_from_info(info, dest_dir)
 
-        return self._with_login_fallback(url, attempt)
+        result = self._with_login_fallback(url, attempt)
+        if (
+            result.age_limit >= 18
+            and not used["cookies"]
+            and self._cookies_configured()
+            and self._pot_ready()
+        ):
+            # Current yt-dlp no longer errors on an age-gated video: it quietly serves
+            # the embedded client's poorer formats. The signed-in session plus a PO
+            # token is what gets the real ones, so do it again with the cookies.
+            log.info("%s: age-gated; downloading again with the signed-in session", url)
+            result.path.unlink(missing_ok=True)
+            result = attempt(True)
+        if subtitle_langs:
+            # a separate, best-effort pass: a caption that 404s or 429s must not fail
+            # (or misclassify) a video that downloaded fine
+            self._fetch_captions(url, dest_dir, subtitle_langs, auto_subtitles, used["cookies"])
+            result = dataclasses.replace(
+                result, subtitles=subtitle_sidecars(dest_dir, result.video_id)
+            )
+        return result
+
+    def _fetch_captions(
+        self,
+        url: str,
+        dest_dir: Path,
+        langs: tuple[str, ...],
+        auto: bool,
+        with_cookies: bool,
+    ) -> None:
+        import yt_dlp
+
+        opts: dict[str, Any] = {
+            "outtmpl": str(dest_dir / "%(id)s.%(ext)s"),
+            "skip_download": True,
+            "noplaylist": True,
+            "quiet": True,
+            "no_warnings": False,
+            "noprogress": True,
+            "ignoreerrors": True,
+            **subtitle_opts(langs, auto),
+        }
+        try:
+            with (
+                self._private_cookie_jar(self._opts(opts, cookies=with_cookies)) as ydl_opts,
+                yt_dlp.YoutubeDL(ydl_opts) as ydl,
+            ):
+                ydl.extract_info(url, download=True)
+        except Exception as exc:  # the video is staged already; captions are extras
+            log.warning("%s: captions not fetched (%s): %s", url, ",".join(langs), exc)
+
+    def _pot_ready(self) -> bool:
+        return pot_provider_ready(self._pot_home)
 
 
 def subtitle_opts(langs: tuple[str, ...], auto: bool) -> dict[str, Any]:
@@ -889,4 +993,5 @@ def _result_from_info(info: dict[str, Any], dest_dir: Path | None = None) -> Dow
         video_id=video_id,
         subtitles=subtitle_sidecars(dest_dir, video_id) if dest_dir and video_id else (),
         audio_language=detected_audio_language(info),
+        age_limit=int(info.get("age_limit") or 0),
     )

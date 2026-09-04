@@ -100,13 +100,16 @@ class _StallGuard:
         self.clock = clock
         self.started = self.last_advance = clock()
         self.last_pct = -1.0
+        self.last_bytes: int | None = None
         self.reason: str | None = None
 
-    def advanced(self, pct: float) -> None:
+    def advanced(self, pct: float, downloaded: int | None = None) -> None:
         # not "greater": with bestvideo+bestaudio the hook restarts at 0 % for the audio
-        # stream, and steady audio progress must count as progress
-        if pct != self.last_pct:
+        # stream, and steady audio progress must count as progress. Bytes count too: a
+        # stream with no known size never moves the percentage but is not stuck.
+        if pct != self.last_pct or (downloaded is not None and downloaded != self.last_bytes):
             self.last_pct = pct
+            self.last_bytes = downloaded if downloaded is not None else self.last_bytes
             self.last_advance = self.clock()
 
     def tripped(self) -> bool:
@@ -436,15 +439,20 @@ async def process_job(
                 job.finished_at = deps.now()
             else:
                 # the wall was the source's, not this job's: back to the queue, no attempt spent
-                job.status = JobStatus.queued
-                job.attempts -= 1
-                job.rate_limit_hits += 1
-                job.next_retry_at = deps.now() + timedelta(seconds=exc.wait_seconds)
-                job.error = (
+                message = (
                     f"rate-limited by the source; all downloads paused for "
                     f"{int(exc.wait_seconds // 60)} min: {exc.message}"
                 )
-                log.warning("job %d: %s", job.id, job.error)
+                _set_unless_cancelled(
+                    session,
+                    job,
+                    status=JobStatus.queued,
+                    attempts=job.attempts - 1,
+                    rate_limit_hits=job.rate_limit_hits + 1,
+                    next_retry_at=deps.now() + timedelta(seconds=exc.wait_seconds),
+                    error=message,
+                )
+                log.warning("job %d: %s", job.id, message)
             session.commit()
             return
         except DownloadAborted:
@@ -454,9 +462,13 @@ async def process_job(
                 job.error = "cancelled during download"
                 job.finished_at = deps.now()
             else:
-                job.status = JobStatus.queued
-                job.attempts -= 1
-                job.error = "interrupted; will resume"
+                _set_unless_cancelled(
+                    session,
+                    job,
+                    status=JobStatus.queued,
+                    attempts=job.attempts - 1,
+                    error="interrupted; will resume",
+                )
             session.commit()
             return
         except _Retry as exc:
@@ -569,10 +581,10 @@ async def _download_stage(
     guard = _StallGuard(deps.stall_idle_seconds, deps.stall_cap_seconds, deps.clock)
     last_write = 0.0
 
-    def progress(pct: float) -> None:
+    def progress(pct: float, downloaded: int | None = None) -> None:
         # Called from the yt-dlp thread; throttle DB writes.
         nonlocal last_write
-        guard.advanced(pct)
+        guard.advanced(pct, downloaded)
         t = time.monotonic()
         if t - last_write < PROGRESS_WRITE_INTERVAL:
             return
@@ -609,6 +621,11 @@ async def _download_stage(
         for sub in result.subtitles:
             suffix = sub.name[len(result.video_id) :]  # ".en.srt"
             sub.rename(dest / f"{staged.stem}{suffix}")
+        # the file is complete and named: say so NOW, before the (long, uninterruptible)
+        # audio-tag remux, so a hard stop in that window resumes instead of re-downloading
+        job.staged_path = str(staged)
+        job.video_title = job.video_title or result.title
+        session.commit()
     except SourceError as exc:
         shutil.rmtree(dest, ignore_errors=True)
         if is_rate_limited(str(exc)):
@@ -646,8 +663,6 @@ async def _download_stage(
             # The file is still importable; keep the note on the job rather than fail it.
             log.warning("job %d: audio language tag failed: %s", job.id, exc)
             job.error = f"audio language tag failed (file imported untagged): {exc}"
-    job.staged_path = str(staged)
-    job.video_title = job.video_title or result.title
     job.progress_pct = 100
     session.commit()
     return staged
@@ -773,17 +788,26 @@ def audio_language_for(job: Job, detected: str | None, default: str) -> tuple[st
     return (default or None), "global default"
 
 
+def _set_unless_cancelled(session: Session, job: Job, **values: object) -> bool:
+    """One conditional UPDATE, like `_enter_importing`: the row changes only if the API
+    has not cancelled it meanwhile, so a Cancel that lands between a read and a write
+    is never overwritten. The ORM object is refreshed either way."""
+    res = session.execute(
+        update(Job).where(Job.id == job.id, Job.status != JobStatus.cancelled).values(**values)
+    )
+    session.flush()
+    session.refresh(job)
+    return res.rowcount == 1
+
+
 def _fail(session: Session, job: Job, message: str, *, retry: bool, now: datetime) -> bool:
     """Record a failure. Returns False (and changes nothing) when the API cancelled the
     job meanwhile: the user's decision outranks a failure that landed later."""
-    if _cancelled_meanwhile(session, job):
-        return False
-    job.error = message
-    job.status = JobStatus.failed
     if retry and job.attempts < MAX_ATTEMPTS:
-        job.next_retry_at = now + BACKOFF[min(job.attempts, len(BACKOFF)) - 1]
-        job.finished_at = None
+        values = {
+            "next_retry_at": now + BACKOFF[min(job.attempts, len(BACKOFF)) - 1],
+            "finished_at": None,
+        }
     else:
-        job.next_retry_at = None
-        job.finished_at = now
-    return True
+        values = {"next_retry_at": None, "finished_at": now}
+    return _set_unless_cancelled(session, job, error=message, status=JobStatus.failed, **values)

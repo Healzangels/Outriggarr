@@ -226,7 +226,9 @@ def _tooling(request: Request) -> dict:
         "yt_dlp": ytdlp_version,
         "js_runtime": next((r for r in ("deno", "node", "bun") if shutil.which(r)), None),
         "ffmpeg": shutil.which("ffmpeg") is not None,
-        "po_token_provider": pot_provider_ready(request.app.state.settings.pot_server_home),
+        "po_token_provider": pot_provider_ready(request.app.state.settings.pot_server_home)
+        and not getattr(request.app.state, "pot_probe", None),
+        "po_token_probe": getattr(request.app.state, "pot_probe", None),
         "staging_writable": staging_writable(staging),
         # a worker or scheduler task that ended is a dead loop behind a live page: say so
         "dead_loops": [

@@ -22,15 +22,28 @@ SessionFactory = sessionmaker[Session]
 def make_engine(database_url: str) -> Engine:
     # timeout: how long a writer waits for the single SQLite write lock instead of
     # failing with "database is locked" (the progress hook writes every 2 s).
-    engine = create_engine(database_url, connect_args={"check_same_thread": False, "timeout": 30})
+    # pool: a download holds its session's connection for hours (concurrency up to 8),
+    # the scheduler holds one across its listings; pages and polls need theirs at once
+    engine = create_engine(
+        database_url,
+        connect_args={"check_same_thread": False, "timeout": 30},
+        pool_size=10,
+        max_overflow=20,
+    )
 
     @event.listens_for(engine, "connect")
     def _sqlite_pragmas(dbapi_conn, _record) -> None:  # noqa: ANN001
         cur = dbapi_conn.cursor()
         cur.execute("PRAGMA foreign_keys=ON")
-        mode = cur.execute("PRAGMA journal_mode=WAL").fetchone()[0]
-        if str(mode).lower() != "wal":  # a filesystem that refuses WAL (some FUSE/NFS)
-            log.warning("SQLite journal mode is %s, not WAL: writes will block readers", mode)
+        try:
+            mode = cur.execute("PRAGMA journal_mode=WAL").fetchone()[0]
+        except sqlite3.OperationalError as exc:
+            # changing the journal mode needs the write lock; while a writer holds it
+            # (a wedged one, say) a new connection must still open, so /health can say so
+            log.warning("could not confirm the WAL journal mode: %s", exc)
+        else:
+            if str(mode).lower() != "wal":  # a filesystem that refuses WAL (some FUSE/NFS)
+                log.warning("SQLite journal mode is %s, not WAL: writes will block readers", mode)
         cur.close()
 
     return engine

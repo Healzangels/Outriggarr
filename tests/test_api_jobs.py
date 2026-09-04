@@ -312,3 +312,27 @@ def test_jobs_api_refuses_a_playlist_url(client) -> None:
         ],
     )
     assert r.status_code == 422 and "playlist or channel" in r.text
+
+
+def test_cancel_is_one_conditional_write(client) -> None:
+    from outriggarr.db.models import Job, JobStatus, TargetKind
+
+    client.post("/api/connections", json=SONARR)
+    with client.app.state.session_factory() as s:
+        s.add(
+            Job(
+                connection_id=1,
+                target_kind=TargetKind.episode,
+                series_id=5,
+                episode_ids=[1],
+                target_key="episode:5:1",
+                video_id="v",
+                video_url="https://y/v",
+                status=JobStatus.importing,
+            )
+        )
+        s.commit()
+        job_id = s.scalars(select(Job.id)).one()
+    r = client.post(f"/api/jobs/{job_id}/cancel")
+    assert r.status_code == 409 and "importing" in r.json()["detail"]
+    assert client.get(f"/api/jobs/{job_id}").json()["status"] == "importing"
