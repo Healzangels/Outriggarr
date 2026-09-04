@@ -10,7 +10,7 @@ from sqlalchemy import text
 
 from outriggarr import __version__
 from outriggarr.settings import get_setting
-from outriggarr.source import cookies_state, pot_provider_ready
+from outriggarr.source import cookies_state, js_runtime, pot_provider_ready
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -86,7 +86,7 @@ def health(request: Request, response: Response) -> dict[str, object]:
         "status": "ok",
         "version": __version__,
         "yt_dlp": ytdlp_version,
-        "js_runtime": next((r for r in ("deno", "node", "bun") if shutil.which(r)), None),
+        "js_runtime": js_runtime(),
         "ffmpeg": shutil.which("ffmpeg") is not None,
         # off = age-gated videos top out at 480p (YouTube wants a proof-of-origin token)
         "po_token_provider": pot_provider_ready(request.app.state.settings.pot_server_home)

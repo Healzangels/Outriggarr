@@ -1439,3 +1439,18 @@ def test_a_failed_replace_after_tagging_is_the_sources_error(monkeypatch, tmp_pa
     with pytest.raises(SourceError, match="could not replace the file after tagging"):
         YtDlpSource().tag_audio_language(src_file, "eng")
     assert src_file.read_bytes() == b"orig" and not (tmp_path / "a.lang.mkv").exists()
+
+
+def test_js_runtime_reports_only_what_yt_dlp_will_use(monkeypatch) -> None:
+    import shutil as sh
+
+    from outriggarr.source import js_runtime
+
+    # yt-dlp enables deno alone by default: a node-only image extracts WITHOUT a runtime
+    # and quietly loses formats, so it must not read as "fine" in the footer or /health
+    monkeypatch.setattr(sh, "which", lambda name: f"/usr/bin/{name}" if name == "node" else None)
+    assert js_runtime() is None
+    monkeypatch.setattr(sh, "which", lambda name: f"/usr/bin/{name}" if name == "deno" else None)
+    assert js_runtime() == "deno"
+    monkeypatch.setattr(sh, "which", lambda name: None)
+    assert js_runtime() is None

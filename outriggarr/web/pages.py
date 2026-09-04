@@ -83,7 +83,7 @@ from outriggarr.settings import (
     get_setting,
     preset_for,
 )
-from outriggarr.source import cookies_state, pot_provider_ready
+from outriggarr.source import cookies_state, js_runtime, pot_provider_ready
 from outriggarr.worker.scheduler import ScanReport, known_date_ids
 
 log = logging.getLogger(__name__)
@@ -237,7 +237,7 @@ def _tooling(request: Request) -> dict:
         "youtube_session": cookies_state(cookies_path),
         "youtube_cooloff": cooloff_status(getattr(deps, "cooloff", None)),
         "yt_dlp": ytdlp_version,
-        "js_runtime": next((r for r in ("deno", "node", "bun") if shutil.which(r)), None),
+        "js_runtime": js_runtime(),
         "ffmpeg": shutil.which("ffmpeg") is not None,
         "po_token_provider": pot_provider_ready(request.app.state.settings.pot_server_home)
         and not getattr(request.app.state, "pot_probe", None),

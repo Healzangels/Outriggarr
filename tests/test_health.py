@@ -131,3 +131,14 @@ def test_health_sees_a_wedged_write_lock(client) -> None:
         holder.execute("ROLLBACK")
         holder.close()
     assert client.get("/health").json()["write_lock"] is True
+
+
+def test_health_warns_when_only_node_is_installed(client, monkeypatch) -> None:
+    import shutil
+
+    monkeypatch.setattr(
+        shutil, "which", lambda name: f"/usr/bin/{name}" if name in ("ffmpeg", "node") else None
+    )
+    body = client.get("/health").json()
+    assert body["js_runtime"] is None, "node alone is not a runtime yt-dlp will use"
+    assert "JS runtime: none" in client.get("/series").text

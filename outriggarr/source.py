@@ -321,6 +321,14 @@ def cookies_state(path: str | Path | None) -> str:
     return "signed in" if has_signin_cookie(text) else "signed out"
 
 
+def js_runtime() -> str | None:
+    """The runtime yt-dlp will actually use for YouTube's player challenges. yt-dlp
+    enables DENO alone by default (running untrusted player JavaScript in its sandbox);
+    node and bun are accepted only when a caller names them, so a node-only image
+    extracts without a runtime and quietly loses formats. Report what is really usable."""
+    return "deno" if shutil.which("deno") else None
+
+
 def pot_provider_probe(server_home: Path | None, timeout: float = 20.0) -> str | None:
     """Run the bgutil script the way the plugin does (`<runtime> generate_once.js
     --version`); None when it answers, else what went wrong. The file check alone let
