@@ -61,7 +61,7 @@ a.brand svg { border-radius: 6px; flex: none; }
 /* key: value facts in a page header ("Matching  pins → title", "Last scan  21 min ago") */
 .page-header dl.meta { display: flex; flex-wrap: wrap; gap: .25rem 1.5rem; margin: 0; font-size: .88em; }
 .page-header dl.meta > div { display: flex; gap: .5em; align-items: baseline; }
-.page-header dl.meta dt { color: var(--o-muted); font-weight: 400; margin: 0; }
+.page-header dl.meta dt { color: var(--o-muted); font-weight: 400; margin: 0; white-space: nowrap; }  /* "Last scan" is one word on a phone too */
 .page-header dl.meta dd { margin: 0; }
 
 /* cards & sections */
@@ -253,6 +253,7 @@ footer.container { margin-top: 2.5rem; padding: 1rem 0; border-top: 1px solid va
    cell squeezing to one word per line; Matches' four nowrap columns need ~700px alone */
 .table-wrap table { min-width: 640px; }
 table.matches { min-width: 900px; }
+table.jobs { min-width: 860px; }  /* the episode label needs room, or a phone shows it six lines tall */
 
 @media (max-width: 767px) {  /* Pico's own breakpoint: .grid stacks here too */
   .truncate, details.error summary { max-width: 20ch; }
