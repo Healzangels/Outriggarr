@@ -14,6 +14,7 @@ from outriggarr.matcher import (
     Override,
     Video,
     compile_title_regex,
+    explain_pair,
     has_part_marker,
     in_scope,
     length_mismatch,
@@ -716,3 +717,104 @@ def test_trailing_ellipsis_title_still_matches_by_plain_containment() -> None:
     videos = [vid("a", "The Alt Burger Journey Continues... | F*ck, That's Delicious")]
     r = match(eps, videos, [], MatchConfig(("title",)))
     assert r.matches == (Match(eps[0], videos[0], "title", "contains"),)
+
+
+# --- explain_pair: the matcher's reasoning about one pair, for the GUI's "why?" panel
+
+
+def _checks(ep_, video_, cfg, overrides=()):
+    return {c.name: c for c in explain_pair(ep_, video_, cfg, overrides)}
+
+
+def test_explain_says_which_strategy_pairs_them() -> None:
+    e = ep(1, 30, 6, "Six Spicy Wings", date(2026, 3, 2))
+    v = vid("a", "Six Spicy Wings | Hot Ones", date(2026, 3, 3))
+    c = _checks(e, v, MatchConfig(("title", "date"), date_tolerance_days=2))
+    assert c["title"].passed is True and "appears inside" in c["title"].detail
+    assert c["date"].passed is True and "1 day apart" in c["date"].detail
+    assert c["pinned"].passed is None and c["regex"].passed is None
+    assert c["length"].passed is None, "no runtime and no duration: nothing to compare"
+
+
+def test_explain_names_the_reason_a_title_does_not_match() -> None:
+    cfg = MatchConfig(("title",))
+    short = _checks(ep(1, 1, 1, "Pilot"), vid("a", "Pilot night at the club"), cfg)["title"]
+    assert short.passed is False and "too short" in short.detail
+
+    absent = _checks(ep(1, 1, 1, "The Great Escape"), vid("a", "Something else"), cfg)["title"]
+    assert absent.passed is False and "does not appear inside" in absent.detail
+
+    promo = _checks(ep(1, 1, 1, "The Great Escape"), vid("a", "The Great Escape TRAILER"), cfg)[
+        "title"
+    ]
+    assert promo.passed is False and "promo" in promo.detail
+
+    clash = _checks(ep(1, 1, 1, "#751 - Joe"), vid("a", "KT #752 - Joe"), cfg)["title"]
+    assert clash.passed is False and "#751" in clash.detail and "#752" in clash.detail
+
+    placeholder = _checks(
+        ep(1, 31, 2, "TBA .... While Eating Spicy Wings"),
+        vid("a", "Someone Eats While Eating Spicy Wings"),
+        cfg,
+    )["title"]
+    assert placeholder.passed is False and "placeholder" in placeholder.detail
+
+    wildcard = _checks(
+        ep(1, 31, 1, "Caleb Williams .... While Eating Spicy Wings"),
+        vid("a", "Caleb Williams Answers Questions"),
+        cfg,
+    )["title"]
+    assert wildcard.passed is False and "wildcard" in wildcard.detail
+
+
+def test_explain_covers_scope_pins_regex_dates_and_holds() -> None:
+    e = Episode(1, 30, 6, "Six Spicy Wings", date(2026, 3, 2), 25)
+    scoped = _checks(
+        e, vid("a", "Six Spicy Wings"), MatchConfig(("title",), title_require="Hot Ones")
+    )
+    assert scoped["title must contain"].passed is False
+    assert "title" not in scoped, "out of scope: the strategies are not even asked"
+
+    pinned = _checks(e, vid("a", "Nothing alike"), MatchConfig(("title",)), [Override("a", 30, 6)])
+    assert pinned["pinned"].passed is True
+
+    elsewhere = _checks(
+        e, vid("a", "Nothing alike"), MatchConfig(("title",)), [Override("a", 30, 7)]
+    )
+    assert elsewhere["pinned"].passed is False and "S30E07" in elsewhere["pinned"].detail
+
+    rx = _checks(
+        e,
+        vid("a", "S30E09 whatever"),
+        MatchConfig(("regex",), title_regex=r"S(?P<season>\d+)E(?P<episode>\d+)"),
+    )
+    assert rx["regex"].passed is False and "episode 9" in rx["regex"].detail
+
+    late = _checks(
+        e,
+        vid("a", "Six Spicy Wings", date(2026, 3, 20)),
+        MatchConfig(("title", "date"), date_tolerance_days=2),
+    )
+    assert late["date"].passed is False and "18 days apart" in late["date"].detail
+
+    clip = _checks(
+        e, Video("a", "Six Spicy Wings", "https://x/a", None, 120), MatchConfig(("title",))
+    )
+    assert clip["title"].passed is True and clip["length"].passed is False
+    assert "would be held" in clip["length"].detail
+
+    gone = _checks(e, vid("a", "a"), MatchConfig(("title",)))
+    assert gone["listed"].passed is False and "title" not in gone
+
+
+def test_explain_reads_a_wildcard_and_an_exact_title() -> None:
+    exact = _checks(ep(1, 1, 1, "The Thing"), vid("a", "The Thing"), MatchConfig(("title",)))[
+        "title"
+    ]
+    assert exact.passed is True and "same once tidied" in exact.detail
+    hit = _checks(
+        ep(1, 31, 1, "Caleb Williams .... While Eating Spicy Wings"),
+        vid("a", "Caleb Williams Has Ice in His Veins While Eating Spicy Wings"),
+        MatchConfig(("title",)),
+    )["title"]
+    assert hit.passed is True

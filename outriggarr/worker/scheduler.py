@@ -117,6 +117,7 @@ def _episode_dict(ep: Episode) -> dict:
         "code": episode_code(ep.season, [ep.number]),
         "title": ep.title,
         "air_date": ep.air_date.isoformat() if ep.air_date else None,
+        "runtime": ep.runtime_minutes,  # for the length check and the "why?" tool
     }
 
 
@@ -374,6 +375,7 @@ async def _scan(
             "title": v.title,
             "url": v.url,
             "upload_date": v.upload_date.isoformat() if v.upload_date else None,
+            "duration": v.duration,
             "approx_age": ages.get(v.id),
         }
         for v in videos

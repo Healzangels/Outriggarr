@@ -2687,3 +2687,43 @@ def test_the_lazy_season_route_reports_a_sonarr_failure(client: TestClient) -> N
     client.app.state.arr_factory.by_url["http://sonarr-host:1234"].episodes = boom
     r = client.get(f"/subscriptions/{sub_id}/episodes/30")
     assert r.status_code == 502 and "HTTP 500" in r.json()["detail"]
+
+
+def test_the_why_panel_explains_a_pair(client: TestClient) -> None:
+    _seed_series(client)
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={"connection_id": 1, "series_id": 5, "source_url": "https://www.youtube.com/@hotones"},
+    ).json()["id"]
+    prev = client.get(f"/subscriptions/{sub_id}/preview").text
+    assert "Why didn&#39;t a video match?" in prev or "Why didn't a video match?" in prev
+    assert f'hx-get="/subscriptions/{sub_id}/explain"' in prev
+    assert 'list="explain-videos"' in prev and "listed-videos" in prev
+    assert '<datalist id="explain-videos">' not in prev, "the picker's options load on open"
+
+    options = client.get(f"/subscriptions/{sub_id}/listed-videos").text
+    assert '<datalist id="explain-videos">' in options and 'value="https://y/a"' in options
+
+    # S30E07 is unmatched; the Bonus video is why not
+    answer = client.get(
+        f"/subscriptions/{sub_id}/explain", params={"episode_id": 12, "video_url": "https://y/b"}
+    ).text
+    assert "No strategy pairs these two" in answer
+    assert "does not appear inside" in answer and "seven spicy wings" in answer
+
+    paired = client.get(
+        f"/subscriptions/{sub_id}/explain", params={"episode_id": 11, "video_url": "https://y/a"}
+    ).text
+    assert "These two pair by <strong>title</strong>" in paired
+    assert "appears inside" in paired, "and says why"
+
+    assert "Pick one of the episodes" in client.get(f"/subscriptions/{sub_id}/explain").text
+    assert (
+        "Pick one of the listed videos"
+        in client.get(
+            f"/subscriptions/{sub_id}/explain",
+            params={"episode_id": 11, "video_url": "https://y/nope"},
+        ).text
+    )
+    assert client.get("/subscriptions/999/explain").status_code == 404
+    assert client.get("/subscriptions/999/listed-videos").status_code == 404

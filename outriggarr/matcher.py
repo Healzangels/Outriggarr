@@ -455,6 +455,207 @@ def match(
     )
 
 
+@dataclass(frozen=True)
+class Check:
+    """One line of the answer to "why did these two not pair?": the strategy or guard,
+    whether it says yes, and the reason in the words the GUI shows."""
+
+    name: str
+    passed: bool | None  # None: the strategy is off, or has nothing to work with
+    detail: str
+
+
+def explain_pair(
+    ep: Episode,
+    video: Video,
+    cfg: MatchConfig,
+    overrides: list[Override] | tuple[Override, ...] = (),
+) -> list[Check]:
+    """Why this video does or does not pair with this episode, strategy by strategy, in
+    the order the matcher runs them. It answers for the pair alone: a strategy that says
+    yes here can still lose in a real scan, because a strategy needs EXACTLY one
+    candidate and another episode may claim the same video."""
+    checks: list[Check] = []
+    pinned_here = next(
+        (
+            o
+            for o in overrides
+            if o.video_id == video.id and (o.season, o.episode) == (ep.season, ep.number)
+        ),
+        None,
+    )
+    pinned_elsewhere = next((o for o in overrides if o.video_id == video.id), None)
+    if pinned_here is not None:
+        checks.append(
+            Check("pinned", True, "you pinned this video to this episode; a pin always wins")
+        )
+    elif pinned_elsewhere is not None:
+        checks.append(
+            Check(
+                "pinned",
+                False,
+                f"this video is pinned to "
+                f"S{pinned_elsewhere.season:02d}E{pinned_elsewhere.episode:02d}, so it is not a "
+                "candidate for anything else",
+            )
+        )
+    else:
+        checks.append(Check("pinned", None, "not pinned either way"))
+
+    if is_unavailable(video):
+        checks.append(
+            Check(
+                "listed",
+                False,
+                "the listing carries only this video's id: private, removed or deleted",
+            )
+        )
+        return checks
+    if not in_scope(video.title, cfg.title_require):
+        checks.append(
+            Check(
+                "title must contain",
+                False,
+                f"the video's title does not carry “{cfg.title_require}”, so no automatic "
+                "strategy considers it (a pin still would)",
+            )
+        )
+        return checks
+    if cfg.title_require:
+        checks.append(Check("title must contain", True, f"the title carries “{cfg.title_require}”"))
+
+    if "regex" not in cfg.strategies:
+        checks.append(Check("regex", None, "the regex strategy is off for this subscription"))
+    elif not cfg.title_regex:
+        checks.append(Check("regex", None, "no pattern is set"))
+    else:
+        rx = compile_title_regex(cfg.title_regex)
+        parsed = parse_with_regex(rx, video.title) if rx else None
+        if parsed is None:
+            checks.append(
+                Check("regex", False, "the pattern finds no episode number in the video's title")
+            )
+        else:
+            season, number = parsed
+            got = f"episode {number}" + (
+                f", season {season}" if season is not None else ", no season"
+            )
+            if number == ep.number and (season is None or season == ep.season):
+                checks.append(Check("regex", True, f"the pattern reads {got}"))
+            else:
+                checks.append(
+                    Check(
+                        "regex",
+                        False,
+                        f"the pattern reads {got}: not S{ep.season:02d}E{ep.number:02d}",
+                    )
+                )
+
+    checks.append(_title_check(ep, video, cfg))
+
+    if "date" not in cfg.strategies:
+        checks.append(Check("date", None, "the date strategy is off for this subscription"))
+    elif ep.air_date is None:
+        checks.append(Check("date", None, "Sonarr has no air date for this episode"))
+    elif video.upload_date is None:
+        checks.append(
+            Check(
+                "date",
+                None,
+                "this video's upload date is not known yet (Fetch upload dates gets it)",
+            )
+        )
+    else:
+        expected = ep.air_date + timedelta(days=cfg.date_offset_days)
+        off_by = abs((video.upload_date - expected).days)
+        within = off_by <= cfg.date_tolerance_days
+        checks.append(
+            Check(
+                "date",
+                within,
+                f"uploaded {video.upload_date}, aired {ep.air_date}"
+                + (f" (offset {cfg.date_offset_days:+d} d)" if cfg.date_offset_days else "")
+                + f": {off_by} day{'' if off_by == 1 else 's'} apart, "
+                + f"tolerance {cfg.date_tolerance_days}",
+            )
+        )
+
+    part = part_mismatch(ep.title, video.title)
+    if part:
+        checks.append(Check("split upload", False, part + "; a match would be held, not queued"))
+    length = length_mismatch(ep.runtime_minutes, video.duration)
+    if length:
+        checks.append(Check("length", False, length + "; a match would be held, not queued"))
+    elif ep.runtime_minutes and video.duration:
+        checks.append(
+            Check(
+                "length",
+                True,
+                f"video runs {mmss(video.duration)}, Sonarr says {ep.runtime_minutes} min",
+            )
+        )
+    else:
+        checks.append(
+            Check("length", None, "no length to compare (the video's, the episode's, or both)")
+        )
+    return checks
+
+
+def _title_check(ep: Episode, video: Video, cfg: MatchConfig) -> Check:
+    if "title" not in cfg.strategies:
+        return Check("title", None, "the title strategy is off for this subscription")
+    want, have = normalise_title(ep.title), normalise_title(video.title)
+    if not want:
+        return Check("title", False, "the episode's title is only a placeholder once tidied")
+    want_no, have_no = show_number(ep.title), show_number(video.title)
+    if want_no is not None and have_no is not None and have_no != want_no:
+        return Check("title", False, f"the show's own numbers disagree: #{want_no} and #{have_no}")
+    if want == have:
+        return Check("title", True, f"the titles are the same once tidied: “{want}”")
+    want_tokens = want.split()
+    if len(want) < MIN_CONTAINMENT_LEN or len(want_tokens) < MIN_CONTAINMENT_TOKENS:
+        return Check(
+            "title",
+            False,
+            f"“{want}” is too short to look for inside another title "
+            f"(needs {MIN_CONTAINMENT_LEN} characters and {MIN_CONTAINMENT_TOKENS} words)",
+        )
+    fragments = wildcard_fragments(ep.title)
+    if fragments and PLACEHOLDER_FRAGMENTS & set(fragments):
+        return Check(
+            "title",
+            False,
+            "the episode's title is still a placeholder (TBA), so it matches nothing",
+        )
+    if fragments:
+        if not _contains_in_order(have, fragments):
+            missing = [f for f in fragments if f" {f} " not in f" {have} "]
+            return Check(
+                "title",
+                False,
+                "the episode's title has a “…” wildcard; "
+                + (
+                    f"the video's title lacks {', '.join(repr(x) for x in missing)}"
+                    if missing
+                    else "the video's title has the pieces in the wrong order"
+                ),
+            )
+    elif f" {want} " not in f" {have} ":
+        return Check("title", False, f"“{want}” does not appear inside “{have}”")
+    promos = PROMO_TOKENS & (set(have.split()) - set(want_tokens))
+    if promos:
+        return Check(
+            "title",
+            False,
+            f"the video's title says {', '.join(sorted(promos))}: a promo, not the episode",
+        )
+    if want_no is not None and have_no == want_no:
+        return Check(
+            "title", True, f"the episode's title is inside the video's, and both say #{want_no}"
+        )
+    return Check("title", True, f"“{want}” appears inside “{have}”")
+
+
 def videos_needing_dates(
     result: MatchResult,
     videos: list[Video],

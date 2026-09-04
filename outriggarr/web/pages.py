@@ -6,7 +6,7 @@ import contextlib
 import html
 import logging
 import shutil
-from datetime import UTC, datetime, timedelta, tzinfo
+from datetime import UTC, date, datetime, timedelta, tzinfo
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Annotated
@@ -64,7 +64,17 @@ from outriggarr.db.models import (
     Subscription,
     utcnow,
 )
-from outriggarr.matcher import OPTIONAL_STRATEGIES, length_mismatch, mmss, normalise_title
+from outriggarr.matcher import (
+    OPTIONAL_STRATEGIES,
+    Episode,
+    MatchConfig,
+    Override,
+    Video,
+    explain_pair,
+    length_mismatch,
+    mmss,
+    normalise_title,
+)
 from outriggarr.settings import (
     DEFAULTS,
     FORMAT_PRESETS,
@@ -1040,6 +1050,98 @@ async def subscription_preview(
     if report is None:
         report = await run_scan(deps, subscription_id, dry_run=True)
     return _preview_response(request, session, report)
+
+
+EXPLAIN_ORDER = ("pinned", "regex", "title", "date")  # the matcher's own order
+
+
+@router.get("/subscriptions/{subscription_id}/listed-videos")
+async def subscription_listed_videos(
+    request: Request, subscription_id: int, session: DbSession, deps: RunnerDepsDep
+) -> HTMLResponse:
+    """The picker's options for the "why?" panel: hundreds of titles, fetched when the
+    panel is opened rather than shipped with every preview."""
+    sub = session.get(Subscription, subscription_id)
+    if sub is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "subscription not found")
+    report = cached_report(sub)
+    if report is None:
+        report = await run_scan(deps, subscription_id, dry_run=True)
+    return templates.TemplateResponse(request, "partials/listed_videos.html", {"report": report})
+
+
+@router.get("/subscriptions/{subscription_id}/explain")
+async def subscription_explain(
+    request: Request,
+    subscription_id: int,
+    session: DbSession,
+    deps: RunnerDepsDep,
+    episode_id: Annotated[int, Query()] = 0,
+    video_url: Annotated[str, Query()] = "",
+) -> HTMLResponse:
+    """Why one listed video does or does not pair with one wanted episode: the matcher's
+    own reasoning, strategy by strategy, over the preview's own report."""
+    sub = session.get(Subscription, subscription_id)
+    if sub is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "subscription not found")
+    report = cached_report(sub)
+    if report is None:
+        report = await run_scan(deps, subscription_id, dry_run=True)
+    wanted = report.matches + report.held + report.unmatched + report.skipped_existing
+    chosen = next((e for e in wanted if e.get("episode_id") == episode_id), None)
+    wanted_id = video_url.strip()
+    video = next(
+        (v for v in report.videos if wanted_id in (v.get("url"), v.get("id")) and wanted_id), None
+    )
+    checks: list = []
+    problem = None
+    if chosen is None:
+        problem = "Pick one of the episodes this scan wanted."
+    elif video is None:
+        problem = "Pick one of the listed videos, or paste the URL of one."
+    else:
+        checks = explain_pair(
+            Episode(
+                id=chosen["episode_id"],
+                season=chosen["season"],
+                number=chosen["number"],
+                title=chosen["title"] or "",
+                air_date=date.fromisoformat(chosen["air_date"]) if chosen.get("air_date") else None,
+                runtime_minutes=chosen.get("runtime"),
+            ),
+            Video(
+                id=video["id"],
+                title=video["title"],
+                url=video["url"],
+                upload_date=(
+                    date.fromisoformat(video["upload_date"]) if video.get("upload_date") else None
+                ),
+                duration=video.get("duration"),
+            ),
+            MatchConfig(
+                strategies=tuple(sub.strategies or ()),
+                date_tolerance_days=sub.date_tolerance_days,
+                date_offset_days=sub.date_offset_days,
+                title_regex=sub.title_regex,
+                title_require=sub.title_require,
+            ),
+            [Override(o.video_id, o.season, o.episode) for o in sub.overrides],
+        )
+    return templates.TemplateResponse(
+        request,
+        "partials/explain.html",
+        {
+            "sub": sub,
+            "checks": checks,
+            "problem": problem,
+            "episode": chosen,
+            "video": video,
+            "winner": next((c.name for c in checks if c.name in EXPLAIN_ORDER and c.passed), None),
+            "holds": [
+                c for c in checks if c.name in ("length", "split upload") and c.passed is False
+            ],
+        },
+    )
 
 
 @router.get("/subscriptions/{subscription_id}/episodes")

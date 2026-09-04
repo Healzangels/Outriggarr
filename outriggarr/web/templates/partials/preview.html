@@ -99,8 +99,8 @@
 
 {% if report.unmatched %}
 {% set shown = report.unmatched[:40] %}
-{% set any_candidates = shown | map(attribute="candidates") | map("dictsort") | map("map", attribute="1") | map("sum", start=[]) | map("length") | sum %}
 <datalist id="listed-videos">{% for v in report.videos if v.title != v.id %}<option value="{{ v.url }}">{{ v.title | truncate(70) }}</option>{% endfor %}</datalist>
+{% set any_candidates = shown | map(attribute="candidates") | map("dictsort") | map("map", attribute="1") | map("sum", start=[]) | map("length") | sum %}
 <h4>Unmatched <span class="muted">{{ report.unmatched | length }}{% if report.unmatched | length > shown | length %} · showing the first {{ shown | length }}{% endif %}</span></h4>
 {% set strategy_names = (["pins"] if sub.overrides else []) + (sub.strategies or []) %}
 <p class="muted">{% if not any_candidates %}{% if strategy_names %}No strategy saw a candidate for any of these ({{ strategy_names | join(", ") }}). {% else %}Pins only, and none set yet. {% endif %}{% endif %}Pin a video to an episode by picking one of the listed videos or pasting a video URL. Pins always win on the next scan.</p>
@@ -150,6 +150,29 @@
 {% if report.skipped_existing %}
 <details class="plain"><summary>{% set n = report.skipped_existing | length %}{{ n }} wanted episode{{ '' if n == 1 else 's' }} already {{ 'has a job' if n == 1 else 'have jobs' }}</summary>
 <ul>{% for s in report.skipped_existing %}<li>{{ s.code }} {{ s.title }} → <a href="/activity#job-{{ s.job_id }}" class="job-ref">#{{ s.job_id }}</a> <span class="badge badge-{{ s.job_status }}">{{ s.job_status }}</span></li>{% endfor %}</ul>
+</details>
+{% endif %}
+
+{% set wanted_entries = report.matches + report.held + report.unmatched + report.skipped_existing %}
+{% if wanted_entries %}
+<details class="plain">
+  <summary>Why didn't a video match? <span class="muted">· pick an episode and a video</span></summary>
+  <form hx-get="/subscriptions/{{ sub.id }}/explain" hx-target="#explain-result" hx-swap="innerHTML">
+    <div class="grid">
+      <label>Episode
+        <select name="episode_id">
+          {% for e in wanted_entries %}<option value="{{ e.episode_id }}">{{ e.code }} {{ e.title | truncate(60) }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>Video <span class="hint">One of the listed videos: type part of a title to filter, or paste its URL.</span>
+        <input type="text" name="video_url" list="explain-videos" placeholder="pick a listed video or paste its URL">
+      </label>
+    </div>
+    <div class="form-actions"><button type="submit" class="secondary">Explain</button></div>
+  </form>
+  {# the listing can be hundreds of videos: fetch the picker's options when the panel opens #}
+  <div hx-get="/subscriptions/{{ sub.id }}/listed-videos" hx-trigger="intersect once" hx-swap="outerHTML"></div>
+  <div id="explain-result"></div>
 </details>
 {% endif %}
 

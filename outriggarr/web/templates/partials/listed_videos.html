@@ -1,0 +1,1 @@
+<datalist id="explain-videos">{% for v in report.videos if v.title != v.id %}<option value="{{ v.url }}">{{ v.title | truncate(70) }}</option>{% endfor %}</datalist>
