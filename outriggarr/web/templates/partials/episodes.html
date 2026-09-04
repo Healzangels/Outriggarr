@@ -3,29 +3,15 @@
 {% elif not seasons %}<p class="empty">Sonarr lists no episodes for this series.</p>
 {% else %}
 {% for s in seasons %}
-{% set unmon = s.rows | selectattr("state", "equalto", "unmonitored") | list | length %}{% set unaired = s.rows | selectattr("state", "equalto", "unaired") | list | length %}
-{# open by default: the newest season while something is missing, and any season still airing #}
-<details class="plain season"{% if (loop.first and s.missing) or unaired %} open{% endif %}>
-  <summary>Season {{ s.season }} <span class="muted">· {% if unmon == s.total %}unmonitored · {{ s.total }} episode{{ '' if s.total == 1 else 's' }}{% else %}{{ s.files }}/{{ s.total - unmon }} files{% if s.missing %} · <span class="warn">{{ s.missing }} missing</span>{% endif %}{% if unaired %} · {{ unaired }} unaired{% endif %}{% if unmon %} · {{ unmon }} unmonitored{% endif %}{% endif %}</span></summary>
-  <div class="table-wrap">
-  <table>
-    <thead><tr><th>#</th><th>Title</th><th>Aired</th><th>Status</th><th>Job</th></tr></thead>
-    <tbody>
-    {% for r in s.rows %}
-      <tr>
-        <td class="mono">E{{ "%02d" % r.ep.episode_number }}</td>
-        <td>{{ r.ep.title }}</td>
-        <td class="muted">{{ r.ep.air_date_utc.strftime("%Y-%m-%d") if r.ep.air_date_utc else "" }}</td>
-        <td>{% if r.state == "file" %}<span class="ok">✓ file</span>
-            {% elif r.state == "missing" %}<span class="warn">missing</span>
-            {% elif r.state == "unaired" %}<span class="muted">unaired</span>
-            {% else %}<span class="muted">unmonitored</span>{% endif %}</td>
-        <td class="nowrap">{% if r.job %}<a href="/activity#job-{{ r.job.id }}" class="job-ref">#{{ r.job.id }}</a> <span class="badge badge-{{ r.job.status.value }} status status-{{ r.job.status.value }}">{{ r.job.status.value }}</span>{% if r.state == "missing" and r.job.status in DELETABLE and not (r.job.status.value == "failed" and r.job.next_retry_at) %} <form class="inline" hx-post="/subscriptions/{{ sub.id }}/episodes/jobs/{{ r.job.id }}/clear" hx-target="#episodes" hx-swap="innerHTML"><button type="submit" class="x-clear" title="This job is history: the file is gone from Sonarr. Delete the job from Activity (only its staging folder goes){% if r.job.status.value != 'done' %} and offer the episode again{% endif %}" aria-label="delete job {{ r.job.id }}">✕</button></form>{% endif %}{% endif %}</td>
-      </tr>
-    {% endfor %}
-    </tbody>
-  </table>
-  </div>
+{# open by default: the newest season while something is missing, and any season still
+   airing. A closed season's rows are fetched when it is opened, so a series with eight
+   hundred episodes does not send them all on every page open. #}
+<details class="plain season"{% if s.open %} open{% endif %}>
+  <summary>Season {{ s.season }} <span class="muted">· {% if s.unmonitored == s.total %}unmonitored · {{ s.total }} episode{{ '' if s.total == 1 else 's' }}{% else %}{{ s.files }}/{{ s.total - s.unmonitored }} files{% if s.missing %} · <span class="warn">{{ s.missing }} missing</span>{% endif %}{% if s.unaired %} · {{ s.unaired }} unaired{% endif %}{% if s.unmonitored %} · {{ s.unmonitored }} unmonitored{% endif %}{% endif %}</span></summary>
+  {% if s.open %}{% include "partials/season_rows.html" %}
+  {% else %}<div hx-get="/subscriptions/{{ sub.id }}/episodes/{{ s.season }}" hx-trigger="intersect once" hx-swap="outerHTML">
+    <p class="muted" aria-busy="true">Loading season {{ s.season }}…</p>
+  </div>{% endif %}
 </details>
 {% endfor %}
 {% endif %}

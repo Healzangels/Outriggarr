@@ -1082,14 +1082,12 @@ async def subscription_clear_job(
     return await _episodes_response(request, sub, session, arr_factory, notice)
 
 
-async def _episodes_response(
-    request: Request,
-    sub: Subscription,
-    session: Session,
-    arr_factory,
-    notice: str | None = None,
-    notice_bad: bool = False,
-) -> HTMLResponse:
+async def _seasons(
+    sub: Subscription, session: Session, arr_factory
+) -> tuple[list[dict], str | None]:
+    """Sonarr's episodes for this series, by season (newest first), each row carrying the
+    job that covers it. `open` is the season worth seeing at once: the newest while
+    something is missing, and any that is still airing."""
     error = None
     try:
         episodes = await arr_factory(sub.connection).episodes(sub.series_id)
@@ -1120,25 +1118,65 @@ async def _episodes_response(
     ordered = []
     for season in sorted(seasons, reverse=True):
         rows = sorted(seasons[season], key=lambda r: r["ep"].episode_number)
+        missing = sum(1 for r in rows if r["state"] == "missing")
+        unaired = sum(1 for r in rows if r["state"] == "unaired")
         ordered.append(
             {
                 "season": season,
                 "rows": rows,
                 "files": sum(1 for r in rows if r["state"] == "file"),
-                "missing": sum(1 for r in rows if r["state"] == "missing"),
+                "missing": missing,
+                "unaired": unaired,
+                "unmonitored": sum(1 for r in rows if r["state"] == "unmonitored"),
                 "total": len(rows),
+                "open": bool(unaired) or (not ordered and bool(missing)),
             }
         )
+    return ordered, error
+
+
+async def _episodes_response(
+    request: Request,
+    sub: Subscription,
+    session: Session,
+    arr_factory,
+    notice: str | None = None,
+    notice_bad: bool = False,
+) -> HTMLResponse:
+    seasons, error = await _seasons(sub, session, arr_factory)
     return templates.TemplateResponse(
         request,
         "partials/episodes.html",
         {
             "sub": sub,
-            "seasons": ordered,
+            "seasons": seasons,
             "error": error,
             "notice": notice,
             "notice_bad": notice_bad,
         },
+    )
+
+
+@router.get("/subscriptions/{subscription_id}/episodes/{season}")
+async def subscription_season_rows(
+    request: Request,
+    subscription_id: int,
+    season: int,
+    session: DbSession,
+    arr_factory: ArrFactoryDep,
+) -> HTMLResponse:
+    """One season's episodes, fetched when its row is opened."""
+    sub = session.get(Subscription, subscription_id)
+    if sub is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "subscription not found")
+    seasons, error = await _seasons(sub, session, arr_factory)
+    if error:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, error)
+    match = next((s for s in seasons if s["season"] == season), None)
+    if match is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"season {season} is not in this series")
+    return templates.TemplateResponse(
+        request, "partials/season_rows.html", {"sub": sub, "s": match}
     )
 
 

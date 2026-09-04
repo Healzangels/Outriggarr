@@ -2630,3 +2630,60 @@ def test_the_poll_notices_progress_and_retries(client: TestClient) -> None:
         s.get(Job, job_id).attempts = 2
         s.commit()
     assert client.get(f"/activity/rows?view=all&v={version}").status_code == 200
+
+
+def test_a_closed_season_sends_its_rows_only_when_it_opens(client: TestClient) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from outriggarr.arr.base import EpisodeRef, SeriesRef
+    from tests.fakes import FakeArrClient
+
+    now = datetime.now(UTC)
+    client.app.state.arr_factory.by_url["http://sonarr-host:1234"] = FakeArrClient(
+        series_list=[SeriesRef(5, "Show", 2015, 1, True)],
+        episodes_by_series={
+            5: [
+                EpisodeRef(1, 3, 1, "Newest missing", False, True, now - timedelta(days=1)),
+                EpisodeRef(2, 2, 1, "Older settled", True, True, now - timedelta(days=40)),
+                EpisodeRef(3, 1, 1, "Oldest settled", True, True, now - timedelta(days=80)),
+            ]
+        },
+    )
+    client.app.state.source.recent = []
+    client.post("/api/connections", json=SONARR)
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={"connection_id": 1, "series_id": 5, "source_url": "https://www.youtube.com/@x"},
+    ).json()["id"]
+    card = client.get(f"/subscriptions/{sub_id}/episodes").text
+    assert "Newest missing" in card, "the open season's rows come with the card"
+    assert "Older settled" not in card and "Oldest settled" not in card
+    assert card.count('hx-trigger="intersect once"') == 2, "the closed ones fetch on open"
+    assert f'hx-get="/subscriptions/{sub_id}/episodes/2"' in card
+    assert "Season 2" in card and "Season 1" in card, "every season still has its summary"
+
+    opened = client.get(f"/subscriptions/{sub_id}/episodes/2")
+    assert opened.status_code == 200
+    assert "Older settled" in opened.text and "✓ file" in opened.text
+    assert "Oldest settled" not in opened.text, "one season, not the rest"
+    assert "<summary>" not in opened.text, "the rows swap into the season that asked"
+
+    assert client.get(f"/subscriptions/{sub_id}/episodes/99").status_code == 404
+    assert client.get("/subscriptions/999/episodes/1").status_code == 404
+
+
+def test_the_lazy_season_route_reports_a_sonarr_failure(client: TestClient) -> None:
+    from outriggarr.arr.base import ArrError
+
+    _seed_series(client)
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={"connection_id": 1, "series_id": 5, "source_url": "https://www.youtube.com/@hotones"},
+    ).json()["id"]
+
+    async def boom(series_id):
+        raise ArrError("GET /api/v3/episode -> HTTP 500: x")
+
+    client.app.state.arr_factory.by_url["http://sonarr-host:1234"].episodes = boom
+    r = client.get(f"/subscriptions/{sub_id}/episodes/30")
+    assert r.status_code == 502 and "HTTP 500" in r.json()["detail"]
