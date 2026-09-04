@@ -4,7 +4,8 @@
 {% else %}
 {% for s in seasons %}
 <details class="plain season"{% if loop.first and s.missing %} open{% endif %}>
-  <summary>Season {{ s.season }} <span class="muted">· {{ s.files }}/{{ s.total }} files{% if s.missing %} · <span class="warn">{{ s.missing }} missing</span>{% endif %}</span></summary>
+  {% set unmon = s.rows | selectattr("state", "equalto", "unmonitored") | list | length %}{% set unaired = s.rows | selectattr("state", "equalto", "unaired") | list | length %}
+  <summary>Season {{ s.season }} <span class="muted">· {% if unmon == s.total %}unmonitored · {{ s.total }} episode{{ '' if s.total == 1 else 's' }}{% else %}{{ s.files }}/{{ s.total - unmon }} files{% if s.missing %} · <span class="warn">{{ s.missing }} missing</span>{% endif %}{% if unaired %} · {{ unaired }} unaired{% endif %}{% if unmon %} · {{ unmon }} unmonitored{% endif %}{% endif %}</span></summary>
   <div class="table-wrap">
   <table>
     <thead><tr><th>#</th><th>Title</th><th>Aired</th><th>Status</th><th>Job</th></tr></thead>
@@ -18,7 +19,7 @@
             {% elif r.state == "missing" %}<span class="warn">missing</span>
             {% elif r.state == "unaired" %}<span class="muted">unaired</span>
             {% else %}<span class="muted">unmonitored</span>{% endif %}</td>
-        <td class="nowrap">{% if r.job %}<a href="/activity" class="job-ref">#{{ r.job.id }}</a> <span class="badge badge-{{ r.job.status.value }} status status-{{ r.job.status.value }}">{{ r.job.status.value }}</span>{% if r.state == "missing" and r.job.status in DELETABLE and not (r.job.status.value == "failed" and r.job.next_retry_at) %} <form class="inline" hx-post="/subscriptions/{{ sub.id }}/episodes/jobs/{{ r.job.id }}/clear" hx-target="#episodes" hx-swap="innerHTML"><button type="submit" class="x-clear" title="This job is history: the file is gone from Sonarr. Delete the job from Activity (only its staging folder goes){% if r.job.status.value != 'done' %} and offer the episode again{% endif %}" aria-label="delete job {{ r.job.id }}">✕</button></form>{% endif %}{% endif %}</td>
+        <td class="nowrap">{% if r.job %}<a href="/activity#job-{{ r.job.id }}" class="job-ref">#{{ r.job.id }}</a> <span class="badge badge-{{ r.job.status.value }} status status-{{ r.job.status.value }}">{{ r.job.status.value }}</span>{% if r.state == "missing" and r.job.status in DELETABLE and not (r.job.status.value == "failed" and r.job.next_retry_at) %} <form class="inline" hx-post="/subscriptions/{{ sub.id }}/episodes/jobs/{{ r.job.id }}/clear" hx-target="#episodes" hx-swap="innerHTML"><button type="submit" class="x-clear" title="This job is history: the file is gone from Sonarr. Delete the job from Activity (only its staging folder goes){% if r.job.status.value != 'done' %} and offer the episode again{% endif %}" aria-label="delete job {{ r.job.id }}">✕</button></form>{% endif %}{% endif %}</td>
       </tr>
     {% endfor %}
     </tbody>

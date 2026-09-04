@@ -1,17 +1,18 @@
 {% set queueable = report.matches | rejectattr("job_id") | list | length %}
 {% set auto_count = report.matches | rejectattr("job_id") | selectattr("auto") | list | length %}
+{% set wanted = report.matches or report.unmatched or report.held or report.skipped_existing %}
 <p class="chips scan-summary">
   <span class="chip">{{ report.videos | length }} videos listed{% if report.sources > 1 %} from {{ report.sources }} sources{% endif %}</span>
   {% if sub.title_require %}<span class="chip" title="Only videos whose title contains this phrase are candidates for this series (pins are exempt); set under Subscription settings">titles must contain “{{ sub.title_require }}”{% if report.in_scope is defined %} · {{ report.in_scope }} do{% endif %}</span>{% endif %}
-  <span class="chip {{ 'ok' if report.matches else 'zero' }}">{{ report.matches | length }} matched</span>
+  {% if wanted %}<span class="chip {{ 'ok' if report.matches else 'zero' }}">{{ report.matches | length }} matched</span>
   <span class="chip {{ 'warn' if report.unmatched else 'zero' }}">{{ report.unmatched | length }} unmatched</span>
   {% if report.held %}<span class="chip warn" title="Matched, but something contradicts it: the video's length against the episode's runtime, or the video is one part of a split upload">{{ report.held | length }} held</span>{% endif %}
-  <span class="chip {{ '' if report.skipped_existing else 'zero' }}">{{ report.skipped_existing | length }} already have jobs</span>
+  <span class="chip {{ '' if report.skipped_existing else 'zero' }}">{{ report.skipped_existing | length }} already have jobs</span>{% endif %}
   {% if sub.auto_download == "future" and queueable %}<span class="chip" title="Only episodes airing from {{ sub.created_at.strftime('%-d %b %Y') }} queue by themselves (auto-download: future episodes only); the other {{ queueable - auto_count }} aired before that, so use Download all or Download selected">{{ auto_count }} of {{ queueable }} would queue by itself</span>{% endif %}
 </p>
 <div class="form-actions">
   {% if queueable %}<button hx-post="/subscriptions/{{ sub.id }}/download" hx-vals='{"all": "1"}' hx-target="#preview" hx-indicator="#scan-busy" title="Queue every current match, whatever the auto-download setting">Download all {{ queueable }}</button>
-  <button id="download-selected" class="secondary" hx-post="/subscriptions/{{ sub.id }}/download" hx-include="#match-picks" hx-vals='{"selected": "1"}' hx-target="#preview" hx-indicator="#scan-busy" disabled title="Tick episodes in the Matches table first">Download selected <span class="count" id="selected-count" hidden>0</span></button>{% else %}<span class="muted">Nothing to queue{% if report.matches %}: every match already has a job{% endif %}.</span>{% endif %}
+  <button id="download-selected" class="secondary" hx-post="/subscriptions/{{ sub.id }}/download" hx-include="#match-picks" hx-vals='{"selected": "1"}' hx-target="#preview" hx-indicator="#scan-busy" disabled title="Tick episodes in the Matches table first">Download selected <span class="count" id="selected-count" hidden>0</span></button>{% elif wanted %}<span class="muted">Nothing to queue{% if report.matches %}: every match already has a job{% endif %}.</span>{% endif %}
   {% include "partials/date_fetch.html" %}
   <span id="scan-busy" class="htmx-indicator muted" aria-busy="true">working…</span>
   <button class="secondary outline push-right" hx-post="/subscriptions/{{ sub.id }}/scan" hx-target="#preview" hx-indicator="#scan-busy" title="List the sources again and re-match; nothing is queued">Refresh preview</button>
@@ -41,7 +42,7 @@
       <td><strong>{{ m.code }}</strong> {{ m.title }}<span class="two-line muted">{{ m.air_date or "" }}</span></td>
       <td><a href="{{ m.video_url }}" target="_blank" rel="noopener" class="truncate" title="{{ m.video_title }}">{{ m.video_title }}</a><span class="two-line muted mono">{{ m.video_id }}</span></td>
       <td><span class="chip">{{ tier_label(m.tier if m.strategy == "title" else m.strategy) }}</span></td>
-      {% if show_job %}<td>{% if m.job_id %}<a href="/activity" class="job-ref">#{{ m.job_id }}</a>{% elif m.skipped %}<span class="muted">{{ m.skipped }}</span>{% elif report.dry_run and m.auto %}<span class="muted nowrap">queues on the next scan</span>{% endif %}</td>{% endif %}
+      {% if show_job %}<td>{% if m.job_id %}<a href="/activity#job-{{ m.job_id }}" class="job-ref">#{{ m.job_id }}</a>{% elif m.skipped %}<span class="muted">{{ m.skipped }}</span>{% elif report.dry_run and m.auto %}<span class="muted nowrap">queues on the next scan</span>{% endif %}</td>{% endif %}
     </tr>
   {% endfor %}
   </tbody>
@@ -97,24 +98,26 @@
 
 {% if report.unmatched %}
 {% set shown = report.unmatched[:40] %}
+{% set any_candidates = shown | map(attribute="candidates") | map("dictsort") | map("map", attribute="1") | map("sum", start=[]) | map("length") | sum %}
 <datalist id="listed-videos">{% for v in report.videos if v.title != v.id %}<option value="{{ v.url }}">{{ v.title | truncate(70) }}</option>{% endfor %}</datalist>
 <h4>Unmatched <span class="muted">{{ report.unmatched | length }}{% if report.unmatched | length > shown | length %} · showing the first {{ shown | length }}{% endif %}</span></h4>
-<p class="muted">Pin a video to an episode by picking one of the listed videos or pasting a video URL. Pins always win on the next scan.</p>
+{% set strategy_names = (["pins"] if sub.overrides else []) + (sub.strategies or []) %}
+<p class="muted">{% if not any_candidates %}{% if strategy_names %}No strategy saw a candidate for any of these ({{ strategy_names | join(", ") }}). {% else %}Pins only, and none set yet. {% endif %}{% endif %}Pin a video to an episode by picking one of the listed videos or pasting a video URL. Pins always win on the next scan.</p>
 <div class="table-wrap">
 <table>
-  <thead><tr><th>Episode</th><th>What each strategy saw</th><th>Pin a video</th></tr></thead>
+  <thead><tr><th>Episode</th>{% if any_candidates %}<th>What each strategy saw</th>{% endif %}<th>Pin a video</th></tr></thead>
   <tbody>
   {% for u in shown %}
     <tr>
       <td><strong>{{ u.code }}</strong> {{ u.title }}<span class="two-line muted">{{ u.air_date or "" }}</span></td>
-      <td>
+      {% if any_candidates %}<td>
         {% if not (u.candidates.values() | map("length") | sum) %}{% set names = [] %}{% for strategy in u.candidates if strategy != "override" or sub.overrides %}{% set _ = names.append("pins" if strategy == "override" else strategy) %}{% endfor %}<span class="muted">{% if names %}no candidate by {{ names[:-1] | join(", ") ~ (" or " if names | length > 1 else "") ~ names[-1] }}{% else %}pins only, and none set yet{% endif %}</span>
         {% else %}{% for strategy, cands in u.candidates.items() %}
           <span class="nowrap"><span class="chip">{{ "pins" if strategy == "override" else strategy }}</span>
           {% if not cands %}<span class="muted">no candidate</span>{% else %}<span class="warn">{{ cands | length }} candidates:</span>{% endif %}</span>
             {% for c in cands %}{{ c.title | truncate(50) }}{% if not loop.last %}, {% endif %}{% endfor %}<br>
         {% endfor %}{% endif %}
-      </td>
+      </td>{% endif %}
       <td>
         <form hx-post="/subscriptions/{{ sub.id }}/overrides" hx-target="#preview">
           <input type="hidden" name="season" value="{{ u.season }}"><input type="hidden" name="episode" value="{{ u.number }}">
@@ -133,9 +136,11 @@
 
 {% if sub.overrides %}
 <h4>Your pins</h4>
+{% set wanted_codes = (report.matches + report.held + report.unmatched + report.skipped_existing) | map(attribute="code") | list %}
 <ul class="pins">
 {% for o in sub.overrides %}
-  <li><code>{{ o.video_id }}</code>{% if o.video_title %} <span class="muted">{{ o.video_title | truncate(60) }}</span>{% endif %} → S{{ "%02d" % o.season }}E{{ "%02d" % o.episode }}{% if o.video_url %} <span class="chip" title="Pinned by pasting a URL; the video need not be in the listing">via URL</span>{% endif %}
+  {% set code = "S%02dE%02d" % (o.season, o.episode) %}
+  <li>{{ (o.video_title or o.video_id) | truncate(60) }} → <strong>{{ code }}</strong> <span class="muted mono">{{ o.video_id }}</span>{% if o.video_url %} <span class="chip" title="Pinned by pasting a URL; the video need not be in the listing">via URL</span>{% endif %}{% if code not in wanted_codes %} <span class="chip zero" title="Sonarr does not want this episode now, so the pin does nothing until it does">not wanted now</span>{% endif %}
     <form class="inline" hx-post="/subscriptions/{{ sub.id }}/overrides/{{ o.video_id }}/delete" hx-target="#preview"><button type="submit" class="secondary outline">Remove</button></form></li>
 {% endfor %}
 </ul>
@@ -143,7 +148,7 @@
 
 {% if report.skipped_existing %}
 <details class="plain"><summary>{% set n = report.skipped_existing | length %}{{ n }} wanted episode{{ '' if n == 1 else 's' }} already {{ 'has a job' if n == 1 else 'have jobs' }}</summary>
-<ul>{% for s in report.skipped_existing %}<li>{{ s.code }} {{ s.title }} → <a href="/activity" class="job-ref">#{{ s.job_id }}</a> <span class="badge badge-{{ s.job_status }}">{{ s.job_status }}</span></li>{% endfor %}</ul>
+<ul>{% for s in report.skipped_existing %}<li>{{ s.code }} {{ s.title }} → <a href="/activity#job-{{ s.job_id }}" class="job-ref">#{{ s.job_id }}</a> <span class="badge badge-{{ s.job_status }}">{{ s.job_status }}</span></li>{% endfor %}</ul>
 </details>
 {% endif %}
 

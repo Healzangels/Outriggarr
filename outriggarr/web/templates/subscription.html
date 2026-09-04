@@ -9,7 +9,7 @@
   <dl class="meta" title="Subscription {{ sub.id }}">
     <div><dt>Match order</dt><dd title="Videos you pin to an episode always win, then the automatic strategies in this order">pins{% for st in sub.strategies %} → {{ st }}{% endfor %}</dd></div>
     <div><dt>Auto-download</dt><dd title="What the scheduler queues by itself; set under Subscription settings">{% if sub.auto_download == "future" %}episodes airing from {{ sub.created_at.strftime('%-d %b %Y') }}{% elif sub.auto_download == "all" %}everything it matches{% else %}nothing{% endif %}</dd></div>
-    <div><dt>Last scan</dt><dd>{% if sub.last_scan_at %}<span title="{{ sub.last_scan_at.strftime('%Y-%m-%d %H:%M') }}Z">{{ sub.last_scan_at | ago }}</span>{% else %}never{% endif %}{% if next_scan %} <span class="muted">· {{ next_scan }}</span>{% endif %}</dd></div>
+    <div><dt>Last scan</dt><dd>{% if sub.last_scan_at %}<span title="{{ sub.last_scan_at.strftime('%Y-%m-%d %H:%M') }}Z">{{ sub.last_scan_at | ago }}</span>{% else %}never{% endif %}{% if next_scan %} <span class="muted">· {{ next_scan }}</span>{% endif %}{% set r = sub.last_scan_result %}{% if r %} <span class="muted" title="What the last real scan did">· {% if r.error %}<span class="bad">failed</span>{% elif r.created %}{{ r.matched }} matched, {{ r.created }} queued{% elif r.matched or r.unmatched %}{{ r.matched }} matched, {{ r.unmatched }} unmatched{% else %}nothing new{% endif %}</span>{% endif %}</dd></div>
   </dl>
 </div>
 {% if error %}<p class="notice bad">Settings not saved: <a href="#settings">see the form below</a>.</p>{% endif %}

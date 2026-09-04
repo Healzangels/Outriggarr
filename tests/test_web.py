@@ -194,14 +194,14 @@ def test_subscription_page_preview_scan_and_override(client: TestClient) -> None
 
     prev = client.get(f"/subscriptions/{sub_id}/preview").text
     assert "Nothing here queues by itself" in prev and "S30E06" in prev  # a match, no job yet
-    assert "S30E07" in prev and "no candidate" in prev
+    assert "S30E07" in prev and "No strategy saw a candidate for any of these" in prev
     assert f'hx-post="/subscriptions/{sub_id}/overrides"' in prev
 
     r = client.post(
         f"/subscriptions/{sub_id}/overrides", data={"video_id": "b", "season": "30", "episode": "7"}
     )
     assert r.status_code == 200 and "Pinned b to S30E07" in r.text
-    assert "<code>b</code>" in r.text and "S30E07" in r.text
+    assert '<span class="muted mono">b</span>' in r.text and "S30E07" in r.text
 
     scan = client.post(f"/subscriptions/{sub_id}/scan")
     assert scan.status_code == 200 and "Nothing queued" in scan.text
@@ -370,12 +370,13 @@ def test_subscription_episodes_panel_states_and_jobs(client: TestClient) -> None
 
     html = client.get(f"/subscriptions/{sub_id}/episodes").text
     assert html.index("Season 30") < html.index("Season 29"), "newest season first"
-    assert "1/4 files" in html and "1 missing" in html
+    assert "1/3 files" in html and "1 missing" in html and "1 unmonitored" in html
     assert "1/1 files" in html, "every season has its own row, complete ones too"
     assert "complete season" not in html
     # the newest season opens by itself only while something in it is missing
-    assert '<details class="plain season" open>\n  <summary>Season 30' in html
-    assert '<details class="plain season">\n  <summary>Season 29' in html
+    assert '<details class="plain season" open>' in html and "<summary>Season 30" in html
+    assert '<details class="plain season">' in html and "<summary>Season 29" in html
+    assert html.count('season" open>') == 1, "only the newest season with missing episodes opens"
     for needle in ("✓ file", ">missing<", ">unaired<", ">unmonitored<"):
         assert needle in html, needle
     assert "status-queued" in html and "#1" in html, "the queued job is linked to S30E06"
@@ -787,7 +788,8 @@ def test_matches_recheck_and_confirm_clear_the_review_list(client: TestClient) -
     source.infos["https://y/double"] = VideoRef("double", "x", "https://y/double", 3000, 1, None)
     page = client.get("/matches").text
     assert (
-        'Needs a look<span class="count">4</span>' in page and page.count("length unchecked") == 4
+        'Needs a look<span class="count warn">4</span>' in page
+        and page.count("length unchecked") == 4
     )
     assert 'aria-current="page">Needs a look' in page, "work to do: land on the review view"
 
@@ -810,7 +812,9 @@ def test_matches_recheck_and_confirm_clear_the_review_list(client: TestClient) -
         in r.text
     )
     assert "1 could not be fetched" in r.text
-    assert 'Needs a look<span class="count">3</span>' in r.text, "25 min vs 25 min cleared itself"
+    assert 'Needs a look<span class="count warn">3</span>' in r.text, (
+        "25 min vs 25 min cleared itself"
+    )
     assert "Checked 4 matches" not in client.get("/matches").text, "the summary shows once"
     assert "2 unchecked" in r.text, "the button says how much is left"
     assert 'disabled title="Every match' not in r.text, "still something to check: enabled"
@@ -831,10 +835,10 @@ def test_matches_recheck_and_confirm_clear_the_review_list(client: TestClient) -
     short_id = jobs["short"]["id"]
     r = client.post(f"/matches/{short_id}/confirm")
     assert "Confirmed: Show S30E07 - T12." in r.text
-    assert 'Needs a look<span class="count">2</span>' in r.text
+    assert 'Needs a look<span class="count warn">2</span>' in r.text
     assert client.get(f"/api/jobs/{short_id}").json()["reviewed_at"] is not None
     r = client.post(f"/matches/{short_id}/unconfirm?view=review")
-    assert 'Needs a look<span class="count">3</span>' in r.text
+    assert 'Needs a look<span class="count warn">3</span>' in r.text
     r = client.post("/matches/confirm-all")
     assert "Confirmed 3 matches." in r.text and 'Needs a look<span class="count">0</span>' in r.text
     assert client.get("/matches?view=all").text.count(">confirmed</span>") == 3
@@ -979,7 +983,9 @@ def test_source_hint_is_dropped_once_the_subscription_has_history(client: TestCl
         job.status = JobStatus.done  # done: it no longer covers the episode, which stays wanted
         s.commit()
     prev = client.get(f"/subscriptions/{sub_id}/preview").text
-    assert "S30E06" in prev and "no candidate" in prev, "still unmatched with nothing seen"
+    assert "S30E06" in prev and "No strategy saw a candidate" in prev, (
+        "still unmatched, nothing seen"
+    )
     assert "This source may not carry these episodes" not in prev, "history alone drops the hint"
 
 
@@ -1564,10 +1570,7 @@ def test_subscription_page_labels_its_facts_and_orders_the_preview(client: TestC
         "what the scan saw comes first, then what you can do about it"
     )
     assert "1 wanted episode already has a job" in prev, "the scan queued it: not a match row now"
-    assert (
-        '<a href="/activity" class="job-ref">#'
-        in client.get(f"/subscriptions/{sub_id}/episodes").text
-    )
+    assert '<a href="/activity#job-' in client.get(f"/subscriptions/{sub_id}/episodes").text
 
 
 def test_notify_test_result_is_escaped(client: TestClient) -> None:
@@ -1965,7 +1968,7 @@ def test_matches_show_one_row_per_target_the_newest_job(client: TestClient) -> N
         s.commit()
     page = client.get("/matches?view=all").text
     assert "Video New" in page and "Video Old" not in page
-    assert page.count("Show S30E06 - Six") == 1
+    assert page.count("<strong>Show S30E06</strong> Six") == 1
     assert 'All<span class="count">1</span>' in page
     assert 'Needs a look<span class="count">0</span>' in page, "the superseded job's gap is moot"
 
@@ -2249,7 +2252,10 @@ def test_pins_only_subscription_preview_renders(client: TestClient) -> None:
     ).json()["id"]
     r = client.get(f"/subscriptions/{sub_id}/preview")
     assert r.status_code == 200, r.text[:300]
-    assert "pins only, and none set yet" in r.text and "Pin a video" in r.text
+    assert "Pins only, and none set yet" in r.text and "Pin a video" in r.text
+    assert "<th>What each strategy saw</th>" not in r.text, (
+        "a column of identical nothing is dropped"
+    )
 
 
 def test_stale_connection_form_says_so(client: TestClient) -> None:
@@ -2329,3 +2335,149 @@ def test_subscribe_form_says_when_sonarr_did_not_answer(client: TestClient, monk
     page = client.get("/series/5/subscribe").text
     assert "did not answer, so the series title is missing: Sonarr: connection refused" in page
     assert 'name="sources"' in page, "the form still works"
+
+
+def test_season_summary_says_what_a_zero_means(client: TestClient) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from outriggarr.arr.base import EpisodeRef, SeriesRef
+    from tests.fakes import FakeArrClient
+
+    now = datetime.now(UTC)
+    client.app.state.arr_factory.by_url["http://sonarr-host:1234"] = FakeArrClient(
+        series_list=[SeriesRef(5, "Show", 2015, 1, True)],
+        episodes_by_series={
+            5: [
+                EpisodeRef(1, 2, 1, "Off", False, False, now - timedelta(days=9)),  # unmonitored
+                EpisodeRef(2, 2, 2, "Off too", False, False, now - timedelta(days=8)),
+                EpisodeRef(3, 3, 1, "Have", True, True, now - timedelta(days=7)),
+                EpisodeRef(4, 3, 2, "Soon", False, True, now + timedelta(days=7)),  # unaired
+                EpisodeRef(5, 3, 3, "Skip", False, False, now - timedelta(days=1)),  # unmonitored
+            ]
+        },
+    )
+    client.app.state.source.recent = []
+    client.post("/api/connections", json=SONARR)
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={"connection_id": 1, "series_id": 5, "source_url": "https://www.youtube.com/@x"},
+    ).json()["id"]
+    html = client.get(f"/subscriptions/{sub_id}/episodes").text
+    assert 'Season 3 <span class="muted">· 1/2 files · 1 unaired · 1 unmonitored</span>' in html
+    assert 'Season 2 <span class="muted">· unmonitored · 2 episodes</span>' in html
+    assert "0/2 files" not in html, "an unmonitored season is not a gap"
+
+
+def test_subscription_header_says_what_the_last_scan_did(client: TestClient) -> None:
+    from datetime import UTC, datetime
+
+    from outriggarr.db.models import Subscription
+
+    _seed_series(client)
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={"connection_id": 1, "series_id": 5, "source_url": "https://www.youtube.com/@hotones"},
+    ).json()["id"]
+    for result, expect in (
+        ({"matched": 3, "created": 2, "unmatched": 1, "error": None}, "3 matched, 2 queued"),
+        ({"matched": 3, "created": 0, "unmatched": 1, "error": None}, "3 matched, 1 unmatched"),
+        ({"matched": 0, "created": 0, "unmatched": 0, "error": None}, "nothing new"),
+        (
+            {"matched": 0, "created": 0, "unmatched": 0, "error": "boom"},
+            '<span class="bad">failed</span>',
+        ),
+    ):
+        with client.app.state.session_factory() as s:
+            sub = s.get(Subscription, sub_id)
+            sub.last_scan_at = datetime.now(UTC)
+            sub.last_scan_result = result
+            s.commit()
+        page = client.get(f"/subscriptions/{sub_id}").text
+        assert expect in page, expect
+
+
+def test_preview_with_nothing_wanted_says_it_once(client: TestClient) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from outriggarr.arr.base import EpisodeRef, SeriesRef
+    from tests.fakes import FakeArrClient
+
+    aired = datetime.now(UTC) - timedelta(days=1)
+    client.app.state.arr_factory.by_url["http://sonarr-host:1234"] = FakeArrClient(
+        series_list=[SeriesRef(5, "Done Show", 2015, 1, True)],
+        episodes_by_series={5: [EpisodeRef(11, 1, 1, "One", True, True, aired)]},
+    )
+    client.app.state.source.recent = []
+    client.post("/api/connections", json=SONARR)
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={"connection_id": 1, "series_id": 5, "source_url": "https://www.youtube.com/@done"},
+    ).json()["id"]
+    prev = client.get(f"/subscriptions/{sub_id}/preview").text
+    assert "Sonarr wants nothing from this series right now" in prev
+    assert "0 matched" not in prev and "Nothing to queue" not in prev, "said once, not three times"
+
+
+def test_a_spent_pin_says_so_and_a_failed_count_is_red(client: TestClient) -> None:
+    from outriggarr.db.models import Job, JobStatus, TargetKind
+
+    _seed_series(client)
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={"connection_id": 1, "series_id": 5, "source_url": "https://www.youtube.com/@hotones"},
+    ).json()["id"]
+    client.post(
+        f"/subscriptions/{sub_id}/overrides",
+        data={"season": "1", "episode": "1", "video_id": "b"},  # picked from the listing
+    )
+    prev = client.get(f"/subscriptions/{sub_id}/preview").text
+    assert "not wanted now" in prev, "S01E01 is not a wanted episode"
+    with client.app.state.session_factory() as s:
+        s.add(
+            Job(
+                connection_id=1,
+                target_kind=TargetKind.episode,
+                series_id=5,
+                episode_ids=[11],
+                target_key="episode:5:11",
+                video_id="f",
+                video_url="https://y/f",
+                status=JobStatus.failed,
+                error="x",
+            )
+        )
+        s.commit()
+    page = client.get("/activity").text
+    assert 'Failed<span class="count bad">1</span>' in page
+    assert 'Active<span class="count">0</span>' in page
+
+
+def test_matches_episode_cell_mutes_the_series_and_bolds_the_code(client: TestClient) -> None:
+    from outriggarr.db.models import Job, JobStatus, TargetKind
+
+    _seed_series(client)
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={"connection_id": 1, "series_id": 5, "source_url": "https://www.youtube.com/@hotones"},
+    ).json()["id"]
+    with client.app.state.session_factory() as s:
+        s.add(
+            Job(
+                connection_id=1,
+                subscription_id=sub_id,
+                target_kind=TargetKind.episode,
+                series_id=5,
+                episode_ids=[11],
+                target_key="episode:5:11",
+                video_id="v",
+                video_url="https://y/v",
+                video_title="Six Spicy Wings | Hot Ones",
+                target_label="Hot Ones S30E06 - Six Spicy Wings",
+                matched_by="exact",
+                status=JobStatus.done,
+            )
+        )
+        s.commit()
+    page = client.get("/matches?view=all").text
+    assert '<span class="muted">Hot Ones</span> <strong>S30E06</strong> Six Spicy Wings' in page
+    assert 'href="/activity#job-' in page, "the job ref lands on its Activity row"

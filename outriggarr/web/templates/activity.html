@@ -6,7 +6,7 @@
 </div>
 <nav class="tabs" aria-label="views">
   {% for f in filters %}
-    <a href="/activity?view={{ f }}" {% if f == view %}aria-current="page"{% endif %}>{{ f | capitalize }}<span class="count">{{ counts[f] }}</span></a>
+    <a href="/activity?view={{ f }}" {% if f == view %}aria-current="page"{% endif %}>{{ f | capitalize }}<span class="count{% if f == 'failed' and counts[f] %} bad{% endif %}">{{ counts[f] }}</span></a>
   {% endfor %}
 </nav>
 {# a permanent live region: notices swap into it, so a faded one never takes the slot away #}
