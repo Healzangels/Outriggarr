@@ -3,8 +3,9 @@
 {% elif not seasons %}<p class="empty">Sonarr lists no episodes for this series.</p>
 {% else %}
 {% for s in seasons %}
-<details class="plain season"{% if loop.first and s.missing %} open{% endif %}>
-  {% set unmon = s.rows | selectattr("state", "equalto", "unmonitored") | list | length %}{% set unaired = s.rows | selectattr("state", "equalto", "unaired") | list | length %}
+{% set unmon = s.rows | selectattr("state", "equalto", "unmonitored") | list | length %}{% set unaired = s.rows | selectattr("state", "equalto", "unaired") | list | length %}
+{# open by default: the newest season while something is missing, and any season still airing #}
+<details class="plain season"{% if (loop.first and s.missing) or unaired %} open{% endif %}>
   <summary>Season {{ s.season }} <span class="muted">· {% if unmon == s.total %}unmonitored · {{ s.total }} episode{{ '' if s.total == 1 else 's' }}{% else %}{{ s.files }}/{{ s.total - unmon }} files{% if s.missing %} · <span class="warn">{{ s.missing }} missing</span>{% endif %}{% if unaired %} · {{ unaired }} unaired{% endif %}{% if unmon %} · {{ unmon }} unmonitored{% endif %}{% endif %}</span></summary>
   <div class="table-wrap">
   <table>

@@ -2366,6 +2366,11 @@ def test_season_summary_says_what_a_zero_means(client: TestClient) -> None:
     assert 'Season 3 <span class="muted">· 1/2 files · 1 unaired · 1 unmonitored</span>' in html
     assert 'Season 2 <span class="muted">· unmonitored · 2 episodes</span>' in html
     assert "0/2 files" not in html, "an unmonitored season is not a gap"
+    # a season that is still airing opens by default; a settled one stays closed
+    assert '<details class="plain season" open>\n  <summary>Season 3' in html.replace(
+        "\n\n", "\n"
+    ) or (html.index('season" open>') < html.index("<summary>Season 3"))
+    assert html.count('season" open>') == 1, "only the airing season opened"
 
 
 def test_subscription_header_says_what_the_last_scan_did(client: TestClient) -> None:
