@@ -137,6 +137,10 @@ class Subscription(Base):
     auto_download: Mapped[str] = mapped_column(String(10), nullable=False, default="future")
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False, default=utcnow)
     last_scan_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    # The last successful scan's whole report, so opening the subscription page shows the
+    # preview at once instead of listing the source again (4-6 s and a request against
+    # the rate limit per page open). Cleared when a setting that changes matching changes.
+    last_report: Mapped[dict | None] = mapped_column(JSON)
     last_scan_result: Mapped[dict | None] = mapped_column(JSON)
 
     connection: Mapped[Connection] = relationship()

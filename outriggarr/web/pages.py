@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import html
+import logging
 import shutil
 from datetime import UTC, datetime, timedelta, tzinfo
 from pathlib import Path
@@ -73,7 +74,9 @@ from outriggarr.settings import (
     preset_for,
 )
 from outriggarr.source import cookies_state, pot_provider_ready
-from outriggarr.worker.scheduler import known_date_ids
+from outriggarr.worker.scheduler import ScanReport, known_date_ids
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(include_in_schema=False)
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
@@ -984,11 +987,25 @@ async def subscription_fetch_dates_status(
     )
 
 
+def cached_report(sub: Subscription | None) -> ScanReport | None:
+    """The last successful scan's report, or None when there is none to show. Opening a
+    page must not cost a listing: the age is on the card and Refresh preview re-lists."""
+    if sub is None or not sub.last_report:
+        return None
+    try:
+        return ScanReport.from_dict(sub.last_report)
+    except (TypeError, ValueError, KeyError):  # written by another shape; scan instead
+        log.warning("subscription %d: unreadable cached report; scanning", sub.id)
+        return None
+
+
 @router.get("/subscriptions/{subscription_id}/preview")
 async def subscription_preview(
     request: Request, subscription_id: int, session: DbSession, deps: RunnerDepsDep
 ) -> HTMLResponse:
-    report = await run_scan(deps, subscription_id, dry_run=True)
+    report = cached_report(session.get(Subscription, subscription_id))
+    if report is None:
+        report = await run_scan(deps, subscription_id, dry_run=True)
     return _preview_response(request, session, report)
 
 

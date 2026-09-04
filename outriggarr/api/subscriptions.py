@@ -233,6 +233,19 @@ async def create_subscription(
     return sub
 
 
+# changing any of these changes what a scan would match, so the cached preview is void
+_MATCHING_FIELDS = (
+    "sources",
+    "strategies",
+    "date_tolerance_days",
+    "date_offset_days",
+    "title_regex",
+    "title_require",
+    "video_limit",
+    "auto_download",
+)
+
+
 async def update_subscription(
     session: Session, arr_factory: ArrFactory, subscription_id: int, body: SubscriptionIn
 ) -> Subscription:
@@ -244,8 +257,11 @@ async def update_subscription(
             session, arr_factory, body.connection_id, body.series_id
         )
         sub.title, sub.tvdb_id = title, tvdb_id
+    before = {k: getattr(sub, k) for k in _MATCHING_FIELDS}
     for k, v in body.model_dump().items():
         setattr(sub, k, v)
+    if moved or any(getattr(sub, k) != before[k] for k in _MATCHING_FIELDS):
+        sub.last_report = None  # the cached preview was matched under the old settings
     try:
         session.commit()
     except IntegrityError:

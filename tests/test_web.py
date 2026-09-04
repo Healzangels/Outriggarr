@@ -548,7 +548,9 @@ def test_preview_hints_when_the_source_cannot_carry_the_episodes(client: TestCli
     assert "may not carry these episodes" in prev
     assert "unavailable video" in prev and '<option value="dead">' not in prev
     source.recent = [VideoRef("a", "Six Spicy Wings | Hot Ones", "https://y/a", 1, 1, None)]
-    assert "may not carry these episodes" not in client.get(f"/subscriptions/{sub_id}/preview").text
+    # the page open shows the cached look, age and all; Refresh preview is what re-lists
+    assert "may not carry these episodes" in client.get(f"/subscriptions/{sub_id}/preview").text
+    assert "may not carry these episodes" not in client.post(f"/subscriptions/{sub_id}/scan").text
 
 
 def test_grab_marks_unavailable_videos(client: TestClient) -> None:
@@ -1569,7 +1571,9 @@ def test_subscription_page_labels_its_facts_and_orders_the_preview(client: TestC
     assert prev.index('class="chips scan-summary"') < prev.index('class="form-actions"'), (
         "what the scan saw comes first, then what you can do about it"
     )
-    assert "1 wanted episode already has a job" in prev, "the scan queued it: not a match row now"
+    assert "Listed just now" in prev, "the preview says how old its look at the source is"
+    fresh = client.post(f"/subscriptions/{sub_id}/scan").text  # Refresh preview
+    assert "1 wanted episode already has a job" in fresh, "the scan queued it: not a match row now"
     assert '<a href="/activity#job-' in client.get(f"/subscriptions/{sub_id}/episodes").text
 
 
@@ -2486,3 +2490,75 @@ def test_matches_episode_cell_mutes_the_series_and_bolds_the_code(client: TestCl
     page = client.get("/matches?view=all").text
     assert '<span class="muted">Hot Ones</span> <strong>S30E06</strong> Six Spicy Wings' in page
     assert 'href="/activity#job-' in page, "the job ref lands on its Activity row"
+
+
+def test_the_preview_is_cached_so_a_page_open_costs_no_listing(client: TestClient) -> None:
+    _seed_series(client)
+    source = client.app.state.source
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={"connection_id": 1, "series_id": 5, "source_url": "https://www.youtube.com/@hotones"},
+    ).json()["id"]
+    source.listed.clear()
+    first = client.get(f"/subscriptions/{sub_id}/preview").text  # nothing cached yet: one listing
+    assert len(source.listed) == 1 and "Listed just now" in first
+    for _ in range(3):
+        again = client.get(f"/subscriptions/{sub_id}/preview").text
+    assert len(source.listed) == 1, "three more page opens, still one listing"
+    assert "Six Spicy Wings" in again and "Listed just now" in again
+    client.post(f"/subscriptions/{sub_id}/scan")  # Refresh preview lists again
+    assert len(source.listed) == 2
+
+
+def test_a_failed_scan_leaves_the_last_good_preview_alone(client: TestClient) -> None:
+    from outriggarr.source import SourceError
+
+    _seed_series(client)
+    source = client.app.state.source
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={"connection_id": 1, "series_id": 5, "source_url": "https://www.youtube.com/@hotones"},
+    ).json()["id"]
+    assert "Six Spicy Wings" in client.get(f"/subscriptions/{sub_id}/preview").text
+    source.recent_error = SourceError("ERROR: [youtube:tab] @hotones: This channel does not exist")
+    failed = client.post(f"/subscriptions/{sub_id}/scan").text
+    assert "This channel does not exist" in failed, "the failure is said"
+    source.recent_error = None
+    source.listed.clear()
+    again = client.get(f"/subscriptions/{sub_id}/preview").text
+    assert "Six Spicy Wings" in again and "does not exist" not in again, "the good look survived"
+    assert source.listed == [], "and it came from the cache"
+
+
+def test_changing_what_a_scan_matches_drops_the_cached_preview(client: TestClient) -> None:
+    _seed_series(client)
+    source = client.app.state.source
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={"connection_id": 1, "series_id": 5, "source_url": "https://www.youtube.com/@hotones"},
+    ).json()["id"]
+    client.get(f"/subscriptions/{sub_id}/preview")
+    source.listed.clear()
+    client.put(  # a name is cosmetic: the cache stands
+        f"/api/subscriptions/{sub_id}",
+        json={
+            "connection_id": 1,
+            "series_id": 5,
+            "sources": ["https://www.youtube.com/@hotones"],
+            "strategies": ["title"],
+            "audio_language": "eng",
+        },
+    )
+    client.get(f"/subscriptions/{sub_id}/preview")
+    assert source.listed == [], "an unrelated edit keeps the cache"
+    client.put(  # the strategies decide what matches: the cached look is void
+        f"/api/subscriptions/{sub_id}",
+        json={
+            "connection_id": 1,
+            "series_id": 5,
+            "sources": ["https://www.youtube.com/@hotones"],
+            "strategies": ["title", "date"],
+        },
+    )
+    client.get(f"/subscriptions/{sub_id}/preview")
+    assert len(source.listed) == 1, "and the next page open looks again"

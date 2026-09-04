@@ -8,7 +8,7 @@ import contextlib
 import logging
 import re
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import or_, select
@@ -75,6 +75,15 @@ class ScanReport:
         d = asdict(self)
         d["scanned_at"] = self.scanned_at.isoformat()
         return d
+
+    @classmethod
+    def from_dict(cls, d: dict) -> ScanReport:
+        """A report read back from `subscription.last_report`. Unknown keys are dropped
+        so a cache written by an older build still loads."""
+        known = {f.name for f in fields(cls)}
+        data = {k: v for k, v in d.items() if k in known}
+        data["scanned_at"] = datetime.fromisoformat(data["scanned_at"])
+        return cls(**data)
 
 
 class SubscriptionNotFound(LookupError):
@@ -211,21 +220,26 @@ async def scan_subscription(
             if isinstance(exc, SourceError) and is_rate_limited(report.error):
                 # a listing hit the same wall a download would: pause everything, once
                 deps.cooloff.hit(report.error)
+        previous_error = (sub.last_scan_result or {}).get("error")
+        if report.error is None:
+            # what the preview shows on the next page open, instead of listing again; a
+            # failed scan leaves the last good one in place rather than poisoning it
+            sub.last_report = report.as_dict()
         if not dry_run:
-            previous_error = (sub.last_scan_result or {}).get("error")
             sub.last_scan_at = now
             sub.last_scan_result = report.summary()
-            session.commit()
-            if (
-                report.error
-                and report.error != previous_error
-                and get_setting(session, "notify_on_scan_error") == "1"
-            ):
-                await notify(
-                    deps,
-                    "Outriggarr: scan error",
-                    f"{sub.title} (subscription {sub.id})\n{report.error}",
-                )
+        session.commit()
+        if (
+            not dry_run
+            and report.error
+            and report.error != previous_error
+            and get_setting(session, "notify_on_scan_error") == "1"
+        ):
+            await notify(
+                deps,
+                "Outriggarr: scan error",
+                f"{sub.title} (subscription {sub.id})\n{report.error}",
+            )
         return report
 
 

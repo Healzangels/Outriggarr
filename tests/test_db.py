@@ -215,7 +215,7 @@ def test_migrations_are_transactional_and_downgrade_keeps_dedupe(settings) -> No
     assert version == "0004", "0013→…→0004 applied; the failing 0004→0003 step rolled back"
     command.upgrade(cfg, "head")  # and the DB is still usable: back to head cleanly
     with engine.connect() as conn:
-        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0014"
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0015"
     engine.dispose()
 
 

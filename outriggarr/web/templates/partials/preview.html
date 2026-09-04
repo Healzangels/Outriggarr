@@ -15,7 +15,8 @@
   <button id="download-selected" class="secondary" hx-post="/subscriptions/{{ sub.id }}/download" hx-include="#match-picks" hx-vals='{"selected": "1"}' hx-target="#preview" hx-indicator="#scan-busy" disabled title="Tick episodes in the Matches table first">Download selected <span class="count" id="selected-count" hidden>0</span></button>{% elif wanted %}<span class="muted">Nothing to queue{% if report.matches %}: every match already has a job{% endif %}.</span>{% endif %}
   {% include "partials/date_fetch.html" %}
   <span id="scan-busy" class="htmx-indicator muted" aria-busy="true">working…</span>
-  <button class="secondary outline push-right" hx-post="/subscriptions/{{ sub.id }}/scan" hx-target="#preview" hx-indicator="#scan-busy" title="List the sources again and re-match; nothing is queued">Refresh preview</button>
+  <span class="muted push-right" title="When the source was last listed. Refresh preview lists it again; the scheduler does too, every scan.">Listed {{ report.scanned_at | ago }}</span>
+  <button class="secondary outline" hx-post="/subscriptions/{{ sub.id }}/scan" hx-target="#preview" hx-indicator="#scan-busy" title="List the sources again and re-match; nothing is queued">Refresh preview</button>
 </div>
 {% if notice %}<p class="notice{{ ' bad' if notice_bad else '' }}" role="{{ 'alert' if notice_bad else 'status' }}" aria-live="polite">{{ notice }}</p>{% endif %}
 {% if report.error %}<p class="notice bad">Scan failed: {{ report.error }}</p>{% endif %}
