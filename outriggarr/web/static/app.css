@@ -203,9 +203,8 @@ label .hint { display: block; color: var(--o-muted); font-size: .88em; max-width
 ul.pins { list-style: none; padding-left: 0; }
 ul.pins li { display: flex; flex-wrap: wrap; gap: .5em; align-items: baseline; margin-bottom: .25rem; }
 details.season > summary { color: inherit; }
-/* thirty closed seasons are a column of air; lay them out in columns, an open one takes the row */
-#episodes { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: 0 1.5rem; align-items: start; }
-#episodes > details.season[open], #episodes > :is(p, .empty) { grid-column: 1 / -1; }
+/* one season per row, a single column: a grid of seasons read oddly and was hard to scan */
+details.season > summary { white-space: nowrap; }
 .bulk-fill { align-self: end; margin: 0 0 var(--pico-spacing); }
 label.inline-check { display: inline-flex; align-items: center; gap: .35em; margin: 0; }
 
