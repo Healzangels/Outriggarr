@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from typing import Annotated
 
 from fastapi import APIRouter, Form, HTTPException, Query, Request, status
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from jinja2 import StrictUndefined
 from sqlalchemy import func, select
@@ -265,6 +265,29 @@ FILTERS = {
 }
 
 
+# A poll every 3 s re-sent 200 rows (226 KB) whether or not anything had moved, and
+# swapped them in, losing selections and hover with them. The table's rows carry this
+# stamp; the poll sends it back and gets 204 (htmx swaps nothing) when it still holds.
+JOBS_VERSION_BUCKET_SECONDS = 300  # the relative times age on their own: swap at least this often
+
+
+def jobs_version(session: Session, now: datetime | None = None) -> str:
+    """Everything the jobs table shows, in one cheap stamp: a new job, a status change,
+    a step of progress, another attempt — any of them moves it."""
+    total, newest, progress, attempts = session.execute(
+        select(
+            func.count(Job.id),
+            func.coalesce(func.max(Job.id), 0),
+            func.coalesce(func.sum(Job.progress_pct), 0),
+            func.coalesce(func.sum(Job.attempts), 0),
+        )
+    ).one()
+    by_status = session.execute(select(Job.status, func.count(Job.id)).group_by(Job.status)).all()
+    states = ",".join(f"{s.value}:{n}" for s, n in sorted(by_status, key=lambda r: r[0].value))
+    bucket = int((now or datetime.now(UTC)).timestamp() // JOBS_VERSION_BUCKET_SECONDS)
+    return f"{total}.{newest}.{progress}.{attempts}.{states}.{bucket}"
+
+
 def counts_for(session: DbSession) -> dict[str, int]:
     return {
         f: (
@@ -300,6 +323,7 @@ def _rows(
     notice_bad: bool = False,
 ) -> HTMLResponse:
     jobs = _jobs(session, view)
+    version = jobs_version(session)
     total = counts_for(session).get(view, len(jobs))
     return templates.TemplateResponse(
         request,
@@ -313,6 +337,7 @@ def _rows(
             "limit": ACTIVITY_LIMIT,
             "causes": _causes(session, jobs),
             "has_connections": _has_connections(session),
+            "jobs_version": version,
         },
     )
 
@@ -357,6 +382,7 @@ def activity(
             "total": counts.get(view, len(jobs)),
             "limit": ACTIVITY_LIMIT,
             "has_connections": _has_connections(session),
+            "jobs_version": jobs_version(session),
             "causes": _causes(session, jobs),
         },
     )
@@ -582,8 +608,15 @@ def matches_confirm_all(
 
 @router.get("/activity/rows")
 def activity_rows(
-    request: Request, session: DbSession, view: Annotated[str, Query()] = "all"
-) -> HTMLResponse:
+    request: Request,
+    session: DbSession,
+    view: Annotated[str, Query()] = "all",
+    v: Annotated[str, Query()] = "",
+) -> Response:
+    """The polled table. `v` is the stamp the page already shows: while it holds there is
+    nothing to send, and htmx leaves the rows (and the user's selection) alone."""
+    if v and v == jobs_version(session):
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
     return _rows(request, session, view if view in FILTERS else "all")
 
 

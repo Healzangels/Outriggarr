@@ -2562,3 +2562,71 @@ def test_changing_what_a_scan_matches_drops_the_cached_preview(client: TestClien
     )
     client.get(f"/subscriptions/{sub_id}/preview")
     assert len(source.listed) == 1, "and the next page open looks again"
+
+
+def test_the_activity_poll_sends_nothing_while_nothing_moves(client: TestClient) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from outriggarr.web.pages import JOBS_VERSION_BUCKET_SECONDS, jobs_version
+
+    client.post("/api/connections", json=SONARR)
+    page = client.get("/activity").text
+    assert 'hx-vals=\'js:{v: (document.getElementById("jobs-version") || {}).value || ""}\'' in page
+    version = page.split('id="jobs-version" value="')[1].split('"')[0]
+    assert version
+
+    # the page already shows this table: nothing to send, and htmx swaps nothing
+    unchanged = client.get(f"/activity/rows?view=all&v={version}")
+    assert unchanged.status_code == 204 and not unchanged.content
+
+    # no stamp (a first load) or an old one: the rows come
+    assert client.get("/activity/rows?view=all").status_code == 200
+    assert client.get("/activity/rows?view=all&v=stale").status_code == 200
+
+    job_id = _job(client, 1)
+    moved = client.get(f"/activity/rows?view=all&v={version}")
+    assert moved.status_code == 200 and f"#{job_id}" in moved.text, "a new job is a change"
+    version = moved.text.split('id="jobs-version" value="')[1].split('"')[0]
+    assert client.get(f"/activity/rows?view=all&v={version}").status_code == 204
+
+    client.post(f"/api/jobs/{job_id}/cancel")
+    assert client.get(f"/activity/rows?view=all&v={version}").status_code == 200, "a status change"
+
+    # the relative times ("22 hr ago") age with no row changing: the stamp turns over anyway
+    with client.app.state.session_factory() as s:
+        now = datetime.now(UTC)
+        assert jobs_version(s, now) == jobs_version(s, now + timedelta(seconds=1))
+        later = now + timedelta(seconds=JOBS_VERSION_BUCKET_SECONDS + 1)
+        assert jobs_version(s, now) != jobs_version(s, later)
+
+
+def test_the_poll_notices_progress_and_retries(client: TestClient) -> None:
+    from outriggarr.db.models import Job, JobStatus
+
+    client.post("/api/connections", json=SONARR)
+    job_id = _job(client, 1)
+    version = (
+        client.get("/activity/rows?view=all")
+        .text.split('id="jobs-version" value="')[1]
+        .split('"')[0]
+    )
+    with client.app.state.session_factory() as s:
+        job = s.get(Job, job_id)
+        job.status, job.progress_pct = JobStatus.downloading, 40
+        s.commit()
+    moved = client.get(f"/activity/rows?view=all&v={version}")
+    assert moved.status_code == 200
+    version = moved.text.split('id="jobs-version" value="')[1].split('"')[0]
+    with client.app.state.session_factory() as s:  # the same status, further along
+        s.get(Job, job_id).progress_pct = 70
+        s.commit()
+    assert client.get(f"/activity/rows?view=all&v={version}").status_code == 200
+    version = (
+        client.get("/activity/rows?view=all")
+        .text.split('id="jobs-version" value="')[1]
+        .split('"')[0]
+    )
+    with client.app.state.session_factory() as s:  # a retry: another attempt on the same row
+        s.get(Job, job_id).attempts = 2
+        s.commit()
+    assert client.get(f"/activity/rows?view=all&v={version}").status_code == 200

@@ -12,7 +12,9 @@
 {# a permanent live region: notices swap into it, so a faded one never takes the slot away #}
 <div id="jobs-notice" role="status" aria-live="polite"></div>
 {# the poll waits while the keyboard is in the table, or it would throw focus away every 3 s #}
-<div id="jobs" hx-get="/activity/rows?view={{ view }}" hx-trigger="every 3s [!document.activeElement.closest('#jobs')]" hx-swap="innerHTML">
+{# the poll sends the stamp the table already shows; an unchanged table answers 204 #}
+<div id="jobs" hx-get="/activity/rows?view={{ view }}" hx-trigger="every 3s [!document.activeElement.closest('#jobs')]" hx-swap="innerHTML"
+     hx-vals='js:{v: (document.getElementById("jobs-version") || {}).value || ""}'>
   {% include "partials/jobs_table.html" %}
 </div>
 {% endblock %}

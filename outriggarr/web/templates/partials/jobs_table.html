@@ -1,4 +1,5 @@
 {% if notice %}<div id="jobs-notice" hx-swap-oob="innerHTML"><p class="notice{{ ' bad' if notice_bad else '' }}"{% if notice_bad %} role="alert"{% endif %}>{{ notice }}</p></div>{% endif %}
+{% if jobs_version is defined %}<input type="hidden" id="jobs-version" value="{{ jobs_version }}">{% endif %}
 {% if not jobs %}
 <p class="empty">{% if has_connections is defined and not has_connections %}Nothing here yet. Start by connecting Sonarr or Radarr under <a href="/settings">Settings</a>.{% elif view == "failed" %}No failed jobs.{% elif view == "active" %}Nothing running.{% elif view == "done" %}Nothing finished yet.{% else %}No jobs yet. Queue one from <a href="/grab">Grab</a> or subscribe to a series under <a href="/series">Series</a>.{% endif %}</p>
 {% else %}
