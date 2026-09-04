@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import sqlite3
 from pathlib import Path
 
@@ -61,6 +62,24 @@ def alembic_config(database_url: str) -> Config:
     return cfg
 
 
+BACKUPS_KEPT = 3  # of the ones this code writes; a hand-made copy is never touched
+
+
+def _prune_backups(path: Path, keep: int = BACKUPS_KEPT) -> None:
+    """Keep the newest `keep` automatic backups. Only files this code wrote are matched
+    (app.db.bak-<revision>, four digits); anything else next to the database, a copy made
+    by hand before a deploy included, is left alone."""
+    pattern = re.compile(rf"^{re.escape(path.name)}\.bak-\d{{4}}$")
+    made = sorted(
+        (p for p in path.parent.glob(f"{path.name}.bak-*") if pattern.match(p.name)),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    for old in made[keep:]:
+        log.info("removing old database backup %s (keeping %d)", old, keep)
+        old.unlink(missing_ok=True)
+
+
 def backup_before_upgrade(database_url: str) -> Path | None:
     """A copy of a SQLite database that is about to change schema, next to it as
     app.db.bak-<revision>: an image rolled back to older code has something to return
@@ -87,6 +106,7 @@ def backup_before_upgrade(database_url: str) -> Path | None:
     with sqlite3.connect(path) as src, sqlite3.connect(target) as dst:
         src.backup(dst)  # the online backup API: consistent even mid-WAL
     log.warning("schema %s -> %s: backed up the database to %s", current, head, target)
+    _prune_backups(path)
     return target
 
 

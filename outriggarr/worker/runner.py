@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from sqlalchemy import or_, select, update
+from sqlalchemy import delete, or_, select, update
 from sqlalchemy.orm import Session
 
 from outriggarr.arr import ArrFactory
@@ -169,6 +169,29 @@ def target_of(job: Job) -> Target:
     if job.movie_id is not None:
         return Target(movie_id=job.movie_id)
     return Target(series_id=job.series_id, episode_ids=tuple(job.episode_ids or ()))
+
+
+RETENTION_SWEEP_SECONDS = 3600.0  # once an hour is often enough for a days-long setting
+
+
+def prune_old_jobs(session: Session, now: datetime, days: int) -> int:
+    """Delete finished jobs older than `days` (0 keeps every job). Only done and
+    cancelled rows go, and only after their staging folder is long gone; the file the
+    *arr imported is not ours to touch."""
+    if days <= 0:
+        return 0
+    cutoff = now - timedelta(days=days)
+    res = session.execute(
+        delete(Job).where(
+            Job.status.in_((JobStatus.done, JobStatus.cancelled)),
+            Job.finished_at.is_not(None),
+            Job.finished_at < cutoff,
+        )
+    )
+    if res.rowcount:
+        session.commit()
+        log.info("removed %d finished job(s) older than %d day(s)", res.rowcount, days)
+    return res.rowcount
 
 
 def sweep_cancelled(session: Session, staging_dir: Path, *, full: bool = False) -> int:
@@ -328,6 +351,7 @@ async def run_worker(deps: RunnerDeps, stop: asyncio.Event, lock: object | None 
         log.exception("recovering stale jobs failed; continuing")
     running: dict[int, asyncio.Task[None]] = {}
     paused_logged = False
+    last_prune = deps.clock() - RETENTION_SWEEP_SECONDS  # once at startup, then hourly
     while not stop.is_set():
         for jid, t in running.items():  # a task that died is a log line, not a mystery
             if t.done() and not t.cancelled() and t.exception() is not None:
@@ -337,6 +361,11 @@ async def run_worker(deps: RunnerDeps, stop: asyncio.Event, lock: object | None 
             with deps.session_factory() as session:
                 sweep_cancelled(session, deps.staging_dir)
                 recover_stale_jobs(session, exclude=running.keys())  # orphans, not ours
+                if deps.clock() - last_prune >= RETENTION_SWEEP_SECONDS:
+                    last_prune = deps.clock()
+                    prune_old_jobs(
+                        session, deps.now(), int(get_setting(session, "job_retention_days"))
+                    )
                 if deps.cooloff.active():
                     # rate-limited: running jobs finish, nothing new starts until it lifts
                     ids = []

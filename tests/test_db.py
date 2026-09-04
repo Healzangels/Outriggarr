@@ -269,7 +269,92 @@ def test_a_schema_upgrade_backs_the_database_up_first(tmp_path) -> None:
     assert backup_before_upgrade(url) is None, "no database yet: nothing to back up"
     run_migrations(url)
     assert backup_before_upgrade(url) is None, "at head: nothing to back up"
+    for rev in ("0009", "0010", "0011"):  # backups from earlier upgrades
+        (tmp_path / f"app.db.bak-{rev}").write_bytes(b"old")
     command.downgrade(alembic_config(url), "0012")
     run_migrations(url)
     bak = tmp_path / "app.db.bak-0012"
     assert bak.is_file() and bak.stat().st_size > 0
+    kept = sorted(p.name for p in tmp_path.glob("app.db.bak-*"))
+    assert kept == ["app.db.bak-0010", "app.db.bak-0011", "app.db.bak-0012"], (
+        f"the upgrade kept the newest three and dropped 0009: {kept}"
+    )
+
+
+def test_only_the_backups_this_code_wrote_are_rotated(tmp_path) -> None:
+    import time
+
+    from outriggarr.db.session import BACKUPS_KEPT, _prune_backups
+
+    db = tmp_path / "app.db"
+    db.write_bytes(b"live")
+    made = []
+    for rev in ("0011", "0012", "0013", "0014"):
+        p = tmp_path / f"app.db.bak-{rev}"
+        p.write_bytes(b"auto")
+        time.sleep(0.01)  # distinct mtimes: the newest are the ones kept
+        made.append(p)
+    by_hand = tmp_path / "app.db.bak-before-0012"
+    by_hand.write_bytes(b"mine")
+    other = tmp_path / "notes.txt"
+    other.write_text("keep me")
+
+    _prune_backups(db)
+
+    assert not made[0].exists(), "the oldest automatic backup goes"
+    assert all(p.exists() for p in made[1:]), f"the newest {BACKUPS_KEPT} stay"
+    assert by_hand.exists(), "a copy made by hand is never touched"
+    assert other.exists() and db.exists()
+
+
+def test_retention_deletes_only_old_finished_jobs(session_factory) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from outriggarr.db.models import Connection, ConnectionKind, Job, JobStatus, TargetKind
+    from outriggarr.worker.runner import prune_old_jobs
+
+    now = datetime.now(UTC)
+    with session_factory() as s:
+        s.add(
+            Connection(
+                kind=ConnectionKind.sonarr,
+                name="S",
+                url="http://h:1",
+                api_key="k",
+                staging_path_remote="/d",
+            )
+        )
+        s.commit()
+        conn_id = s.query(Connection).one().id
+        for i, (status, finished) in enumerate(
+            (
+                (JobStatus.done, now - timedelta(days=40)),  # old and finished: goes
+                (JobStatus.cancelled, now - timedelta(days=40)),  # goes too
+                (JobStatus.done, now - timedelta(days=3)),  # recent: stays
+                (JobStatus.failed, now - timedelta(days=40)),  # a failure is not history
+                (JobStatus.queued, None),  # still to run
+            )
+        ):
+            s.add(
+                Job(
+                    connection_id=conn_id,
+                    target_kind=TargetKind.episode,
+                    series_id=5,
+                    episode_ids=[i],
+                    target_key=f"episode:5:{i}",
+                    video_id=f"v{i}",
+                    video_url=f"https://y/v{i}",
+                    status=status,
+                    finished_at=finished,
+                )
+            )
+        s.commit()
+        assert prune_old_jobs(s, now, 0) == 0, "0 keeps every job"
+        assert s.query(Job).count() == 5
+        assert prune_old_jobs(s, now, 30) == 2
+        left = {(j.status, j.video_id) for j in s.query(Job).all()}
+        assert left == {
+            (JobStatus.done, "v2"),
+            (JobStatus.failed, "v3"),
+            (JobStatus.queued, "v4"),
+        }

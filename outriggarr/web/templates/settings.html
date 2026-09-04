@@ -67,6 +67,7 @@
     <label>Scan interval (minutes)<input type="number" name="scan_interval_minutes" min="1" max="1440" value="{{ settings.scan_interval_minutes }}"></label>
     <label>Concurrent downloads<input type="number" name="concurrency" min="1" max="8" value="{{ settings.concurrency }}"></label>
     <label>Videos listed per scan<input type="number" name="scan_video_limit" min="1" max="500" value="{{ settings.scan_video_limit }}"></label>
+    <label>Delete finished jobs after (days) <span class="hint">0 keeps every job. Only done and cancelled jobs go, and only the record: files already imported stay in Sonarr or Radarr.</span><input type="number" name="job_retention_days" min="0" max="3650" value="{{ settings.job_retention_days }}"></label>
   </div>
   <div class="field"><label for="default_format">Default quality <span class="hint">A yt-dlp format selector, used unless a subscription sets its own. Pick a preset for a target quality, or write your own; anything hand-written shows as Custom.</span></label>
     <div class="fill-row">

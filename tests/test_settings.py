@@ -307,3 +307,16 @@ def test_options_that_change_what_the_runner_sees_are_reserved(key: str) -> None
 
     assert key in RESERVED_YTDLP_KEYS
     assert "cookiefile" not in RESERVED_YTDLP_KEYS, "the app passes its own cookies path this way"
+
+
+def test_job_retention_setting_is_validated() -> None:
+    import pytest
+
+    from outriggarr.settings import DEFAULTS, validate_setting
+
+    assert DEFAULTS["job_retention_days"] == "0", "keeping every job is the default"
+    assert validate_setting("job_retention_days", " 30 ") == "30"
+    assert validate_setting("job_retention_days", "0") == "0"
+    for bad in ("-1", "3651", "soon"):
+        with pytest.raises(ValueError):
+            validate_setting("job_retention_days", bad)

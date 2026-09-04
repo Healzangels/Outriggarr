@@ -70,6 +70,9 @@ DEFAULTS: dict[str, str] = {
     # yt-dlp/YouTube codes such as en, en-US, es); blank = none. Sonarr/Radarr import them
     # alongside the video when "Import Extra Files" includes srt.
     "subtitles_langs": "en",
+    # Delete finished jobs (done, cancelled) once they are this many days old, so a
+    # long-running install's Activity and database stay small. "0" keeps every job.
+    "job_retention_days": "0",
     "subtitles_auto": "0",  # "1" also accepts auto-generated captions (machine transcripts)
     # Apprise URLs (one per line) and which of Outriggarr's own events to announce.
     "apprise_urls": "",
@@ -207,7 +210,7 @@ def validate_setting(key: str, value: str) -> str:
     if key not in DEFAULTS:
         raise KeyError(key)
     value = value.strip()
-    if key in ("scan_interval_minutes", "concurrency", "scan_video_limit"):
+    if key in ("scan_interval_minutes", "concurrency", "scan_video_limit", "job_retention_days"):
         try:
             n = int(value)
         except ValueError:
@@ -216,6 +219,7 @@ def validate_setting(key: str, value: str) -> str:
             "scan_interval_minutes": (1, 1440),
             "concurrency": (1, 8),
             "scan_video_limit": (1, 500),
+            "job_retention_days": (0, 3650),
         }[key]
         if not lo <= n <= hi:
             raise ValueError(f"{key} must be between {lo} and {hi}")
