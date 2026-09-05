@@ -7,7 +7,7 @@
 {% set saved = request.query_params.get("saved") %}
 {% if settings_error and not notify_error %}<p class="notice bad">Downloads not saved: <a href="#downloads">see the form below</a>.</p>{% elif notify_error %}<p class="notice bad">Notifications not saved: <a href="#notifications">see the form below</a>.</p>{% endif %}
 <section id="connections">
-<h3 class="section">Connections</h3>
+<h2 class="section">Connections</h2>
 {% if saved == "connection" %}<p class="notice" role="status" aria-live="polite">Connection saved{% if request.query_params.get("test") %}; testing it now, the result shows on its card{% endif %}.</p>{% endif %}
 {% if conn_error and failed_connection_id is none %}<p class="notice bad">{{ conn_error }}</p>{% endif %}
 {% for c in connections %}{% set f = (submitted if failed_connection_id == c.id else {}) %}
@@ -58,7 +58,7 @@
 </section>
 
 <section id="downloads">
-<h3 class="section">Downloads</h3>
+<h2 class="section">Downloads</h2>
 {% if saved == "downloads" %}<p class="notice" role="status" aria-live="polite">Downloads saved.</p>{% endif %}
 {% if settings_error and not notify_error %}<p class="notice bad">{{ settings_error }}</p>{% endif %}
 <article class="card">
@@ -101,7 +101,7 @@
 </section>
 
 <section id="notifications">
-<h3 class="section">Notifications</h3>
+<h2 class="section">Notifications</h2>
 {% if saved == "notifications" %}<p class="notice" role="status" aria-live="polite">Notifications saved.</p>{% endif %}
 {% if notify_error %}<p class="notice bad">{{ notify_error }}</p>{% endif %}
 <article class="card">

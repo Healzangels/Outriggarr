@@ -16,6 +16,7 @@ from contextlib import asynccontextmanager
 import httpx
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.gzip import GZipMiddleware
 
 from outriggarr import __version__
 from outriggarr.api.connections import router as connections_router
@@ -156,6 +157,9 @@ def create_app(
     app = FastAPI(title="Outriggarr", version=__version__, lifespan=lifespan)
     app.add_middleware(SameOriginGuard)
     app.add_middleware(StaticCacheHeaders)
+    # outermost, so pages, partials and the static bundle all travel compressed: Activity's
+    # 200 rows are 240 KB plain and 20 KB gzipped, Pico's stylesheet 83 KB and 12 KB
+    app.add_middleware(GZipMiddleware, minimum_size=1000)
     app.include_router(health_router)
     app.include_router(connections_router)
     app.include_router(jobs_router)

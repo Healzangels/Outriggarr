@@ -68,7 +68,7 @@ a.brand svg { border-radius: 6px; flex: none; }
 /* cards & sections */
 article.card > header { margin-bottom: .75rem; padding-block: .5rem; font-weight: 600; font-size: 1rem; }
 section + section { margin-top: 2rem; }
-h3.section { font-size: 1.125rem; font-weight: 600; color: var(--pico-h2-color); margin: 0 0 .5rem; }  /* a section title, not a second page title */
+h2.section { font-size: 1.125rem; font-weight: 600; color: var(--pico-h2-color); margin: 0 0 .5rem; }  /* a section title, not a second page title */
 article.card h4 { margin: 1rem 0 .5rem; font-size: 1rem; font-weight: 600; color: var(--pico-h2-color); }
 
 /* badges & chips */
@@ -146,8 +146,8 @@ td.actions :is(button, a[role=button]) { margin-left: .35em; }
 td.actions a.muted { margin-left: .5em; }
 td.num { text-align: right; white-space: nowrap; }
 td.when { white-space: nowrap; }
-.truncate { display: inline-block; max-width: 34ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: text-bottom; }
-table.jobs .truncate, table.recent .truncate { max-width: 48ch; }  /* fewer columns than Matches: room for the whole title */
+.truncate { display: inline-block; max-width: min(34ch, 26vw); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: text-bottom; }  /* the Video column's floor follows the viewport: a nowrap cell sets the column's minimum, and at 800 px a 34ch floor left the Episode column six lines tall */
+table.jobs .truncate, table.recent .truncate { max-width: min(48ch, 34vw); }  /* fewer columns than Matches: room for the whole title */
 .two-line { display: block; }
 .two-line > progress { width: 6rem; vertical-align: middle; }  /* the bar and its percentage share a line */
 progress { margin: 0; }

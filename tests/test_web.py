@@ -1526,7 +1526,7 @@ def test_matches_all_view_is_capped_with_a_show_all_switch(client: TestClient, m
     assert (
         "Showing the newest 2 of 3." in page
         and page.index("Showing the newest 2 of 3.") > page.index("</table>")
-        and 'href="/matches?view=all&limit=all">Show all 3</a>' in page
+        and 'href="/matches?view=all&amp;limit=all">Show all 3</a>' in page
     )
     everything = client.get("/matches?view=all&limit=all").text
     assert everything.count("25:00 vs 25:00 ✓") == 3 and "Show all" not in everything
@@ -2877,3 +2877,21 @@ def test_the_why_panel_explains_a_pair(client: TestClient) -> None:
     )
     assert client.get("/subscriptions/999/explain").status_code == 404
     assert client.get("/subscriptions/999/listed-videos").status_code == 404
+
+
+def test_pages_travel_compressed(client: TestClient) -> None:
+    client.post("/api/connections", json=SONARR)
+    r = client.get("/activity", headers={"Accept-Encoding": "gzip"})
+    assert r.status_code == 200 and r.headers.get("content-encoding") == "gzip"
+    assert "Activity" in r.text, "the client still reads it as HTML"
+    css = client.get("/static/app.css", headers={"Accept-Encoding": "gzip"})
+    assert css.headers.get("content-encoding") == "gzip", "the static bundle too"
+
+
+def test_head_declares_the_dark_chrome_and_settings_sections_are_h2(client: TestClient) -> None:
+    page = client.get("/activity").text
+    assert '<meta name="theme-color" content="#13171f">' in page
+    settings = client.get("/settings").text
+    assert '<h2 class="section">Connections</h2>' in settings and "<h3" not in settings, (
+        "a section heading is the level under the page's h1, not a skipped one"
+    )
