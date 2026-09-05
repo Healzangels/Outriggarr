@@ -237,7 +237,9 @@ def validate_setting(key: str, value: str) -> str:
         try:
             parsed = json.loads(value or "{}")
         except json.JSONDecodeError as exc:
-            raise ValueError(f"ytdlp_extra_opts is not valid JSON: {exc.msg}") from None
+            raise ValueError(
+                f"Extra yt-dlp options (ytdlp_extra_opts) is not valid JSON: {exc.msg}"
+            ) from None
         if not isinstance(parsed, dict):
             raise ValueError("ytdlp_extra_opts must be a JSON object")
         reserved = sorted(k for k in parsed if k in RESERVED_YTDLP_KEYS)

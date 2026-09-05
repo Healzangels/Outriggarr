@@ -16,6 +16,7 @@ from fastapi import APIRouter, Form, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from jinja2 import StrictUndefined
+from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
@@ -938,7 +939,7 @@ async def subscribe_submit(
         )
         sub = await create_subscription(session, arr_factory, body)
     except Exception as exc:  # validation / 409 / 502: show it on the form, as filled
-        detail = getattr(exc, "detail", None) or str(exc)
+        detail = error_text(exc)
         typed = _submitted(
             None,
             sources=[x for x in sources.splitlines() if x.strip()],
@@ -1489,7 +1490,7 @@ async def subscription_edit(
         )
         await update_subscription(session, arr_factory, subscription_id, body)
     except Exception as exc:
-        detail = getattr(exc, "detail", None) or str(exc)
+        detail = error_text(exc)
         typed = _submitted(
             sub,
             sources=[x for x in sources.splitlines() if x.strip()],
@@ -1569,7 +1570,7 @@ async def settings_downloads_post(request: Request, session: DbSession) -> HTMLR
         update_settings(session, changes)
     except Exception as exc:
         session.rollback()
-        detail = getattr(exc, "detail", None) or str(exc)
+        detail = error_text(exc)
         error = {"notify_error": detail} if data.get("_notify_form") else {"settings_error": detail}
         return templates.TemplateResponse(
             request,
@@ -1615,6 +1616,31 @@ async def settings_notify_test(request: Request, session: DbSession, deps: Runne
     return HTMLResponse(f'<span class="{css}">{html.escape(text)}</span>')
 
 
+FIELD_LABELS = {
+    "kind": "App",
+    "name": "Name",
+    "url": "URL",
+    "api_key": "API key",
+    "staging_path_remote": "Staging path",
+    "enabled": "Enabled",
+}
+
+
+def error_text(exc: BaseException) -> str:
+    """What a rejected form says. Pydantic's own text is a dump for developers —
+    "[type=string_too_short, input_value='', input_type=str] For further information
+    visit https://errors.pydantic.dev/…" — so a validation error becomes one clause
+    per field, named as the form names it; anything else is its detail or str."""
+    if isinstance(exc, ValidationError):
+        clauses = []
+        for err in exc.errors():
+            field = str(err["loc"][0]) if err.get("loc") else ""
+            msg = err["msg"].removeprefix("Value error, ")
+            clauses.append(f"{FIELD_LABELS.get(field, field)}: {msg}" if field else msg)
+        return " · ".join(clauses)
+    return str(getattr(exc, "detail", None) or exc)
+
+
 @router.post("/settings/connections")
 async def settings_connection_create(request: Request, session: DbSession) -> HTMLResponse:
     data = await _read_form(request)
@@ -1622,7 +1648,7 @@ async def settings_connection_create(request: Request, session: DbSession) -> HT
         created = create_connection(_connection_body(data), session)
     except Exception as exc:
         session.rollback()
-        detail = getattr(exc, "detail", None) or str(exc)
+        detail = error_text(exc)
         return templates.TemplateResponse(
             request,
             "settings.html",
@@ -1656,7 +1682,7 @@ async def settings_connection_update(
         update_connection(connection_id, _connection_body(data), session)
     except Exception as exc:
         session.rollback()
-        detail = getattr(exc, "detail", None) or str(exc)
+        detail = error_text(exc)
         return templates.TemplateResponse(
             request,
             "settings.html",
@@ -1677,7 +1703,7 @@ def settings_connection_delete(request: Request, connection_id: int, session: Db
         delete_connection(connection_id, session)
     except Exception as exc:
         session.rollback()
-        detail = getattr(exc, "detail", None) or str(exc)
+        detail = error_text(exc)
         return templates.TemplateResponse(
             request,
             "settings.html",

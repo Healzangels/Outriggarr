@@ -32,8 +32,8 @@
       </td>
       <td class="muted when"><time datetime="{{ when.isoformat() }}" title="created {{ job.created_at.strftime('%Y-%m-%d %H:%M') }}Z{% if job.finished_at %} · finished {{ job.finished_at.strftime('%Y-%m-%d %H:%M') }}Z{% endif %}">{{ when | ago }}</time></td>
       <td class="actions">
-        {% if job.status in RETRYABLE %}<button id="retry-{{ job.id }}" hx-post="/activity/jobs/{{ job.id }}/retry?view={{ view }}" hx-target="#jobs">Retry</button>{% endif %}
-        {% if job.status in CANCELLABLE %}<button id="cancel-{{ job.id }}" class="secondary outline" hx-post="/activity/jobs/{{ job.id }}/cancel?view={{ view }}" hx-target="#jobs" hx-confirm="Stop job #{{ job.id }} and mark it cancelled?">Cancel</button>{% endif %}
+        {% if job.status in RETRYABLE %}<button id="retry-{{ job.id }}" {% if job.status.value == "cancelled" %}class="secondary outline" {% endif %}hx-post="/activity/jobs/{{ job.id }}/retry?view={{ view }}" hx-target="#jobs">Retry</button>{% endif %}
+        {% if job.status in CANCELLABLE and not (job.status.value == "failed" and not job.next_retry_at) %}<button id="cancel-{{ job.id }}" class="secondary outline" hx-post="/activity/jobs/{{ job.id }}/cancel?view={{ view }}" hx-target="#jobs" hx-confirm="Stop job #{{ job.id }} and mark it cancelled?">Cancel</button>{% endif %}
         {% if job.status in DELETABLE and not (job.status.value == "failed" and job.next_retry_at) %}<button id="delete-{{ job.id }}" class="secondary outline" hx-post="/activity/jobs/{{ job.id }}/delete?view={{ view }}" hx-target="#jobs" hx-confirm="Delete job #{{ job.id }}? Only its staging folder goes; a file already imported into {{ job.connection.name }} stays." title="Delete this job and its staging folder">Delete</button>{% endif %}
       </td>
     </tr>

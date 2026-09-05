@@ -66,7 +66,9 @@ def test_activity_page_and_rows(client: TestClient) -> None:
     assert "&lt;b&gt;Vid&lt;/b&gt;" in r.text, "video title is escaped"
     assert "HTTP 500: &lt;boom&gt;" in r.text, "error text shown verbatim (escaped)"
     assert f'hx-post="/activity/jobs/{job_id}/retry?view=failed"' in r.text
-    assert f'hx-post="/activity/jobs/{job_id}/cancel?view=failed"' in r.text
+    assert f'hx-post="/activity/jobs/{job_id}/cancel?view=failed"' not in r.text, (
+        "no retry is scheduled, so there is nothing to call off: Cancel would only relabel it"
+    )
     # an empty view says what is empty; the advice to queue something belongs to "all"
     done = client.get("/activity/rows?view=done").text
     assert "Nothing finished yet." in done and "Queue one from" not in done
@@ -2543,7 +2545,7 @@ def test_subscription_header_says_what_the_last_scan_did(client: TestClient) -> 
         ({"matched": 0, "created": 0, "unmatched": 0, "error": None}, "nothing new"),
         (
             {"matched": 0, "created": 0, "unmatched": 0, "error": "boom"},
-            '<span class="bad">failed</span>',
+            '<span class="bad" title="boom">failed: boom</span>',
         ),
     ):
         with client.app.state.session_factory() as s:
@@ -2895,3 +2897,92 @@ def test_head_declares_the_dark_chrome_and_settings_sections_are_h2(client: Test
     assert '<h2 class="section">Connections</h2>' in settings and "<h3" not in settings, (
         "a section heading is the level under the page's h1, not a skipped one"
     )
+
+
+def test_rejected_settings_speak_the_forms_language(client: TestClient) -> None:
+    client.post("/api/connections", json=SONARR)
+    r = client.post(
+        "/settings/connections",
+        data={
+            "kind": "sonarr",
+            "name": "",
+            "url": "not a url",
+            "api_key": "k",
+            "staging_path_remote": "",
+        },
+    )
+    assert r.status_code == 400
+    page = r.text
+    assert "Name: String should have at least 1 character" in page
+    assert "URL: url must start with http:// or https://" in page
+    assert "Staging path: String should have at least 1 character" in page
+    assert "input_type" not in page and "pydantic.dev" not in page, "no developer dump"
+    assert page.count('class="notice bad"') == 1
+    assert page.index("Add a connection") < page.index('class="notice bad"'), (
+        "the error sits in the panel of the form that failed, not at the top of the section"
+    )
+    assert 'value="not a url"' in page, "what was typed survives"
+    r = client.post(
+        "/settings/downloads",
+        data={
+            "scan_interval_minutes": "15",
+            "concurrency": "2",
+            "scan_video_limit": "50",
+            "job_retention_days": "0",
+            "default_format": "best",
+            "merge_container": "mkv",
+            "cookies_path": "",
+            "ytdlp_extra_opts": "{not json",
+            "subtitles_langs": "",
+            "subtitles_auto": "0",
+            "audio_language": "eng",
+            "sonarr_tag": "",
+        },
+    )
+    assert (
+        r.status_code == 400
+        and "Extra yt-dlp options (ytdlp_extra_opts) is not valid JSON" in r.text
+    )
+
+
+def test_activity_offers_only_the_actions_that_do_something(client: TestClient) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from outriggarr.db.models import TargetKind
+
+    conn_id = client.post("/api/connections", json=SONARR).json()["id"]
+    now = datetime.now(UTC)
+    with client.app.state.session_factory() as s:
+        for vid, status, retry in (
+            ("r", JobStatus.failed, now + timedelta(hours=1)),
+            ("p", JobStatus.failed, None),
+            ("c", JobStatus.cancelled, None),
+        ):
+            s.add(
+                Job(
+                    connection_id=conn_id,
+                    target_kind=TargetKind.episode,
+                    series_id=5,
+                    episode_ids=[1],
+                    target_key=f"episode:5:{vid}",
+                    video_id=vid,
+                    video_url=f"https://y/{vid}",
+                    video_title=vid,
+                    target_label=f"Show S01E01 - {vid}",
+                    status=status,
+                    next_retry_at=retry,
+                    error="boom",
+                )
+            )
+        s.commit()
+        ids = {j.video_id: j.id for j in s.query(Job).all()}
+    page = client.get("/activity").text
+    assert f'id="cancel-{ids["r"]}"' in page, "a retry that is still scheduled can be called off"
+    assert f'id="cancel-{ids["p"]}"' not in page, (
+        "nothing is scheduled: Cancel would only relabel it"
+    )
+    assert f'id="retry-{ids["p"]}"' in page and "Delete" in page
+    assert f'<button id="retry-{ids["c"]}" class="secondary outline"' in page, (
+        "the user stopped this one: its Retry reads as text, not as the row's call to action"
+    )
+    assert f'<button id="retry-{ids["r"]}" hx-post' in page, "a failed job's Retry stays primary"

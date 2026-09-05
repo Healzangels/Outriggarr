@@ -9,7 +9,7 @@
 <section id="connections">
 <h2 class="section">Connections</h2>
 {% if saved == "connection" %}<p class="notice" role="status" aria-live="polite">Connection saved{% if request.query_params.get("test") %}; testing it now, the result shows on its card{% endif %}.</p>{% endif %}
-{% if conn_error and failed_connection_id is none %}<p class="notice bad">{{ conn_error }}</p>{% endif %}
+{% if conn_error and failed_connection_id is none and not submitted %}<p class="notice bad">{{ conn_error }}</p>{% endif %}
 {% for c in connections %}{% set f = (submitted if failed_connection_id == c.id else {}) %}
 <article class="card">
   <header><span class="badge badge-kind">{{ c.kind.value }}</span> {{ c.name }} <span class="muted">· {{ c.url }}</span>{% if not c.enabled %} <span class="badge badge-off">disabled</span>{% endif %}</header>
@@ -40,6 +40,7 @@
 <details class="panel" {% if not connections or f %}open{% endif %}>
   <summary>Add a connection <span class="muted">· Sonarr or Radarr</span></summary>
   <article class="card">
+  {% if conn_error and failed_connection_id is none and submitted %}<p class="notice bad">Not added: {{ conn_error }}</p>{% endif %}
   <form method="post" action="/settings/connections">
     <div class="grid">
       <label>App<select name="kind">{% for k in kinds %}<option value="{{ k }}" {% if k == f.get("kind") %}selected{% endif %}>{{ k }}</option>{% endfor %}</select></label>

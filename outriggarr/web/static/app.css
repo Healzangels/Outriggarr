@@ -221,6 +221,7 @@ details.error { margin: .25rem 0 0; }
 details.error[open] > summary { margin-bottom: .25rem; }
 details.error pre { white-space: pre-wrap; max-width: 60ch; margin: .25rem 0 0; }
 details.error summary { display: block; max-width: 48ch; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+details.error > summary.bad { color: var(--o-bad); } details.error > summary.warn { color: var(--o-warn); }  /* Pico colours every summary itself, at a specificity a bare .bad/.warn never beat: a failed job's error read as plain text */
 /* the plain-words reading of a failed job's error, under the verbatim text */
 .cause { display: block; color: var(--o-muted); font-size: .88em; max-width: 60ch; margin-top: .25rem; }
 .cause::before { content: "Likely cause: "; color: var(--pico-color); }
