@@ -240,7 +240,7 @@ details.error summary { display: block; max-width: 48ch; white-space: nowrap; ov
 /* footer */
 /* a quiet status strip: probes carry a dot in their colour, links underline on hover, and the
    help affordance is faint (Pico's tooltip opens on hover and on focus, so a tap or Tab reaches it) */
-td a.same-title { color: var(--o-muted); font-style: italic; }  /* the Video column says it once when it would repeat the Episode column */
+td .same-title { color: var(--o-muted); font-style: italic; }  /* the Video column says it once when it would repeat the Episode column */
 footer .ok { color: var(--o-muted); }
 footer [data-tooltip] { border-bottom: 1px dotted #424753; cursor: help; }
 footer a { text-decoration: underline; text-decoration-color: transparent; }

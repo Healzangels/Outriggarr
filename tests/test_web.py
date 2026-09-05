@@ -1892,6 +1892,64 @@ def test_same_title_only_for_an_identical_title() -> None:
     assert not same_title("Kill Tony S2026E33 - #783 - GARY OWEN", "KT #783 - GARY OWEN")
     assert not same_title("Show S01E01", "anything"), "no title part to compare"
     assert not same_title(None, "x") and not same_title("Show S01E01 - x", None)
+    from outriggarr.web.pages import titles_match
+
+    assert titles_match("Seven Spicy Wings", "seven spicy wings!")
+    assert not titles_match("", "x") and not titles_match("x", None)
+    assert not titles_match("...", "!!!"), (
+        "two titles that normalise to nothing are not the same title"
+    )
+
+
+def test_recent_jobs_say_same_title_once(client: TestClient) -> None:
+    from outriggarr.db.models import TargetKind
+
+    _seed_series(client)
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={"connection_id": 1, "series_id": 5, "source_url": "https://www.youtube.com/@hotones"},
+    ).json()["id"]
+    with client.app.state.session_factory() as s:
+        for vid, label, title in (
+            ("same", "Hot Ones S30E07 - Seven Spicy Wings", "Seven Spicy Wings"),
+            ("more", "Hot Ones S30E08 - Eight Spicy Wings", "Eight Spicy Wings | Hot Ones"),
+        ):
+            s.add(
+                Job(
+                    connection_id=1,
+                    subscription_id=sub_id,
+                    target_kind=TargetKind.episode,
+                    series_id=5,
+                    episode_ids=[int(vid == "more") + 7],
+                    target_key=f"episode:5:{vid}",
+                    video_id=vid,
+                    video_url=f"https://y/{vid}",
+                    video_title=title,
+                    target_label=label,
+                )
+            )
+        s.commit()
+    recent = client.get(f"/subscriptions/{sub_id}/recent").text
+    assert (
+        'class="truncate same-title" '
+        'title="The video is titled as the episode is: Seven Spicy Wings">same title</span>'
+        in recent
+    )
+    assert ">Seven Spicy Wings</span>" not in recent
+    assert ">Eight Spicy Wings | Hot Ones</span>" in recent, "a title that says more stays in full"
+    # the preview's matched table says it the same way
+    from outriggarr.source import VideoRef
+
+    client.app.state.source.recent = [
+        VideoRef("a", "Six Spicy Wings | Hot Ones", "https://y/a", 1, 1, None),
+        VideoRef("c", "Seven Spicy Wings", "https://y/c", 1, 3, None),
+    ]
+    prev = client.get(f"/subscriptions/{sub_id}/preview").text
+    assert (
+        'class="truncate same-title" '
+        'title="The video is titled as the episode is: Seven Spicy Wings">same title</a>' in prev
+    )
+    assert ">Six Spicy Wings | Hot Ones</a>" in prev
 
 
 def test_video_column_says_same_title_once(client: TestClient) -> None:

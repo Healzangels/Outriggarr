@@ -167,6 +167,14 @@ def ago(dt: datetime | None, now: datetime | None = None, tz: tzinfo | None = No
 _LABEL_TITLE = re.compile(r"\sS\d+E\d+(?:-E\d+)?\s-\s(.+)$")
 
 
+def titles_match(episode_title: str | None, video_title: str | None) -> bool:
+    """True when the two titles are the same words (`normalise_title`); a blank never matches."""
+    if not episode_title or not video_title:
+        return False
+    want = normalise_title(episode_title)
+    return bool(want) and want == normalise_title(video_title)
+
+
 def same_title(target_label: str | None, video_title: str | None) -> bool:
     """True when the video is titled exactly as the episode, so a table can say
     "same title" once instead of printing it twice on the row. Only an identical
@@ -176,9 +184,7 @@ def same_title(target_label: str | None, video_title: str | None) -> bool:
     if not target_label or not video_title:
         return False
     m = _LABEL_TITLE.search(target_label)
-    if not m:
-        return False
-    return normalise_title(m.group(1)) == normalise_title(video_title)
+    return bool(m) and titles_match(m.group(1), video_title)
 
 
 templates.env.filters["ago"] = ago
@@ -248,6 +254,7 @@ def _code(season: int, episode: int) -> str:
 templates.env.globals["tier_label"] = tier_label
 templates.env.globals["tier_help"] = tier_help
 templates.env.globals["same_title"] = same_title
+templates.env.globals["titles_match"] = titles_match
 # pages re-rendered on a form error do not recompute the scan timing; the header simply omits it
 templates.env.globals.update(next_scan=None, next_scans={}, warning=None)
 
