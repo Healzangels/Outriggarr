@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import html
 import logging
+import re
 import shutil
 from datetime import UTC, date, datetime, timedelta, tzinfo
 from pathlib import Path
@@ -137,23 +138,47 @@ def day_label(dt: datetime | None, now: datetime | None = None, tz: tzinfo | Non
     return dt.strftime("%a %-d %b" if day.year == today.year else "%a %-d %b %Y")
 
 
-def ago(dt: datetime | None) -> str:
-    """'3 min ago' / 'in 2 hr' — coarse, for tables; the exact time goes in a title attr."""
+def ago(dt: datetime | None, now: datetime | None = None, tz: tzinfo | None = None) -> str:
+    """'3 min ago' / 'in 2 hr' — coarse, for tables; the exact time goes in a title attr.
+    Days are calendar days in the container's local time, the same days `day_label`
+    groups by: a Thursday-night job read on Saturday is "2 days ago" under its
+    "Thu 3 Sep" header, not the "1 day ago" that flooring 44 hours would say."""
     if dt is None:
         return ""
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=UTC)
-    delta = datetime.now(UTC) - dt
+    now = now or datetime.now(UTC)
+    delta = now - dt
     future = delta.total_seconds() < 0
     secs = abs(int(delta.total_seconds()))
     if secs < 60:
         return "in under a minute" if future else "just now"
-    for unit, size in (("day", 86400), ("hr", 3600), ("min", 60)):
+    if secs >= 86400:
+        n = abs((now.astimezone(tz).date() - dt.astimezone(tz).date()).days)
+        label = f"{n} day{'s' if n != 1 else ''}"
+        return f"in {label}" if future else f"{label} ago"
+    for unit, size in (("hr", 3600), ("min", 60)):
         if secs >= size:
             n = secs // size
-            label = f"{n} {unit}{'s' if unit == 'day' and n != 1 else ''}"
-            return f"in {label}" if future else f"{label} ago"
+            return f"in {n} {unit}" if future else f"{n} {unit} ago"
     return "just now"
+
+
+_LABEL_TITLE = re.compile(r"\sS\d+E\d+(?:-E\d+)?\s-\s(.+)$")
+
+
+def same_title(target_label: str | None, video_title: str | None) -> bool:
+    """True when the video is titled exactly as the episode, so a table can say
+    "same title" once instead of printing it twice on the row. Only an identical
+    title counts: a video that merely contains the episode's title may carry the
+    difference that shows a wrong match ("Part 1" vs "Part 1 and 2"), so it is
+    shown in full."""
+    if not target_label or not video_title:
+        return False
+    m = _LABEL_TITLE.search(target_label)
+    if not m:
+        return False
+    return normalise_title(m.group(1)) == normalise_title(video_title)
 
 
 templates.env.filters["ago"] = ago
@@ -222,6 +247,7 @@ def _code(season: int, episode: int) -> str:
 
 templates.env.globals["tier_label"] = tier_label
 templates.env.globals["tier_help"] = tier_help
+templates.env.globals["same_title"] = same_title
 # pages re-rendered on a form error do not recompute the scan timing; the header simply omits it
 templates.env.globals.update(next_scan=None, next_scans={}, warning=None)
 

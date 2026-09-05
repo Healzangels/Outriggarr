@@ -27,7 +27,7 @@
         {% endif %}
         {% if not job.subscription_id %} <span class="chip" title="Queued from Grab, not by a subscription">by hand</span>{% endif %}
       </td>
-      <td><a href="{{ job.video_url }}" target="_blank" rel="noopener" class="truncate" title="{{ job.video_title or job.video_id }}">{{ job.video_title or job.video_id }}</a>
+      <td>{% if same_title(job.target_label, job.video_title) %}<a href="{{ job.video_url }}" target="_blank" rel="noopener" class="truncate same-title" title="The video is titled as the episode is: {{ job.video_title }}">same title</a>{% else %}<a href="{{ job.video_url }}" target="_blank" rel="noopener" class="truncate" title="{{ job.video_title or job.video_id }}">{{ job.video_title or job.video_id }}</a>{% endif %}
         {% if job.error %}<details class="error" id="err-{{ job.id }}-{{ job.attempts }}" hx-preserve><summary class="{{ 'warn' if job.status.value == 'done' else 'bad' }}">{{ job.error.splitlines()[0] | truncate(60) }}</summary><pre>{{ job.error }}</pre></details>{% if causes is defined and causes.get(job.id) %}<span class="cause">{{ causes[job.id] }}</span>{% endif %}{% endif %}
       </td>
       <td class="muted when"><time datetime="{{ when.isoformat() }}" title="created {{ job.created_at.strftime('%Y-%m-%d %H:%M') }}Z{% if job.finished_at %} · finished {{ job.finished_at.strftime('%Y-%m-%d %H:%M') }}Z{% endif %}">{{ when | ago }}</time></td>

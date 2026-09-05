@@ -44,7 +44,8 @@ article { border: 1px solid var(--o-border); }
 table, .chips, .count, dl.meta, ul.pins, footer, .page-header .sub { font-variant-numeric: tabular-nums; }
 /* three hover transitions; nothing in a polled table ever animates in or out */
 tbody tr, td.actions :is(button, a[role=button], a.muted), table a, .tabs a, footer a, .job-ref { transition: background-color .12s ease-out, color .12s ease-out, opacity .12s ease-out, border-color .12s ease-out; }
-main.container { max-width: 1200px; padding-top: 1.25rem; }
+body { min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column; }  /* the footer sits at the bottom of a short page (Grab is one input), not a third of the way down */
+main.container { max-width: 1200px; padding-top: 1.25rem; flex: 1 0 auto; }
 nav.container { padding-top: .75rem; padding-bottom: .25rem; flex-wrap: wrap; gap: 0 .5rem; border-bottom: 1px solid var(--o-border); }
 nav.container ul { flex-wrap: wrap; }
 /* a quiet nav: body-coloured links, the current page white with the accent as its rule */
@@ -239,6 +240,7 @@ details.error summary { display: block; max-width: 48ch; white-space: nowrap; ov
 /* footer */
 /* a quiet status strip: probes carry a dot in their colour, links underline on hover, and the
    help affordance is faint (Pico's tooltip opens on hover and on focus, so a tap or Tab reaches it) */
+td a.same-title { color: var(--o-muted); font-style: italic; }  /* the Video column says it once when it would repeat the Episode column */
 footer .ok { color: var(--o-muted); }
 footer [data-tooltip] { border-bottom: 1px dotted #424753; cursor: help; }
 footer a { text-decoration: underline; text-decoration-color: transparent; }

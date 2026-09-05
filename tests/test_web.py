@@ -1850,13 +1850,90 @@ def test_ago_units_read_evenly() -> None:
 
     from outriggarr.web.pages import ago
 
-    now = datetime.now(UTC)
-    assert ago(now - timedelta(minutes=12)) == "12 min ago"
-    assert ago(now - timedelta(hours=16)) == "16 hr ago"
-    assert ago(now - timedelta(days=1, hours=2)) == "1 day ago"
-    assert ago(now - timedelta(days=3)) == "3 days ago"
-    assert ago(now + timedelta(hours=2, minutes=1)) == "in 2 hr"
-    assert ago(now + timedelta(days=2, minutes=1)) == "in 2 days"
+    now = datetime(2026, 9, 5, 18, 40, tzinfo=UTC)  # a Saturday evening
+    assert ago(now - timedelta(minutes=12), now=now, tz=UTC) == "12 min ago"
+    assert ago(now - timedelta(hours=16), now=now, tz=UTC) == "16 hr ago"
+    assert ago(now - timedelta(days=3), now=now, tz=UTC) == "3 days ago"
+    assert ago(now + timedelta(hours=2, minutes=1), now=now, tz=UTC) == "in 2 hr"
+    assert ago(now + timedelta(days=2, minutes=1), now=now, tz=UTC) == "in 2 days"
+    assert ago(datetime.now(UTC) - timedelta(minutes=12)) == "12 min ago", "the clock defaults"
+
+
+def test_ago_counts_the_same_days_the_activity_headers_do() -> None:
+    from datetime import UTC, datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    from outriggarr.web.pages import ago, day_label
+
+    now = datetime(2026, 9, 5, 18, 40, tzinfo=UTC)  # Saturday
+    thursday_night = datetime(2026, 9, 3, 22, 47, tzinfo=UTC)  # 44 h back
+    # flooring 44 h says "1 day ago", which under a "Thu 3 Sep" header on a
+    # Saturday reads as Friday; the calendar says two days
+    assert day_label(thursday_night, now=now, tz=UTC) == "Thu 3 Sep"
+    assert ago(thursday_night, now=now, tz=UTC) == "2 days ago"
+    assert ago(datetime(2026, 9, 4, 2, 0, tzinfo=UTC), now=now, tz=UTC) == "1 day ago"
+    assert ago(now + timedelta(hours=26), now=now, tz=UTC) == "in 1 day"
+    # the days are the container's local days, as day_label's are
+    ny = ZoneInfo("America/New_York")
+    late = datetime(2026, 9, 5, 3, 0, tzinfo=UTC)  # Friday 23:00 in New York
+    assert ago(thursday_night, now=late, tz=UTC) == "2 days ago"
+    assert ago(thursday_night, now=late, tz=ny) == "1 day ago"
+
+
+def test_same_title_only_for_an_identical_title() -> None:
+    from outriggarr.web.pages import same_title
+
+    assert same_title("Scam School S01E05 - How to Win a Bar Bet", "How to Win a Bar Bet!")
+    assert same_title("A - B S01E02 - Title", "Title"), "a dash in the series name is not the split"
+    assert same_title("Show S01E01-E02 - Two Parts", "Two Parts"), "a multi-episode code"
+    assert not same_title(
+        "Hot Ones S30E07 - Penélope Cruz Laughs", "Penélope Cruz Laughs While Eating Spicy Wings"
+    ), "containing is not the same: the extra words may be what shows a wrong match"
+    assert not same_title("Kill Tony S2026E33 - #783 - GARY OWEN", "KT #783 - GARY OWEN")
+    assert not same_title("Show S01E01", "anything"), "no title part to compare"
+    assert not same_title(None, "x") and not same_title("Show S01E01 - x", None)
+
+
+def test_video_column_says_same_title_once(client: TestClient) -> None:
+    conn_id = client.post("/api/connections", json=SONARR).json()["id"]
+
+    def post(label: str, title: str, vid: str, ep: int) -> None:
+        r = client.post(
+            "/api/jobs",
+            json=[
+                {
+                    "connection_id": conn_id,
+                    "target": {
+                        "kind": "episode",
+                        "series_id": 5,
+                        "episode_ids": [ep],
+                        "label": label,
+                    },
+                    "video": {
+                        "url": f"https://youtube.invalid/watch?v={vid}",
+                        "id": vid,
+                        "title": title,
+                    },
+                }
+            ],
+        )
+        assert r.status_code in (200, 201), r.text
+
+    post("Scam School S01E05 - How to Win a Bar Bet", "How to Win a Bar Bet!", "same1", 5)
+    post(
+        "Hot Ones S30E07 - Penélope Cruz Laughs",
+        "Penélope Cruz Laughs While Eating Spicy Wings",
+        "more2",
+        7,
+    )
+    page = client.get("/activity").text
+    assert ">same title</a>" in page and 'href="https://youtube.invalid/watch?v=same1"' in page, (
+        "the link stays; its text does not repeat the Episode column"
+    )
+    assert ">How to Win a Bar Bet!</a>" not in page
+    assert ">Penélope Cruz Laughs While Eating Spicy Wings</a>" in page, (
+        "a title that says more is the evidence and stays in full"
+    )
 
 
 def test_tier_label_speaks_the_page_language() -> None:
