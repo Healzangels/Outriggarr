@@ -1880,7 +1880,7 @@ def test_ago_counts_the_same_days_the_activity_headers_do() -> None:
     assert ago(thursday_night, now=late, tz=ny) == "1 day ago"
 
 
-def test_same_title_only_for_an_identical_title() -> None:
+def test_same_title_ignores_only_the_channels_own_prefix() -> None:
     from outriggarr.web.pages import same_title
 
     assert same_title("Scam School S01E05 - How to Win a Bar Bet", "How to Win a Bar Bet!")
@@ -1889,7 +1889,8 @@ def test_same_title_only_for_an_identical_title() -> None:
     assert not same_title(
         "Hot Ones S30E07 - Penélope Cruz Laughs", "Penélope Cruz Laughs While Eating Spicy Wings"
     ), "containing is not the same: the extra words may be what shows a wrong match"
-    assert not same_title("Kill Tony S2026E33 - #783 - GARY OWEN", "KT #783 - GARY OWEN")
+    kt = same_title("Kill Tony S2026E33 - #783 - GARY OWEN", "KT #783 - GARY OWEN")
+    assert kt and "“KT” prefix: KT #783 - GARY OWEN" in kt, "the channel's initials are its tag"
     assert not same_title("Show S01E01", "anything"), "no title part to compare"
     assert not same_title(None, "x") and not same_title("Show S01E01 - x", None)
     from outriggarr.web.pages import titles_match

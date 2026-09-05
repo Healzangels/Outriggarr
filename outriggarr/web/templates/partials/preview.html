@@ -41,7 +41,7 @@
     <tr>
       <td>{% if not m.job_id %}<input type="checkbox" name="episode_id" value="{{ m.episode_id }}" aria-label="download {{ m.code }}">{% endif %}</td>
       <td><strong>{{ m.code }}</strong> {{ m.title }}<span class="two-line muted">{{ m.air_date or "" }}</span></td>
-      <td>{% if titles_match(m.title, m.video_title) %}<a href="{{ m.video_url }}" target="_blank" rel="noopener" class="truncate same-title" title="The video is titled as the episode is: {{ m.video_title }}">same title</a>{% else %}<a href="{{ m.video_url }}" target="_blank" rel="noopener" class="truncate" title="{{ m.video_title }}">{{ m.video_title }}</a>{% endif %}<span class="two-line muted mono">{{ m.video_id }}</span></td>
+      <td>{% set note = titles_match(m.title, m.video_title, sub.title) %}{% if note %}<a href="{{ m.video_url }}" target="_blank" rel="noopener" class="truncate same-title" title="{{ note }}">same title</a>{% else %}<a href="{{ m.video_url }}" target="_blank" rel="noopener" class="truncate" title="{{ m.video_title }}">{{ m.video_title }}</a>{% endif %}<span class="two-line muted mono">{{ m.video_id }}</span></td>
       <td><span class="chip">{{ tier_label(m.tier if m.strategy == "title" else m.strategy) }}</span></td>
       {% if show_job %}<td>{% if m.job_id %}<a href="/activity#job-{{ m.job_id }}" class="job-ref">#{{ m.job_id }}</a>{% elif m.skipped %}<span class="muted">{{ m.skipped }}</span>{% elif report.dry_run and m.auto %}<span class="muted nowrap">queues on the next scan</span>{% endif %}</td>{% endif %}
     </tr>

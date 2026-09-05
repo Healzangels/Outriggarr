@@ -165,26 +165,59 @@ def ago(dt: datetime | None, now: datetime | None = None, tz: tzinfo | None = No
 
 
 _LABEL_TITLE = re.compile(r"\sS\d+E\d+(?:-E\d+)?\s-\s(.+)$")
+_SEPARATORS = " -:|–—"
 
 
-def titles_match(episode_title: str | None, video_title: str | None) -> bool:
-    """True when the two titles are the same words (`normalise_title`); a blank never matches."""
+def _series_affix(series: str) -> re.Pattern[str] | None:
+    """A leading series name, or its initials for a multi-word name (Kill Tony → KT),
+    followed by a separator or a space: the channel's own tag, not a difference."""
+    words = [w for w in series.split() if w[0].isalnum()]
+    if not words:
+        return None
+    forms = {series.strip()}
+    if len(words) > 1:
+        forms.add("".join(w[0] for w in words))
+    alts = "|".join(re.escape(f) for f in sorted(forms, key=len, reverse=True))
+    return re.compile(rf"^\s*(?:{alts})\s*[-:|–—]?\s+", re.IGNORECASE)
+
+
+def titles_match(
+    episode_title: str | None, video_title: str | None, series: str | None = None
+) -> str | None:
+    """Why a table may say "same title" instead of printing the video's — the tooltip
+    text — or None when the two titles differ. The same words (`normalise_title`)
+    count, and so does a leading series name or initialism on the video (Kill Tony's
+    "KT #783 - …"), which the note names. A trailing tag ("… | Hot Ones") does not:
+    the matcher rates that "title contains" and the row may need a look, so the
+    column keeps showing what differs."""
     if not episode_title or not video_title:
-        return False
+        return None
     want = normalise_title(episode_title)
-    return bool(want) and want == normalise_title(video_title)
+    if not want:
+        return None
+    if want == normalise_title(video_title):
+        return f"The video is titled as the episode is: {video_title}"
+    affix = _series_affix(series) if series else None
+    m = affix.match(video_title) if affix else None
+    if m and want == normalise_title(video_title[m.end() :]):
+        tag = m.group(0).strip(_SEPARATORS)
+        return (
+            f"The video is titled as the episode is, after the channel's “{tag}” prefix: "
+            f"{video_title}"
+        )
+    return None
 
 
-def same_title(target_label: str | None, video_title: str | None) -> bool:
-    """True when the video is titled exactly as the episode, so a table can say
-    "same title" once instead of printing it twice on the row. Only an identical
-    title counts: a video that merely contains the episode's title may carry the
-    difference that shows a wrong match ("Part 1" vs "Part 1 and 2"), so it is
-    shown in full."""
+def same_title(target_label: str | None, video_title: str | None) -> str | None:
+    """`titles_match` for a job, whose label is "Series SxxEyy - Title": the title part
+    is found by the episode code (so a dash in a series name is not the split) and
+    what precedes the code names the series."""
     if not target_label or not video_title:
-        return False
+        return None
     m = _LABEL_TITLE.search(target_label)
-    return bool(m) and titles_match(m.group(1), video_title)
+    if not m:
+        return None
+    return titles_match(m.group(1), video_title, target_label[: m.start()].strip())
 
 
 templates.env.filters["ago"] = ago
