@@ -12,7 +12,7 @@ RUN curl -fsSL "https://github.com/Brainicism/bgutil-ytdlp-pot-provider/archive/
     && cd server && npm ci && npx tsc && npm prune --omit=dev && rm -rf /root/.npm \
     && node build/generate_once.js --help >/dev/null
 
-FROM python:3.12-slim
+FROM python:3.12-slim AS runtime
 
 ARG DENO_VERSION=v2.4.5
 RUN apt-get update \
