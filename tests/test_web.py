@@ -1900,6 +1900,13 @@ def test_same_title_ignores_only_the_channels_own_prefix() -> None:
     assert not titles_match("...", "!!!"), (
         "two titles that normalise to nothing are not the same title"
     )
+    assert titles_match("Title", "Kill Tony - Title", "Kill Tony"), "the full name too"
+    assert titles_match("Title", "kill tony: Title", "Kill Tony")
+    assert not titles_match("#783 - X", "KT #783 - X"), "no series named: no prefix to forgive"
+    assert not titles_match("Title", "KTown Title", "Kill Tony"), "initials need a separator"
+    assert not titles_match("Title", "KTTitle", "Kill Tony"), "the tag ends at a boundary"
+    assert not titles_match("Title", "Title | Kill Tony", "Kill Tony"), "a trailing tag stays"
+    assert not titles_match("Title", "M Title", "Monstrum"), "a one-word name has no initialism"
 
 
 def test_recent_jobs_say_same_title_once(client: TestClient) -> None:
@@ -1942,7 +1949,7 @@ def test_recent_jobs_say_same_title_once(client: TestClient) -> None:
     from outriggarr.source import VideoRef
 
     client.app.state.source.recent = [
-        VideoRef("a", "Six Spicy Wings | Hot Ones", "https://y/a", 1, 1, None),
+        VideoRef("a", "HO Six Spicy Wings", "https://y/a", 1, 1, None),
         VideoRef("c", "Seven Spicy Wings", "https://y/c", 1, 3, None),
     ]
     prev = client.get(f"/subscriptions/{sub_id}/preview").text
@@ -1950,7 +1957,11 @@ def test_recent_jobs_say_same_title_once(client: TestClient) -> None:
         'class="truncate same-title" '
         'title="The video is titled as the episode is: Seven Spicy Wings">same title</a>' in prev
     )
-    assert ">Six Spicy Wings | Hot Ones</a>" in prev
+    assert '“HO” prefix: HO Six Spicy Wings">same title</a>' in prev, "the preview knows the series"
+    picks = prev.split('<tbody id="match-picks">', 1)[1].split("</tbody>", 1)[0]
+    assert ">HO Six Spicy Wings</a>" not in picks, (
+        "the listing panel may show it; the match row does not"
+    )
 
 
 def test_video_column_says_same_title_once(client: TestClient) -> None:
@@ -1985,6 +1996,7 @@ def test_video_column_says_same_title_once(client: TestClient) -> None:
         "more2",
         7,
     )
+    post("Kill Tony S2026E33 - #783 - GARY OWEN", "KT #783 - GARY OWEN", "kt3", 33)
     page = client.get("/activity").text
     assert ">same title</a>" in page and 'href="https://youtube.invalid/watch?v=same1"' in page, (
         "the link stays; its text does not repeat the Episode column"
@@ -1993,6 +2005,8 @@ def test_video_column_says_same_title_once(client: TestClient) -> None:
     assert ">Penélope Cruz Laughs While Eating Spicy Wings</a>" in page, (
         "a title that says more is the evidence and stays in full"
     )
+    assert '“KT” prefix: KT #783 - GARY OWEN">same title</a>' in page, "the tooltip names the tag"
+    assert ">KT #783 - GARY OWEN</a>" not in page
 
 
 def test_tier_label_speaks_the_page_language() -> None:
