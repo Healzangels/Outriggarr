@@ -99,7 +99,10 @@ def test_grab_page_lists_enabled_connections(client: TestClient) -> None:
     )
     r = client.get("/grab")
     assert r.status_code == 200
-    assert "Sonarr (sonarr)" in r.text and "Off (" not in r.text
+    assert ">Sonarr</option>" in r.text and "(sonarr)" not in r.text, (
+        "the name already says the kind"
+    )
+    assert ">Off<" not in r.text and "Off (" not in r.text
     assert "grabApp()" in r.text and "/api/resolve" in r.text
     assert "No enabled connections" not in r.text
 
@@ -851,8 +854,7 @@ def test_matches_recheck_and_confirm_clear_the_review_list(client: TestClient) -
     assert (
         'aria-current="page">All<' in landing and 'aria-current="page">Needs a look' not in landing
     )
-    assert "Every match already has its length evidence" in landing
-    assert '<span class="muted">Every match already has its length evidence.</span>' in landing
+    assert '<span class="muted">Nothing left to recheck.</span>' in landing
     assert 'hx-post="/matches/recheck' not in landing, (
         "no dead disabled button; the reason stands in its place"
     )
@@ -2986,3 +2988,131 @@ def test_activity_offers_only_the_actions_that_do_something(client: TestClient) 
         "the user stopped this one: its Retry reads as text, not as the row's call to action"
     )
     assert f'<button id="retry-{ids["r"]}" hx-post' in page, "a failed job's Retry stays primary"
+    row = page.split(f'id="job-{ids["c"]}"', 1)[1].split("</tr>", 1)[0]
+    assert '<summary class="muted">boom</summary>' in row, (
+        "a cancelled row's note is quiet, not red"
+    )
+    with client.app.state.session_factory() as s:
+        s.add(
+            Job(
+                connection_id=conn_id,
+                target_kind=TargetKind.episode,
+                series_id=5,
+                episode_ids=[2],
+                target_key="episode:5:k",
+                video_id="k",
+                video_url="https://y/k",
+                video_title="k",
+                target_label="Show S01E02 - k",
+                status=JobStatus.cancelled,
+                error="cancelled",
+            )
+        )
+        s.commit()
+        kid = s.query(Job).filter_by(video_id="k").one().id
+    row = client.get("/activity").text.split(f'id="job-{kid}"', 1)[1].split("</tr>", 1)[0]
+    assert "<details" not in row, "the badge already says cancelled; no red line saying it again"
+
+
+def test_download_all_refreshes_the_header_scan_line(client: TestClient) -> None:
+    _seed_series(client)
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={"connection_id": 1, "series_id": 5, "source_url": "https://www.youtube.com/@hotones"},
+    ).json()["id"]
+    r = client.post(f"/subscriptions/{sub_id}/download")
+    assert r.status_code == 200
+    assert '<dd id="scan-line" hx-swap-oob="true">' in r.text, (
+        "a real scan moved the header: send it"
+    )
+    assert "just now" in r.text.split('id="scan-line"', 1)[1]
+    prev = client.get(f"/subscriptions/{sub_id}/preview").text
+    assert 'id="scan-line"' not in prev, "a dry run moves nothing: nothing to resend"
+    page = client.get(f"/subscriptions/{sub_id}").text
+    assert page.count('id="scan-line"') == 1 and "hx-swap-oob" not in page
+
+
+def test_matches_sentence_speaks_only_of_rows_it_shows(client: TestClient) -> None:
+    from datetime import UTC, datetime
+
+    from outriggarr.db.models import TargetKind
+
+    _seed_series(client)
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={"connection_id": 1, "series_id": 5, "source_url": "https://www.youtube.com/@hotones"},
+    ).json()["id"]
+    with client.app.state.session_factory() as s:
+        s.add(
+            Job(
+                connection_id=1,
+                subscription_id=sub_id,
+                target_kind=TargetKind.episode,
+                series_id=5,
+                episode_ids=[12],
+                target_key="episode:5:12",
+                video_id="q",
+                video_url="https://y/q",
+                video_title="Seven Spicy Wings | Hot Ones",
+                target_label="Hot Ones S30E07 - Seven Spicy Wings",
+                matched_by="contains",
+                reviewed_at=datetime.now(UTC),
+            )
+        )
+        s.commit()
+    # /matches falls back to the All view when nothing needs a look; ask for the review view itself
+    review = client.get("/matches?view=review").text
+    assert "Nothing needs a look." in review and "Nothing left to recheck." not in review, (
+        "an empty review view has no rows to vouch for"
+    )
+
+    def actions(page: str) -> str:  # the explainer paragraph also says "Recheck lengths"
+        return page.split('class="form-actions"', 1)[1].split("</div>", 1)[0]
+
+    everything = client.get("/matches?view=all").text
+    assert "Nothing left to recheck." in actions(everything), "a confirmed row is vouched for"
+    assert "Recheck lengths" not in actions(everything)
+    with client.app.state.session_factory() as s:
+        s.add(
+            Job(
+                connection_id=1,
+                subscription_id=sub_id,
+                target_kind=TargetKind.episode,
+                series_id=5,
+                episode_ids=[11],
+                target_key="episode:5:11",
+                video_id="u",
+                video_url="https://y/u",
+                video_title="Six Spicy Wings | Hot Ones",
+                target_label="Hot Ones S30E06 - Six Spicy Wings",
+                matched_by="contains",
+            )
+        )
+        s.commit()
+    everything = client.get("/matches?view=all").text
+    assert "Recheck lengths" in actions(everything) and "1 unchecked" in actions(everything)
+    assert "Nothing left to recheck." not in actions(everything)
+
+
+def test_duplicate_jobs_are_named_in_words(client: TestClient) -> None:
+    conn_id = client.post("/api/connections", json=SONARR).json()["id"]
+    first = _job(client, conn_id, "dup")
+    r = client.post(
+        "/api/jobs",
+        json=[
+            {
+                "connection_id": conn_id,
+                "target": {
+                    "kind": "episode",
+                    "series_id": 5,
+                    "episode_ids": [42],
+                    "label": "Show S01E02 - Two",
+                },
+                "video": {"url": "https://youtube.invalid/watch?v=dup", "id": "dup", "title": "x"},
+            }
+        ],
+    )
+    assert r.status_code == 409
+    detail = r.json()["detail"]
+    assert detail.startswith(f"1 of these already has a job that is not done — #{first} —")
+    assert "Retry or cancel it on Activity" in detail and "{'" not in detail, "no Python repr"

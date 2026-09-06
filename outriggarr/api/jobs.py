@@ -160,11 +160,25 @@ def create_jobs(body: list[JobIn], session: DbSession) -> list[Job]:
     except IntegrityError:
         session.rollback()
         existing = _find_duplicates(session, body)
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            f"duplicate job(s): {existing}; a job that is not done already exists for the "
-            "same connection, target and video (retry or cancel it instead)",
-        ) from None
+        ids = sorted(
+            {int(d["existing_job_id"]) for d in existing if d["existing_job_id"] is not None}
+        )
+        twice = sum(1 for d in existing if d["existing_job_id"] is None)
+        parts = []
+        if ids:
+            n = len(ids)
+            parts.append(
+                f"{n} of these already {'has' if n == 1 else 'have'} a job that is not done — "
+                f"{', '.join(f'#{i}' for i in ids)} — for the same target and video. "
+                f"Retry or cancel {'it' if n == 1 else 'them'} on Activity instead of queuing "
+                f"{'it' if n == 1 else 'them'} again."
+            )
+        if twice:
+            parts.append(
+                f"{twice} of these {'is' if twice == 1 else 'are'} listed twice in this request "
+                "(same target and video)."
+            )
+        raise HTTPException(status.HTTP_409_CONFLICT, " ".join(parts)) from None
     return jobs
 
 

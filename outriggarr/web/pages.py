@@ -1047,7 +1047,10 @@ def _preview_response(
     report,
     notice: str | None = None,
     notice_bad: bool = False,
+    scan_line: bool = False,
 ):
+    """scan_line: the response also carries the header's "Last scan" cell out of band —
+    a real scan moved it, and only the preview card is otherwise swapped."""
     sub = session.get(Subscription, report.subscription_id)
     # "this source may not carry the series" is only a fair reading for a subscription
     # that has never matched anything: one job on record is enough to drop the hint
@@ -1063,6 +1066,12 @@ def _preview_response(
             "notice": notice,
             "notice_bad": notice_bad,
             "has_history": has_history,
+            "scan_line": scan_line,
+            "next_scan": (
+                next_scan_text(sub.last_scan_at, int(get_setting(session, "scan_interval_minutes")))
+                if scan_line and sub.enabled
+                else None
+            ),
             **_date_fetch_context(request, session, sub, report),
         },
     )
@@ -1390,7 +1399,7 @@ async def subscription_download(
             if n
             else "Nothing to queue: no new matches."
         )
-    response = _preview_response(request, session, report, notice)
+    response = _preview_response(request, session, report, notice, scan_line=not report.error)
     if report.created_job_ids:
         response.headers["HX-Trigger"] = (
             "jobs-changed"  # the Episodes and Recent jobs cards refresh

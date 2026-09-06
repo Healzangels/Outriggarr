@@ -53,7 +53,9 @@ def test_duplicate_is_409_with_existing_id(client: TestClient) -> None:
     dup["target"]["episode_ids"] = [41, 42]
     r = client.post("/api/jobs", json=[dup])
     assert r.status_code == 409
-    assert f"'existing_job_id': {first['id']}" in r.json()["detail"]
+    assert f"#{first['id']}" in r.json()["detail"] and "{'" not in r.json()["detail"], (
+        "named, not dumped"
+    )
     assert len(client.get("/api/jobs").json()) == 1
 
     # a batch with one dup creates nothing
@@ -70,7 +72,7 @@ def test_duplicate_is_409_with_existing_id(client: TestClient) -> None:
 def test_batch_with_internal_duplicate_is_409(client: TestClient) -> None:
     conn_id = client.post("/api/connections", json=SONARR).json()["id"]
     r = client.post("/api/jobs", json=[episode_job(conn_id), episode_job(conn_id)])
-    assert r.status_code == 409
+    assert r.status_code == 409 and "listed twice in this request" in r.json()["detail"]
     assert client.get("/api/jobs").json() == []
 
 
@@ -173,7 +175,7 @@ def test_done_job_does_not_block_a_new_one_but_live_does(client: TestClient) -> 
             s.get(Job, first["id"]).status = JobStatus(st)
             s.commit()
         r = client.post("/api/jobs", json=[episode_job(conn_id)])
-        assert r.status_code == 409 and "retry or cancel" in r.json()["detail"]
+        assert r.status_code == 409 and "retry or cancel" in r.json()["detail"].lower()
     with client.app.state.session_factory() as s:
         s.get(Job, first["id"]).status = JobStatus.done
         s.commit()

@@ -36,7 +36,7 @@
       {% for p in format_presets %}<option value="{{ p.format }}" title="{{ p.note }}" {% if format_preset and p.key == format_preset.key %}selected{% endif %}>{{ p.label }}</option>{% endfor %}
       <option value="__custom__" {% if sub and sub.format and not format_preset %}selected{% endif %}>Custom (as typed)</option>
     </select>
-    <input id="format" type="text" name="format" value="{{ sub.format or '' if sub else '' }}">
+    <input id="format" type="text" name="format" value="{{ sub.format or '' if sub else '' }}" placeholder="blank = the global default">
   </div>
 </div>
 </details>

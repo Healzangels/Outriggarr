@@ -14,7 +14,7 @@
       <button type="submit" :aria-busy="resolving" :disabled="resolving">List videos</button>
     </fieldset>
   </form>
-  <p class="notice bad" role="alert" x-show="error" x-text="error"></p>
+  <p class="notice bad" role="alert" x-show="error && !videos.length" x-text="error"></p>
 
   <template x-if="videos.length">
     <div>
@@ -23,7 +23,7 @@
       <div class="grid">
         <label>Send to
           <select x-model.number="connectionId" @change="connectionChanged()">
-            {% for c in connections %}<option value="{{ c.id }}">{{ c.name }} ({{ c.kind.value }})</option>{% endfor %}
+            {% for c in connections %}<option value="{{ c.id }}">{{ c.name }}{% if c.kind.value not in c.name | lower %} ({{ c.kind.value }}){% endif %}</option>{% endfor %}
           </select>
         </label>
         <template x-if="kind === 'sonarr'">
@@ -85,7 +85,7 @@
                   </div>
                 </template>
               </td>
-              <td><span :class="rowStatus(row).warn ? 'warn' : (isReady(row) ? 'ok' : 'muted')" x-text="rowStatus(row).text"></span></td>
+              <td><span :class="rowStatus(row).warn ? 'warn' : ((isReady(row) || rowStatus(row).ok) ? 'ok' : 'muted')" x-text="rowStatus(row).text"></span></td>
             </tr>
           </template>
         </tbody>
@@ -167,6 +167,7 @@ function grabApp() {
     },
     pickMovie(row, m) { row.movieId = m.id; row.movieLabel = m.title + (m.year ? ` (${m.year})` : ''); row.movieQuery = row.movieLabel; row.movieResults = []; row.movieHasFile = m.has_file; if (m.has_file) row.include = false; },
     rowStatus(row) {
+      if (row.queued && !row.include) return { text: 'queued', warn: false, ok: true };
       if (!row.include) return { text: 'skipped', warn: false };
       if (this.kind === 'sonarr') {
         if (!this.series) return { text: 'pick a series', warn: true };
@@ -195,7 +196,7 @@ function grabApp() {
       try {
         const created = await this.api('POST', '/api/jobs', jobs);
         this.result = `Queued ${created.length} ${created.length === 1 ? 'job' : 'jobs'}. <a href="/activity">Open Activity</a>.`;
-        this.rows.forEach(r => { if (this.isReady(r)) r.include = false; });
+        this.rows.forEach(r => { if (this.isReady(r)) { r.include = false; r.queued = true; } });  // unticked so a second press cannot queue them twice; the row says what happened
       } catch (e) { this.error = e.message; }
       this.queueing = false;
     },

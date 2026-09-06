@@ -181,3 +181,4 @@
 <ol>{% for v in shown_videos %}<li>{% if v.title == v.id %}<span class="muted">unavailable video</span>{% else %}<a href="{{ v.url }}" target="_blank" rel="noopener">{{ v.title }}</a>{% endif %} <span class="muted mono">{{ v.id }}{% if v.upload_date %} · {{ v.upload_date }}{% elif v.approx_age %} · <span title="What the listing page says; the exact date needs a per-video fetch (Fetch upload dates)">~{{ v.approx_age }}</span>{% endif %}</span></li>{% endfor %}</ol>
 {% if report.videos | length > shown_videos | length %}<p class="muted">…and {{ report.videos | length - shown_videos | length }} more; the pin picker above still offers every one.</p>{% endif %}
 </details>
+{% if scan_line is defined and scan_line %}{% with oob=True %}{% include "partials/scan_line.html" %}{% endwith %}{% endif %}
