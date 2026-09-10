@@ -3134,7 +3134,7 @@ def test_preview_card_reads_as_a_record_after_a_real_scan(client: TestClient) ->
     assert 'id="tick-all"' not in picks and 'name="episode_id"' not in picks, (
         "nothing can be ticked: no selection column"
     )
-    assert "Nothing to queue: the scan queued its " in prev and 'class="job-ref">#' in prev
+    assert "Nothing to queue: the scan queued its " in prev and 'href="/activity#job-' in prev
     assert "every match already has a job" not in prev and "already have jobs" not in prev
     assert "had a job already" in prev
     page = client.get(f"/subscriptions/{sub_id}").text
