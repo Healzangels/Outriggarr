@@ -16,7 +16,7 @@
 {% if request.query_params.get("saved") %}<p class="notice" role="status" aria-live="polite">Subscription saved.</p>{% endif %}
 
 <article class="card">
-  <header>Match preview <span class="muted">· what the next scan would do</span></header>
+  <header>Match preview {% with report=preview_report %}{% include "partials/preview_kind.html" %}{% endwith %}</header>
   <div id="preview" hx-get="/subscriptions/{{ sub.id }}/preview" hx-trigger="load" hx-swap="innerHTML">
     <p class="muted" aria-busy="true">Listing the sources and matching…</p>
   </div>

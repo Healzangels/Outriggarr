@@ -217,7 +217,7 @@ def test_subscription_page_preview_scan_and_override(client: TestClient) -> None
     assert len(client.get("/api/jobs").json()) == 2
     again = client.post(f"/subscriptions/{sub_id}/download")
     assert "Nothing to queue" in again.text and "Download all" not in again.text
-    assert "already have jobs" in client.get(f"/subscriptions/{sub_id}/preview").text
+    assert "had a job already" in client.get(f"/subscriptions/{sub_id}/preview").text
 
     r = client.post(f"/subscriptions/{sub_id}/overrides/b/delete")
     assert r.status_code == 200 and "Pin removed: b" in r.text
@@ -3116,3 +3116,70 @@ def test_duplicate_jobs_are_named_in_words(client: TestClient) -> None:
     detail = r.json()["detail"]
     assert detail.startswith(f"1 of these already has a job that is not done — #{first} —")
     assert "Retry or cancel it on Activity" in detail and "{'" not in detail, "no Python repr"
+
+
+def test_preview_card_reads_as_a_record_after_a_real_scan(client: TestClient) -> None:
+    _seed_series(client)
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={"connection_id": 1, "series_id": 5, "source_url": "https://www.youtube.com/@hotones"},
+    ).json()["id"]
+    page = client.get(f"/subscriptions/{sub_id}").text
+    assert page.count('id="preview-kind"') == 1 and "what the next scan would do" in page
+    dl = client.post(f"/subscriptions/{sub_id}/download").text  # a real scan: it queues
+    assert "Queued 1 job" in dl or "Queued 2 jobs" in dl
+    prev = client.get(f"/subscriptions/{sub_id}/preview").text  # the cached real scan
+    assert 'id="preview-kind" class="muted" hx-swap-oob="true">· what the last scan did · ' in prev
+    picks = prev.split("<table", 1)[1].split("</table>", 1)[0]
+    assert 'id="tick-all"' not in picks and 'name="episode_id"' not in picks, (
+        "nothing can be ticked: no selection column"
+    )
+    assert "Nothing to queue: the scan queued its " in prev and 'class="job-ref">#' in prev
+    assert "every match already has a job" not in prev and "already have jobs" not in prev
+    assert "had a job already" in prev
+    page = client.get(f"/subscriptions/{sub_id}").text
+    assert "what the last scan did" in page and page.count('id="preview-kind"') == 1
+    assert "hx-swap-oob" not in page.split('id="preview-kind"', 1)[0]
+    dry = client.post(f"/subscriptions/{sub_id}/scan").text  # a dry run: a preview again
+    assert 'hx-swap-oob="true">· what the next scan would do' in dry
+    assert "had a job already" in dry and "0 had a job already" not in dry
+
+
+def test_date_button_waits_for_an_unmatched_episode(client: TestClient) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from outriggarr.arr.base import EpisodeRef
+    from outriggarr.source import VideoRef
+
+    _seed_series(client)
+    client.app.state.source.recent = [
+        VideoRef("a", "Six Spicy Wings", "https://y/a", 100, 1, None),
+        VideoRef("b", "Seven Spicy Wings", "https://y/b", 100, 2, None),
+    ]
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={
+            "connection_id": 1,
+            "series_id": 5,
+            "sources": ["https://www.youtube.com/@hotones"],
+            "strategies": ["title", "date"],
+        },
+    ).json()["id"]
+    prev = client.get(f"/subscriptions/{sub_id}/preview").text
+    assert "0 unmatched" in prev and "Fetch upload dates" not in prev, (
+        "everything matched: fetching dates would settle nothing"
+    )
+    assert "2 of these carry no upload date" in prev and ">fetch them now</button>" in prev
+    arr = client.app.state.arr_factory.by_url["http://sonarr-host:1234"]
+    arr.episodes_by_series[5].append(
+        EpisodeRef(
+            13, 30, 8, "Eight Spicy Wings", False, True, datetime.now(UTC) - timedelta(days=3)
+        )
+    )
+    prev = client.post(
+        f"/subscriptions/{sub_id}/scan"
+    ).text  # a page open reads the cache: list again
+    assert "1 unmatched" in prev and "Fetch upload dates" in prev and "2 undated" in prev
+    assert "of these carry no upload date" not in prev, (
+        "the button is back in the action row, said once"
+    )

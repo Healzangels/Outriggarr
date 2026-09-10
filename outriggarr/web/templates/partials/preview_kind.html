@@ -1,0 +1,2 @@
+{# the Match preview card's subtitle: a dry run is what the next scan would do; the last real scan is a record of what it did. The preview partial sends it again out of band, so the header follows whatever the card shows. #}
+<span id="preview-kind" class="muted"{% if oob is defined and oob %} hx-swap-oob="true"{% endif %}>· {% if report is defined and report and not report.dry_run %}what the last scan did · {{ report.scanned_at | ago }}{% else %}what the next scan would do{% endif %}</span>

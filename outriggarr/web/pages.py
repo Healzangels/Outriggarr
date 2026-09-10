@@ -1001,6 +1001,7 @@ def subscription_page(request: Request, subscription_id: int, session: DbSession
             "jobs": jobs,
             "error": None,
             "next_scan": next_scan_text(sub.last_scan_at, interval) if sub.enabled else None,
+            "preview_report": cached_report(sub),
             **_subscription_form_context(sub, session),
         },
     )
@@ -1038,6 +1039,9 @@ def _date_fetch_context(request: Request, session: Session, sub: Subscription, r
         "date_progress": p,
         "date_progress_text": p.summary() if show and p else "",
         "undated": undated,
+        # dates only ever settle an episode nothing else matched: with none unmatched the
+        # button is housekeeping, and it recedes into the listing instead of the action row
+        "dates_useful": report is not None and bool(report.unmatched),
     }
 
 

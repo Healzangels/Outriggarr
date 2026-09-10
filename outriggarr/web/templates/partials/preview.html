@@ -7,12 +7,12 @@
   {% if wanted %}<span class="chip {{ 'ok' if report.matches else 'zero' }}">{{ report.matches | length }} matched</span>
   <span class="chip {{ 'warn' if report.unmatched else 'zero' }}">{{ report.unmatched | length }} unmatched</span>
   {% if report.held %}<span class="chip warn" title="Matched, but something contradicts it: the video's length against the episode's runtime, or the video is one part of a split upload">{{ report.held | length }} held</span>{% endif %}
-  <span class="chip {{ '' if report.skipped_existing else 'zero' }}">{{ report.skipped_existing | length }} already have jobs</span>{% endif %}
+  <span class="chip {{ '' if report.skipped_existing else 'zero' }}" title="Wanted episodes that had a job before this scan, so they were not matched again">{{ report.skipped_existing | length }} had a job already</span>{% endif %}
   {% if sub.auto_download == "future" and queueable %}<span class="chip" title="Only episodes airing from {{ sub.created_at.strftime('%-d %b %Y') }} queue by themselves (auto-download: future episodes only); the other {{ queueable - auto_count }} aired before that, so use Download all or Download selected">{{ auto_count }} of {{ queueable }} would queue by itself</span>{% endif %}
 </p>
 <div class="form-actions">
   {% if queueable %}<button hx-post="/subscriptions/{{ sub.id }}/download" hx-vals='{"all": "1"}' hx-target="#preview" hx-indicator="#scan-busy" title="Queue every current match, whatever the auto-download setting">Download all {{ queueable }}</button>
-  <button id="download-selected" class="secondary" hx-post="/subscriptions/{{ sub.id }}/download" hx-include="#match-picks" hx-vals='{"selected": "1"}' hx-target="#preview" hx-indicator="#scan-busy" disabled title="Tick episodes in the Matches table first">Download selected <span class="count" id="selected-count" hidden>0</span></button>{% elif wanted %}<span class="muted">Nothing to queue{% if report.matches %}: every match already has a job{% endif %}.</span>{% endif %}
+  <button id="download-selected" class="secondary" hx-post="/subscriptions/{{ sub.id }}/download" hx-include="#match-picks" hx-vals='{"selected": "1"}' hx-target="#preview" hx-indicator="#scan-busy" disabled title="Tick episodes in the Matches table first">Download selected <span class="count" id="selected-count" hidden>0</span></button>{% elif wanted %}{% set queued = report.matches | selectattr("job_id") | map(attribute="job_id") | list %}<span class="muted">Nothing to queue{% if queued %}: the scan queued its {{ queued | length }} match{{ '' if queued | length == 1 else 'es' }} ({% for j in queued %}<a href="/activity#job-{{ j }}" class="job-ref">#{{ j }}</a>{{ ', ' if not loop.last }}{% endfor %}){% endif %}.</span>{% endif %}
   {% include "partials/date_fetch.html" %}
   <span id="scan-busy" class="htmx-indicator muted" aria-busy="true">working…</span>
   <span class="muted push-right" title="When the source was last listed. Refresh preview lists it again; the scheduler does too, every scan.">Listed {{ report.scanned_at | ago }}</span>
@@ -35,11 +35,11 @@
 <div class="table-wrap">
 <table>
   {% set show_job = report.matches | selectattr("job_id") | list or report.matches | selectattr("skipped") | list or (report.dry_run and auto_count) %}
-  <thead><tr><th><input type="checkbox" id="tick-all" aria-label="tick all"></th><th>Episode</th><th>Video</th><th>Matched by</th>{% if show_job %}<th>Job</th>{% endif %}</tr></thead>
+  <thead><tr>{% if queueable %}<th><input type="checkbox" id="tick-all" aria-label="tick all"></th>{% endif %}<th>Episode</th><th>Video</th><th>Matched by</th>{% if show_job %}<th>Job</th>{% endif %}</tr></thead>
   <tbody id="match-picks">
   {% for m in report.matches %}
     <tr>
-      <td>{% if not m.job_id %}<input type="checkbox" name="episode_id" value="{{ m.episode_id }}" aria-label="download {{ m.code }}">{% endif %}</td>
+      {% if queueable %}<td>{% if not m.job_id %}<input type="checkbox" name="episode_id" value="{{ m.episode_id }}" aria-label="download {{ m.code }}">{% endif %}</td>{% endif %}
       <td><strong>{{ m.code }}</strong> {{ m.title }}<span class="two-line muted">{{ m.air_date or "" }}</span></td>
       <td>{% set note = titles_match(m.title, m.video_title, sub.title) %}{% if note %}<a href="{{ m.video_url }}" target="_blank" rel="noopener" class="truncate same-title" title="{{ note }}">same title</a>{% else %}<a href="{{ m.video_url }}" target="_blank" rel="noopener" class="truncate" title="{{ m.video_title }}">{{ m.video_title }}</a>{% endif %}<span class="two-line muted mono">{{ m.video_id }}</span></td>
       <td><span class="chip">{{ tier_label(m.tier if m.strategy == "title" else m.strategy) }}</span></td>
@@ -180,5 +180,7 @@
 {% set shown_videos = report.videos[:LISTED_VIDEOS_SHOWN] %}
 <ol>{% for v in shown_videos %}<li>{% if v.title == v.id %}<span class="muted">unavailable video</span>{% else %}<a href="{{ v.url }}" target="_blank" rel="noopener">{{ v.title }}</a>{% endif %} <span class="muted mono">{{ v.id }}{% if v.upload_date %} · {{ v.upload_date }}{% elif v.approx_age %} · <span title="What the listing page says; the exact date needs a per-video fetch (Fetch upload dates)">~{{ v.approx_age }}</span>{% endif %}</span></li>{% endfor %}</ol>
 {% if report.videos | length > shown_videos | length %}<p class="muted">…and {{ report.videos | length - shown_videos | length }} more; the pin picker above still offers every one.</p>{% endif %}
+{% if undated and "date" in sub.strategies and not dates_useful %}<div class="muted">{{ undated }} of these carry no upload date. The date strategy only needs one for an episode nothing else matched; <form class="inline" hx-post="/subscriptions/{{ sub.id }}/dates" hx-target="#date-fetch" hx-swap="outerHTML"><button type="submit" class="secondary outline">fetch them now</button></form> to have them ready.</div>{% endif %}
 </details>
 {% if scan_line is defined and scan_line %}{% with oob=True %}{% include "partials/scan_line.html" %}{% endwith %}{% endif %}
+{% with oob=True %}{% include "partials/preview_kind.html" %}{% endwith %}
