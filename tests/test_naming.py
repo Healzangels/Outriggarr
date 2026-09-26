@@ -119,3 +119,17 @@ def test_sanitize_drops_del_too() -> None:
     from outriggarr.naming import sanitize
 
     assert sanitize("a\x7fb") == "a-b"
+
+
+def test_compact_codes_folds_consecutive_episodes() -> None:
+    from outriggarr.naming import compact_codes
+
+    assert compact_codes(["S04E01", "S04E02", "S04E03"]) == "S04E01–E03"
+    assert (
+        compact_codes(["S04E01", "S04E02", "S04E03", "S05E07", "S05E09", "S05E10"])
+        == "S04E01–E03, S05E07, S05E09–E10"
+    )
+    assert compact_codes(["S04E03", "S05E01"]) == "S04E03, S05E01", "a run never crosses a season"
+    assert compact_codes(["S04E01", "S04E03"]) == "S04E01, S04E03", "a gap breaks the run"
+    assert compact_codes(["odd", "S01E01", "S01E02"]) == "odd, S01E01–E02"
+    assert compact_codes([]) == ""

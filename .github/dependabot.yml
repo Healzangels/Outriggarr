@@ -1,0 +1,15 @@
+# yt-dlp is pinned in uv.lock and the weekly image rebuild installs it --frozen, so a
+# new yt-dlp release reaches the image only through a lock bump. Dependabot opens one
+# as a PR each Monday; CI runs the whole suite on it, and merging ships it.
+version: 2
+updates:
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    allow:
+      - dependency-name: "yt-dlp"
+      - dependency-name: "yt-dlp-ejs"
+    commit-message:
+      prefix: "deps"

@@ -20,6 +20,7 @@
 </div>
 {% if notice %}<p class="notice{{ ' bad' if notice_bad else '' }}" role="{{ 'alert' if notice_bad else 'status' }}" aria-live="polite">{{ notice }}</p>{% endif %}
 {% if report.error %}<p class="notice bad">Scan failed: {{ report.error }}</p>{% endif %}
+{% if report.warning %}<p class="notice warn" role="status">The listing shrank: {{ report.warning }}</p>{% endif %}
 {# "this source may not carry the series" is only a fair reading when the subscription has never matched anything; a fully imported series with a few absent episodes looks the same to the matcher #}
 {% set nothing_seen = report.unmatched and not report.matches and not report.skipped_existing and not has_history and (report.unmatched | map(attribute="candidates") | map("dictsort") | map("map", attribute="1") | map("sum", start=[]) | map("length") | sum == 0) %}
 {% if not report.error and not (report.matches or report.unmatched or report.held or report.skipped_existing) %}
@@ -110,7 +111,7 @@
   <tbody>
   {% for u in shown %}
     <tr>
-      <td><strong>{{ u.code }}</strong> {{ u.title }}<span class="two-line muted">{{ u.air_date or "" }}</span></td>
+      <td><strong>{{ u.code }}</strong> {{ u.title }}<span class="two-line muted">{{ u.air_date or "" }}{% set stuck = report.unmatched_scans.get(u.code, 0) %}{% if stuck >= 2 %} · <span class="warn" title="Neither source has carried this episode in {{ stuck }} scans. Pin a video, or unmonitor it in Sonarr if it is not coming.">still unmatched since {{ report.unmatched_since[u.code][:10] }} · {{ stuck }} scans</span>{% endif %}</span></td>
       {% if any_candidates %}<td>
         {% if not (u.candidates.values() | map("length") | sum) %}{% set names = [] %}{% for strategy in u.candidates if strategy != "override" or sub.overrides %}{% set _ = names.append("pins" if strategy == "override" else strategy) %}{% endfor %}<span class="muted">{% if names %}no candidate by {{ names[:-1] | join(", ") ~ (" or " if names | length > 1 else "") ~ names[-1] }}{% else %}pins only, and none set yet{% endif %}</span>
         {% else %}{% for strategy, cands in u.candidates.items() %}

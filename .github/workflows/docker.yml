@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
     tags: ["v*"]
+  pull_request:  # Dependabot's yt-dlp bumps: the suite runs, the image is not built
   # The layer cache below freezes the apt layer until the Dockerfile changes, so
   # Debian's ffmpeg/OpenSSL security updates would never reach a running image.
   # This rebuilds that stage weekly and republishes latest.
@@ -38,6 +39,7 @@ jobs:
 
   image:
     needs: test
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

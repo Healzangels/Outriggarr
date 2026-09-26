@@ -3183,3 +3183,37 @@ def test_date_button_waits_for_an_unmatched_episode(client: TestClient) -> None:
     assert "of these carry no upload date" not in prev, (
         "the button is back in the action row, said once"
     )
+
+
+def test_httpx_is_quiet_below_warning(client: TestClient) -> None:
+    import logging
+
+    assert logging.getLogger("httpx").level == logging.WARNING
+
+
+def test_stuck_unmatched_and_a_shrunk_listing_are_said_on_both_pages(client: TestClient) -> None:
+    from outriggarr.source import VideoRef
+
+    _seed_series(client)
+    source = client.app.state.source
+    source.recent = [VideoRef("a", "Six Spicy Wings | Hot Ones", "https://y/a", 1, 1, None)] + [
+        VideoRef(f"f{i}", f"Filler {i}", f"https://y/f{i}", 60, i + 2, None) for i in range(11)
+    ]
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={"connection_id": 1, "series_id": 5, "source_url": "https://www.youtube.com/@hotones"},
+    ).json()["id"]
+    client.post(f"/subscriptions/{sub_id}/download")  # a real scan: S30E07 unmatched, once
+    prev = client.get(f"/subscriptions/{sub_id}/preview").text
+    assert "S30E07" in prev and "still unmatched since" not in prev, "seen once: new, not stuck"
+    assert "· 1 stuck" not in client.get("/series").text
+    client.post(f"/subscriptions/{sub_id}/download")
+    prev = client.get(f"/subscriptions/{sub_id}/preview").text
+    assert "still unmatched since" in prev and "· 2 scans" in prev
+    series = client.get("/series").text
+    assert "1 unmatched · 1 stuck" in series and "has been unmatched since" in series
+    source.recent = source.recent[:3]
+    client.post(f"/subscriptions/{sub_id}/download")
+    prev = client.get(f"/subscriptions/{sub_id}/preview").text
+    assert "The listing shrank: listed 3 videos where a scan has listed 12" in prev
+    assert ">listing shrank</span>" in client.get("/series").text

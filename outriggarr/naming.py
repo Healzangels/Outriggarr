@@ -97,3 +97,35 @@ def episode_filename(
 def movie_filename(title: str, year: int | None, quality: str, ext: str) -> str:
     stem = _fit_keeping(sanitize(title) or "untitled", f" ({year})" if year else "")
     return f"{stem} [{quality}].{ext.lstrip('.')}"
+
+
+_CODE = re.compile(r"^S(\d+)E(\d+)$")
+
+
+def compact_codes(codes: list[str]) -> str:
+    """'S04E01, S04E02, S04E03, S05E07' → 'S04E01–E03, S05E07': runs of consecutive
+    episodes within a season fold into a range, so a log line or a tooltip can name
+    forty unmatched episodes in a few characters. Codes that are not SxxEyy pass
+    through unchanged, in place."""
+    parsed: list[tuple[int, int, str]] = []
+    for code in codes:
+        m = _CODE.match(code)
+        parsed.append((int(m.group(1)), int(m.group(2)), code) if m else (-1, -1, code))
+    out: list[str] = []
+    i = 0
+    while i < len(parsed):
+        season, number, code = parsed[i]
+        j = i
+        while (
+            season >= 0
+            and j + 1 < len(parsed)
+            and parsed[j + 1][0] == season
+            and parsed[j + 1][1] == parsed[j][1] + 1
+        ):
+            j += 1
+        if j > i:
+            out.append(f"{code}–E{parsed[j][1]:02d}")
+        else:
+            out.append(code)
+        i = j + 1
+    return ", ".join(out)

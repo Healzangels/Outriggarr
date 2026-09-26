@@ -7,6 +7,7 @@ import asyncio
 import contextlib
 import logging
 import re
+import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, fields
 from datetime import UTC, datetime, timedelta
@@ -28,7 +29,7 @@ from outriggarr.matcher import (
     match,
     videos_needing_dates,
 )
-from outriggarr.naming import episode_code
+from outriggarr.naming import compact_codes, episode_code
 from outriggarr.settings import get_setting
 from outriggarr.source import SourceError, VideoRef, is_permanent_failure, is_rate_limited
 from outriggarr.worker.runner import RunnerDeps, notify
@@ -53,6 +54,42 @@ class ScanReport:
     created_job_ids: list[int] = field(default_factory=list)
     in_scope: int | None = None  # listed videos whose title carries the required phrase
     error: str | None = None
+    title: str = ""  # the series, for the log line
+    # per unmatched code: when it was first seen unmatched, and how many real scans since
+    unmatched_since: dict[str, str] = field(default_factory=dict)
+    unmatched_scans: dict[str, int] = field(default_factory=dict)
+    listed_count: int = 0  # what the sources returned, before claimed videos leave the pool
+    listed_high: int = 0  # the most a listing has returned; a human run resets it
+    warning: str | None = None  # a listing that shrank against listed_high
+
+    def describe(self) -> str:
+        """One log line in words: 'Hot Ones: 50 videos, nothing wanted' or 'F*ck, That's
+        Delicious: 270 videos, 3 wanted, 3 unmatched (S04E01–E03)'."""
+        who = self.title or f"subscription {self.subscription_id}"
+        if self.error:
+            return f"{who}: scan failed: {self.error}"
+        n = self.summary()
+        parts = [f"{self.listed_count or n['videos']} videos"]
+        if not n["wanted"]:
+            parts.append("nothing wanted")
+        else:
+            parts.append(f"{n['wanted']} wanted")
+            if n["matched"]:
+                parts.append(f"{n['matched']} matched")
+            if n["created"]:
+                parts.append(f"{n['created']} queued")
+            if n["held"]:
+                parts.append(f"{n['held']} held")
+            if n["unmatched"]:
+                codes = compact_codes([u["code"] for u in self.unmatched])
+                parts.append(f"{n['unmatched']} unmatched ({codes})")
+            if n["skipped_existing"]:
+                parts.append(f"{n['skipped_existing']} had a job")
+            if n["not_auto"]:
+                parts.append(f"{n['not_auto']} not queued by policy")
+        if self.warning:
+            parts.append(f"WARNING {self.warning}")
+        return f"{who}: {', '.join(parts)}"
 
     def summary(self) -> dict:
         return {
@@ -69,6 +106,10 @@ class ScanReport:
             "not_auto": sum(1 for m in self.matches if m.get("skipped") and not m.get("job_id")),
             "skipped_existing": len(self.skipped_existing),
             "error": self.error,
+            "warning": self.warning,
+            # the oldest still-unmatched episode's first sighting, for the Series page
+            "unmatched_since": min(self.unmatched_since.values()) if self.unmatched_since else None,
+            "stuck": sum(1 for n in self.unmatched_scans.values() if n >= 2),
         }
 
     def as_dict(self) -> dict:
@@ -84,6 +125,55 @@ class ScanReport:
         data = {k: v for k, v in d.items() if k in known}
         data["scanned_at"] = datetime.fromisoformat(data["scanned_at"])
         return cls(**data)
+
+
+SHRINK_FLOOR = 10  # a listing this small says nothing about the next one
+
+
+def _carry_forward(report: ScanReport, previous: dict, now: datetime, *, human: bool) -> None:
+    """What one scan learns from the last: how long each unmatched episode has been
+    unmatched, and how big a listing normally is.
+
+    An episode unmatched today and unmatched three weeks ago are different situations
+    — one wants a look, the other a pin or an unmonitor — so each unmatched code keeps
+    its first sighting and a count of the real scans since. A listing that comes back
+    under half its high-water mark is the one silent failure yt-dlp cannot report (it
+    warns and returns what it has), so the report says so; a human run (Refresh
+    preview, Download) accepts the current size as the new normal, since a source
+    that really shrank would otherwise warn forever."""
+    prev_since = previous.get("unmatched_since") or {}
+    prev_scans = previous.get("unmatched_scans") or {}
+    # a report written before this bookkeeping existed still says what was unmatched
+    # and when: that is the earliest sighting on record, not "new today"
+    prev_codes = {u.get("code") for u in previous.get("unmatched") or []}
+    prev_at = previous.get("scanned_at") or now.isoformat()
+    stamp = now.isoformat()
+    for u in report.unmatched:
+        code = u["code"]
+        report.unmatched_since[code] = prev_since.get(
+            code, prev_at if code in prev_codes else stamp
+        )
+        before = int(prev_scans.get(code, 1 if code in prev_codes else 0))
+        report.unmatched_scans[code] = before + (0 if report.dry_run else 1)
+    # the raw listing, not the matching pool: `videos` loses every video a job already
+    # claims, so a channel downloaded whole would look like a listing that shrank to nothing
+    listed = report.listed_count or len(report.videos)
+    high = (
+        int(previous.get("listed_high") or 0)
+        or int(previous.get("listed_count") or 0)
+        or len(previous.get("videos") or [])
+    )
+    if high >= SHRINK_FLOOR and listed < high / 2:
+        report.warning = (
+            f"listed {listed} videos where a scan has listed {high}; a partial listing "
+            "reads as a quiet day, and yt-dlp's warnings, if any, are only in the log. "
+            "Refresh preview accepts the smaller size as the new normal."
+        )
+    report.listed_high = listed if human else max(high, listed)
+
+
+def _short_source(url: str) -> str:
+    return re.sub(r"^https?://(www\.)?(youtube\.com/|archive\.org/details/)?", "", url.strip())
 
 
 class SubscriptionNotFound(LookupError):
@@ -213,7 +303,9 @@ async def scan_subscription(
         )
         if sub is None:
             raise SubscriptionNotFound(subscription_id)
-        report = ScanReport(subscription_id=sub.id, scanned_at=now, dry_run=dry_run, manual=manual)
+        report = ScanReport(
+            subscription_id=sub.id, scanned_at=now, dry_run=dry_run, manual=manual, title=sub.title
+        )
         try:
             await _scan(deps, session, sub, report, now, episode_ids=episode_ids)
         except (ArrError, SourceError) as exc:
@@ -223,6 +315,7 @@ async def scan_subscription(
                 deps.cooloff.hit(report.error)
         previous_error = (sub.last_scan_result or {}).get("error")
         if report.error is None:
+            _carry_forward(report, sub.last_report or {}, now, human=dry_run or manual)
             # what the preview shows on the next page open, instead of listing again; a
             # failed scan leaves the last good one in place rather than poisoning it
             sub.last_report = report.as_dict()
@@ -252,12 +345,16 @@ async def list_source_videos(deps: RunnerDeps, sub: Subscription, limit: int) ->
     refs: list[VideoRef] = []
     seen_ids: set[str] = set()
     for src in sub.sources:
+        started = time.monotonic()
         try:
             listed = await asyncio.to_thread(deps.source.list_recent, src, limit)
         except SourceError as exc:
             if len(sub.sources) == 1:
                 raise  # verbatim, as always
             raise SourceError(f"{src}: {exc}") from exc  # say which source
+        log.info(
+            "%s: %d videos in %.1f s", _short_source(src), len(listed), time.monotonic() - started
+        )
         for ref in listed:
             if ref.id not in seen_ids:
                 seen_ids.add(ref.id)
@@ -310,6 +407,7 @@ async def _scan(
     limit = sub.video_limit or int(get_setting(session, "scan_video_limit"))
     refs = await list_source_videos(deps, sub, limit)
     report.sources = len(sub.sources)
+    report.listed_count = len(refs)
     ages = {r.id: r.approx_age for r in refs}  # "3 years ago" from the listing page, if any
     taken = live_video_ids_for_series(session, conn.id, sub.series_id)
     # a pinned video stays in the pool even while the job it corrects still holds it:
@@ -559,9 +657,18 @@ def due_subscription_ids(session: Session, now: datetime, interval: timedelta) -
     return list(rows)
 
 
+def next_tick_delay(elapsed: float, tick: float) -> float:
+    """Seconds until the next tick boundary. A fixed sleep after each tick's work let
+    the phase walk forward by the work time — ~20 s per twelve-hour cycle in
+    production, so a scan due at 02:00 was at 02:20 a month later."""
+    remaining = tick - (elapsed % tick)
+    return remaining if remaining > tick * 0.05 else remaining + tick
+
+
 async def run_scheduler(deps: RunnerDeps, stop: asyncio.Event) -> None:
     log.info("scheduler started")
     paused_logged = False
+    started = time.monotonic()
     while not stop.is_set():
         if deps.cooloff.active():
             # rate-limited: a scan would fail the same way and stamp a scan error on every
@@ -587,7 +694,7 @@ async def run_scheduler(deps: RunnerDeps, stop: asyncio.Event) -> None:
                 break  # rate-limited mid-batch: the rest would fail the same way
             try:
                 report = await scan_subscription(deps, sub_id)
-                log.info("subscription %d scanned: %s", sub_id, report.summary())
+                log.info("%s", report.describe())
             except Exception as exc:
                 log.exception("subscription %d scan crashed", sub_id)
                 try:
@@ -610,5 +717,8 @@ async def run_scheduler(deps: RunnerDeps, stop: asyncio.Event) -> None:
                 except Exception:
                     log.exception("recording the crash for subscription %d failed", sub_id)
         with contextlib.suppress(TimeoutError):
-            await asyncio.wait_for(stop.wait(), timeout=deps.scheduler_tick_seconds)
+            await asyncio.wait_for(
+                stop.wait(),
+                timeout=next_tick_delay(time.monotonic() - started, deps.scheduler_tick_seconds),
+            )
     log.info("scheduler stopped")

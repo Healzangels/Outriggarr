@@ -61,6 +61,9 @@ def create_app(
     logging.basicConfig(
         level=settings.log_level, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
     )
+    # httpx logs every 200 OK at INFO: two thirds of a day's log said Sonarr answered.
+    # Failures still reach the job and the scan verbatim; the app logs its own listings.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:

@@ -921,3 +921,117 @@ def test_remember_date_is_an_upsert(session_factory) -> None:
     with session_factory() as s:
         rows = s.query(VideoMeta).filter(VideoMeta.video_id == "same").all()
         assert len(rows) == 1 and rows[0].upload_date is None
+
+
+async def test_unmatched_keeps_its_first_sighting_and_counts_scans(deps, session_factory) -> None:
+    sub_id, conn_id = make_sub(session_factory)
+    fake_client(deps, conn_id)
+    first = await scan_subscription(deps, sub_id)
+    assert first.unmatched_since == {"S30E09": NOW.isoformat()}
+    assert first.unmatched_scans == {"S30E09": 1}
+    assert first.summary()["stuck"] == 0, "seen once is new, not stuck"
+    deps.now = lambda: NOW + timedelta(hours=12)
+    second = await scan_subscription(deps, sub_id)
+    assert second.unmatched_since == {"S30E09": NOW.isoformat()}, "the first sighting survives"
+    assert second.unmatched_scans == {"S30E09": 2}
+    assert second.summary()["stuck"] == 1
+    assert second.summary()["unmatched_since"] == NOW.isoformat()
+    preview = await scan_subscription(deps, sub_id, dry_run=True)
+    assert preview.unmatched_scans == {"S30E09": 2}, "a dry run is not a scan"
+    deps.now = lambda: NOW + timedelta(hours=24)
+    third_scan = await scan_subscription(deps, sub_id)
+    assert third_scan.unmatched_since == {"S30E09": NOW.isoformat()}, (
+        "carried from the report before, not re-seeded from the report before's timestamp"
+    )
+    assert third_scan.unmatched_scans == {"S30E09": 3}
+    with session_factory() as s:
+        assert s.get(Subscription, sub_id).last_report["unmatched_scans"] == {"S30E09": 3}, (
+            "persisted with the report"
+        )
+    deps.source.recent = [
+        *RECENT,
+        VideoRef("v9", "Nine Spicy Wings | Show", "https://y/v9", 100, 4, None),
+    ]
+    third = await scan_subscription(deps, sub_id)
+    assert third.unmatched == [] and third.unmatched_since == {} and third.unmatched_scans == {}
+
+
+async def test_first_sighting_is_read_from_a_report_without_the_bookkeeping(
+    deps, session_factory
+) -> None:
+    sub_id, conn_id = make_sub(session_factory)
+    fake_client(deps, conn_id)
+    earlier = (NOW - timedelta(days=20)).isoformat()
+    with session_factory() as s:
+        sub = s.get(Subscription, sub_id)
+        sub.last_report = {
+            "subscription_id": sub_id,
+            "scanned_at": earlier,
+            "dry_run": False,
+            "videos": [],
+            "unmatched": [{"code": "S30E09"}],
+        }
+        s.commit()
+    report = await scan_subscription(deps, sub_id)
+    assert report.unmatched_since == {"S30E09": earlier}, "unmatched then too: since then, at least"
+    assert report.unmatched_scans == {"S30E09": 2}
+
+
+async def test_a_listing_that_shrinks_is_said_until_a_human_accepts_it(
+    deps, session_factory
+) -> None:
+    sub_id, conn_id = make_sub(session_factory)
+    fake_client(deps, conn_id)
+    big = [VideoRef(f"f{i}", f"Filler {i}", f"https://y/f{i}", 60, i, None) for i in range(40)]
+    deps.source.recent = big
+    full = await scan_subscription(deps, sub_id)
+    assert full.warning is None and full.listed_high == 40
+    deps.source.recent = big[:12]
+    shrunk = await scan_subscription(deps, sub_id)
+    assert shrunk.warning and "listed 12 videos where a scan has listed 40" in shrunk.warning
+    assert shrunk.listed_high == 40 and shrunk.summary()["warning"] == shrunk.warning
+    assert "WARNING listed 12" in shrunk.describe()
+    again = await scan_subscription(deps, sub_id)
+    assert again.warning, "still short of the high-water mark: still said"
+    accepted = await scan_subscription(deps, sub_id, dry_run=True)
+    assert accepted.warning and accepted.listed_high == 12, "a human saw it: the new normal"
+    quiet = await scan_subscription(deps, sub_id)
+    assert quiet.warning is None and quiet.listed_high == 12
+    deps.source.recent = big[:8]
+    await scan_subscription(deps, sub_id, dry_run=True)  # accepts 8
+    deps.source.recent = big[:3]
+    tiny = await scan_subscription(deps, sub_id)
+    assert tiny.warning is None, "under the floor a listing says nothing about the next one"
+
+
+async def test_the_scan_log_line_is_in_words(deps, session_factory, caplog) -> None:
+    import logging
+
+    sub_id, conn_id = make_sub(session_factory)
+    fake_client(deps, conn_id)
+    with caplog.at_level(logging.INFO, logger="outriggarr.worker.scheduler"):
+        report = await scan_subscription(deps, sub_id)
+    assert (
+        report.describe() == "Show: 3 videos, 3 wanted, 2 matched, 2 queued, 1 unmatched (S30E09)"
+    )
+    lines = [r.getMessage() for r in caplog.records]
+    assert any(line.startswith("@show: 3 videos in ") for line in lines), (
+        "one line per listing, from the app, not from httpx"
+    )
+    nothing = ScanReport(
+        subscription_id=4, scanned_at=NOW, dry_run=False, title="Hot Ones", videos=[{}] * 50
+    )
+    assert nothing.describe() == "Hot Ones: 50 videos, nothing wanted"
+    failed = ScanReport(subscription_id=4, scanned_at=NOW, dry_run=False, error="HTTP Error 429")
+    assert failed.describe() == "subscription 4: scan failed: HTTP Error 429"
+
+
+def test_next_tick_delay_lands_on_the_boundary() -> None:
+    from outriggarr.worker.scheduler import next_tick_delay
+
+    assert next_tick_delay(0.0, 60) == 60
+    assert next_tick_delay(25.0, 60) == 35.0
+    assert next_tick_delay(120.02, 60) == pytest.approx(59.98)
+    assert next_tick_delay(59.999, 60) == pytest.approx(60.001), (
+        "a hair before the boundary waits for the next one instead of spinning"
+    )
