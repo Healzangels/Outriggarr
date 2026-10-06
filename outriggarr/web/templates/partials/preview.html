@@ -1,18 +1,25 @@
 {% set queueable = report.matches | rejectattr("job_id") | list | length %}
 {% set auto_count = report.matches | rejectattr("job_id") | selectattr("auto") | list | length %}
 {% set wanted = report.matches or report.unmatched or report.held or report.skipped_existing %}
-<p class="chips scan-summary">
-  <span class="chip">{{ report.videos | length }} videos listed{% if report.sources > 1 %} from {{ report.sources }} sources{% endif %}</span>
-  {% if sub.title_require %}<span class="chip" title="Only videos whose title contains this phrase are candidates for this series (pins are exempt); set under Subscription settings">titles must contain “{{ sub.title_require }}”{% if report.in_scope is defined %} · {{ report.in_scope }} do{% endif %}</span>{% endif %}
-  {% if wanted %}<span class="chip {{ 'ok' if report.matches else 'zero' }}">{{ report.matches | length }} matched</span>
-  <span class="chip {{ 'warn' if report.unmatched else 'zero' }}">{{ report.unmatched | length }} unmatched</span>
-  {% if report.held %}<span class="chip warn" title="Matched, but something contradicts it: the video's length against the episode's runtime, or the video is one part of a split upload">{{ report.held | length }} held</span>{% endif %}
-  <span class="chip {{ '' if report.skipped_existing else 'zero' }}" title="Wanted episodes that had a job before this scan, so they were not matched again">{{ report.skipped_existing | length }} had a job already</span>{% endif %}
-  {% if sub.auto_download == "future" and queueable %}<span class="chip" title="Only episodes airing from {{ sub.created_at.strftime('%-d %b %Y') }} queue by themselves (auto-download: future episodes only); the other {{ queueable - auto_count }} aired before that, so use Download all or Download selected">{{ auto_count }} of {{ queueable }} would queue by itself</span>{% endif %}
+{% set with_job = report.matches | selectattr("job_id") | list %}
+{% set by_policy = report.matches | rejectattr("job_id") | selectattr("skipped") | list %}
+{# One line says what the scan found and what became of it; the table below says which. #}
+<p class="scan-summary muted">
+  <span>{{ report.videos | length }} listed{% if report.sources > 1 %} from {{ report.sources }} sources{% endif %}</span>
+  {%- if sub.title_require %} · <span title="Only videos whose title contains this phrase are candidates for this series (pins are exempt); set under Subscription settings">{{ report.in_scope if report.in_scope is not none else "?" }} in scope “{{ sub.title_require }}”</span>{% endif %}
+  {%- if report.matches %} · <span class="ok">{{ report.matches | length }} matched</span>
+    {%- if with_job | length == report.matches | length %}, {{ 'queued' if with_job | length == 1 else 'all queued' }}
+    {%- elif with_job %}, {{ with_job | length }} queued{% endif %}
+    {%- if by_policy %}, <span title="Only episodes airing from {{ sub.created_at.strftime('%-d %b %Y') }} queue by themselves (auto-download: future episodes only); these aired before that">{{ by_policy | length }} waiting for Download</span>{% endif %}
+    {%- if report.dry_run and queueable %}{% if auto_count == queueable %}, {{ 'queues' if queueable == 1 else 'all queue' }} on the next scan{% elif auto_count %}, {{ auto_count }} queue on the next scan, <span title="Only episodes airing from {{ sub.created_at.strftime('%-d %b %Y') }} queue by themselves (auto-download: future episodes only); the other {{ queueable - auto_count }} aired before that, so use Download all or Download selected">{{ queueable - auto_count }} only on Download</span>{% else %}, <span title="{% if sub.auto_download == 'future' %}Only episodes airing from {{ sub.created_at.strftime('%-d %b %Y') }} queue by themselves (auto-download: future episodes only); these aired before that{% else %}Auto-download is off for this subscription{% endif %}">none queue by themselves — tick what you want and press Download</span>{% endif %}{% endif %}
+  {%- endif %}
+  {%- if report.unmatched %} · <span class="warn">{{ report.unmatched | length }} unmatched</span>{% endif %}
+  {%- if report.held %} · <span class="warn" title="Matched, but something contradicts it: the video's length against the episode's runtime, or the video is one part of a split upload">{{ report.held | length }} held</span>{% endif %}
+  {%- if report.skipped_existing %} · <span title="Wanted episodes that had a job before this scan, so they were not matched again">{{ report.skipped_existing | length }} had a job already</span>{% endif %}
 </p>
 <div class="form-actions">
   {% if queueable %}<button hx-post="/subscriptions/{{ sub.id }}/download" hx-vals='{"all": "1"}' hx-target="#preview" hx-indicator="#scan-busy" title="Queue every current match, whatever the auto-download setting">Download all {{ queueable }}</button>
-  <button id="download-selected" class="secondary" hx-post="/subscriptions/{{ sub.id }}/download" hx-include="#match-picks" hx-vals='{"selected": "1"}' hx-target="#preview" hx-indicator="#scan-busy" disabled title="Tick episodes in the Matches table first">Download selected <span class="count" id="selected-count" hidden>0</span></button>{% elif wanted %}{% set queued = report.matches | selectattr("job_id") | map(attribute="job_id") | list %}<span class="muted">Nothing to queue{% if queued %}: the scan queued its {{ queued | length }} match{{ '' if queued | length == 1 else 'es' }} ({% for j in queued %}<a href="/activity#job-{{ j }}">#{{ j }}</a>{{ ', ' if not loop.last }}{% endfor %}){% endif %}.</span>{% endif %}
+  <button id="download-selected" class="secondary" hx-post="/subscriptions/{{ sub.id }}/download" hx-include="#match-picks" hx-vals='{"selected": "1"}' hx-target="#preview" hx-indicator="#scan-busy" disabled title="Tick episodes in the Matches table first">Download selected <span class="count" id="selected-count" hidden>0</span></button>{% endif %}
   {% include "partials/date_fetch.html" %}
   <span id="scan-busy" class="htmx-indicator muted" aria-busy="true">working…</span>
   <span class="muted push-right" title="When the source was last listed. Refresh preview lists it again; the scheduler does too, every scan.">Listed {{ report.scanned_at | ago }}</span>
@@ -32,7 +39,6 @@
 
 {% if report.matches %}
 <h4>Matches</h4>
-{% if report.dry_run and queueable and not auto_count %}<p class="muted">Nothing here queues by itself: tick the episodes you want and press Download selected, or Download all.</p>{% endif %}
 <div class="table-wrap">
 <table>
   {% set show_job = report.matches | selectattr("job_id") | list or report.matches | selectattr("skipped") | list or (report.dry_run and auto_count) %}
@@ -42,7 +48,7 @@
     <tr>
       {% if queueable %}<td>{% if not m.job_id %}<input type="checkbox" name="episode_id" value="{{ m.episode_id }}" aria-label="download {{ m.code }}">{% endif %}</td>{% endif %}
       <td><strong>{{ m.code }}</strong> {{ m.title }}<span class="two-line muted">{{ m.air_date or "" }}</span></td>
-      <td>{% set note = titles_match(m.title, m.video_title, sub.title) %}{% if note %}<a href="{{ m.video_url }}" target="_blank" rel="noopener" class="truncate same-title" title="{{ note }}">same title</a>{% else %}<a href="{{ m.video_url }}" target="_blank" rel="noopener" class="truncate" title="{{ m.video_title }}">{{ m.video_title }}</a>{% endif %}<span class="two-line muted mono">{{ m.video_id }}</span></td>
+      <td>{% set note = titles_match(m.title, m.video_title, sub.title) %}{% if note %}<a href="{{ m.video_url }}" target="_blank" rel="noopener" class="truncate same-title" title="{{ note }} · {{ m.video_id }}">same title</a>{% else %}<a href="{{ m.video_url }}" target="_blank" rel="noopener" class="truncate" title="{{ m.video_title }} · {{ m.video_id }}">{{ m.video_title }}</a>{% endif %}</td>
       <td><span class="chip">{{ tier_label(m.tier if m.strategy == "title" else m.strategy) }}</span></td>
       {% if show_job %}<td>{% if m.job_id %}<a href="/activity#job-{{ m.job_id }}" class="job-ref">#{{ m.job_id }}</a>{% elif m.skipped %}<span class="muted">{{ m.skipped }}</span>{% elif report.dry_run and m.auto %}<span class="muted nowrap">queues on the next scan</span>{% endif %}</td>{% endif %}
     </tr>
@@ -157,6 +163,7 @@
 
 {% set wanted_entries = report.matches + report.held + report.unmatched + report.skipped_existing %}
 {% if wanted_entries %}
+{% if report.unmatched or report.held %}
 <details class="plain">
   <summary>Why didn't a video match? <span class="muted">· pick an episode and a video</span></summary>
   <form hx-get="/subscriptions/{{ sub.id }}/explain" hx-target="#explain-result" hx-swap="innerHTML">
@@ -176,6 +183,7 @@
   <div hx-get="/subscriptions/{{ sub.id }}/listed-videos" hx-trigger="intersect once" hx-swap="outerHTML"></div>
   <div id="explain-result"></div>
 </details>
+{% endif %}
 {% endif %}
 
 <details class="plain"><summary>The listing <span class="muted">· every video the source{{ 's' if report.sources > 1 else '' }} returned</span></summary>

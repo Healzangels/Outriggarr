@@ -198,7 +198,7 @@ def test_subscription_page_preview_scan_and_override(client: TestClient) -> None
     )
 
     prev = client.get(f"/subscriptions/{sub_id}/preview").text
-    assert "Nothing here queues by itself" in prev and "S30E06" in prev  # a match, no job yet
+    assert "none queue by themselves" in prev and "S30E06" in prev  # a match, no job yet
     assert "S30E07" in prev and "No strategy saw a candidate for any of these" in prev
     assert f'hx-post="/subscriptions/{sub_id}/overrides"' in prev
 
@@ -209,14 +209,16 @@ def test_subscription_page_preview_scan_and_override(client: TestClient) -> None
     assert '<span class="muted mono">b</span>' in r.text and "S30E07" in r.text
 
     scan = client.post(f"/subscriptions/{sub_id}/scan")
-    assert scan.status_code == 200 and "Nothing queued" in scan.text
+    assert scan.status_code == 200 and "what the next scan would do" in scan.text
+    assert "Preview refreshed" not in scan.text, "the subtitle and the line say it"
     assert "2 matched" in scan.text and "Download all 2" in scan.text
     assert client.get("/api/jobs").json() == [], "Refresh preview never queues"
     dl = client.post(f"/subscriptions/{sub_id}/download")
-    assert dl.status_code == 200 and "Queued 2 jobs;" in dl.text
+    assert dl.status_code == 200 and "2 matched</span>, all queued" in dl.text
+    assert "notice" not in dl.text.split("<table", 1)[0], "the line says it; no bar says it again"
     assert len(client.get("/api/jobs").json()) == 2
     again = client.post(f"/subscriptions/{sub_id}/download")
-    assert "Nothing to queue" in again.text and "Download all" not in again.text
+    assert "2 had a job already" in again.text and "Download all" not in again.text
     assert "had a job already" in client.get(f"/subscriptions/{sub_id}/preview").text
 
     r = client.post(f"/subscriptions/{sub_id}/overrides/b/delete")
@@ -739,7 +741,7 @@ def test_subscription_form_takes_one_source_per_line(client: TestClient) -> None
     assert "@hotones\nhttps://www.youtube.com/@extra</textarea>" in page
     assert "+1 more" in client.get("/series").text
     prev = client.get(f"/subscriptions/{sub_id}/preview").text
-    assert "videos listed from 2 sources" in prev
+    assert "listed from 2 sources" in prev
 
 
 def test_matches_recheck_and_confirm_clear_the_review_list(client: TestClient) -> None:
@@ -1045,7 +1047,7 @@ def test_subscribe_form_defaults_to_future_and_preview_downloads_selected(
         json={"connection_id": 1, "series_id": 5, "sources": ["https://www.youtube.com/@hotones"]},
     ).json()["id"]
     prev = client.get(f"/subscriptions/{sub_id}/preview").text
-    assert "0 of 1 would queue by itself" in prev and "Nothing here queues by itself" in prev
+    assert "1 matched</span>, " in prev and "none queue by themselves — tick what you want" in prev
     assert 'name="episode_id" value="11"' in prev and "Download selected" in prev
     assert 'id="selected-count" hidden>0</span>' in prev and 'id="tick-all"' in prev, (
         "a live count, hidden while nothing is ticked"
@@ -1059,7 +1061,7 @@ def test_subscribe_form_defaults_to_future_and_preview_downloads_selected(
     r = client.post(
         f"/subscriptions/{sub_id}/download", data={"selected": "1", "episode_id": ["11"]}
     )
-    assert "Queued 1 job;" in r.text
+    assert "1 matched</span>, queued" in r.text
     assert [j["episode_ids"] for j in client.get("/api/jobs").json()] == [[11]]
 
 
@@ -1364,7 +1366,7 @@ def test_title_scope_round_trips_and_shows_in_the_preview(client: TestClient) ->
     page = client.get(f"/subscriptions/{sub_id}").text
     assert 'name="title_require" maxlength="100" value="Scam School"' in page
     prev = client.get(f"/subscriptions/{sub_id}/preview").text
-    assert "titles must contain “Scam School” · 2 do" in prev
+    assert "2 in scope “Scam School”" in prev
     # the listing says what the page said about age, marked as a guess; a real date is a date
     assert "~3 years ago" in prev and "20240102" not in prev and "2024-01-02" in prev
 
@@ -1579,7 +1581,7 @@ def test_subscription_page_labels_its_facts_and_orders_the_preview(client: TestC
     assert f"subscription {sub_id}" not in head, "the internal id is a hover, not a fact"
     assert f"listing depth · #{sub_id}</span>" in page, "…and lives with the settings"
     prev = client.get(f"/subscriptions/{sub_id}/preview").text
-    assert prev.index('class="chips scan-summary"') < prev.index('class="form-actions"'), (
+    assert prev.index('class="scan-summary muted"') < prev.index('class="form-actions"'), (
         "what the scan saw comes first, then what you can do about it"
     )
     assert "Listed just now" in prev, "the preview says how old its look at the source is"
@@ -1966,9 +1968,12 @@ def test_recent_jobs_say_same_title_once(client: TestClient) -> None:
     prev = client.get(f"/subscriptions/{sub_id}/preview").text
     assert (
         'class="truncate same-title" '
-        'title="The video is titled as the episode is: Seven Spicy Wings">same title</a>' in prev
+        'title="The video is titled as the episode is: Seven Spicy Wings · c">same title</a>'
+        in prev
     )
-    assert '“HO” prefix: HO Six Spicy Wings">same title</a>' in prev, "the preview knows the series"
+    assert '“HO” prefix: HO Six Spicy Wings · a">same title</a>' in prev, (
+        "the preview knows the series"
+    )
     picks = prev.split('<tbody id="match-picks">', 1)[1].split("</tbody>", 1)[0]
     assert ">HO Six Spicy Wings</a>" not in picks, (
         "the listing panel may show it; the match row does not"
@@ -2291,7 +2296,9 @@ def test_download_tells_the_page_its_other_cards_are_stale(client: TestClient) -
     ).json()["id"]
     r = client.post(f"/subscriptions/{sub_id}/download")
     assert r.status_code == 200 and r.headers.get("HX-Trigger") == "jobs-changed"
-    assert "they show under Recent jobs below and on Activity" in r.text
+    assert "1 matched</span>, queued" in r.text and "Queued" not in r.text, (
+        "the summary line is the feedback; the cards below refresh on the trigger"
+    )
     again = client.post(f"/subscriptions/{sub_id}/download")
     assert "HX-Trigger" not in again.headers, "nothing queued: nothing to refresh"
     recent = client.get(f"/subscriptions/{sub_id}/recent").text
@@ -3134,18 +3141,29 @@ def test_preview_card_reads_as_a_record_after_a_real_scan(client: TestClient) ->
     page = client.get(f"/subscriptions/{sub_id}").text
     assert page.count('id="preview-kind"') == 1 and "what the next scan would do" in page
     dl = client.post(f"/subscriptions/{sub_id}/download").text  # a real scan: it queues
-    assert "Queued 1 job" in dl or "Queued 2 jobs" in dl
+    assert ", queued" in dl or ", all queued" in dl
     prev = client.get(f"/subscriptions/{sub_id}/preview").text  # the cached real scan
     assert 'id="preview-kind" class="muted" hx-swap-oob="true">· what the last scan did · ' in prev
     picks = prev.split("<table", 1)[1].split("</table>", 1)[0]
     assert 'id="tick-all"' not in picks and 'name="episode_id"' not in picks, (
         "nothing can be ticked: no selection column"
     )
-    assert "Nothing to queue: the scan queued its " in prev and 'href="/activity#job-' in prev
+    assert "1 matched</span>, queued" in prev and 'href="/activity#job-' in prev
+    assert "Nothing to queue" not in prev and "Queued 1 job" not in prev, "said once"
     assert "every match already has a job" not in prev and "already have jobs" not in prev
-    assert "had a job already" in prev
+    assert "had a job already" not in prev, "a count of nothing is not said"
+    assert 'muted mono">' not in prev.split("<table", 1)[1].split("</table>", 1)[0], (
+        "the video id lives in the link's tooltip, not under every title"
+    )
+    header = (
+        page.split('id="scan-line"', 1)[1].split("</dd>", 1)[0] if 'id="scan-line"' in page else ""
+    )
     page = client.get(f"/subscriptions/{sub_id}").text
     assert "what the last scan did" in page and page.count('id="preview-kind"') == 1
+    header = page.split('id="scan-line"', 1)[1].split("</dd>", 1)[0]
+    assert "matched" not in header and "queued" not in header, (
+        "the card below shows that scan: the header does not restate its result"
+    )
     assert "hx-swap-oob" not in page.split('id="preview-kind"', 1)[0]
     dry = client.post(f"/subscriptions/{sub_id}/scan").text  # a dry run: a preview again
     assert 'hx-swap-oob="true">· what the next scan would do' in dry
@@ -3173,7 +3191,7 @@ def test_date_button_waits_for_an_unmatched_episode(client: TestClient) -> None:
         },
     ).json()["id"]
     prev = client.get(f"/subscriptions/{sub_id}/preview").text
-    assert "0 unmatched" in prev and "Fetch upload dates" not in prev, (
+    assert "unmatched" not in prev and "Fetch upload dates" not in prev, (
         "everything matched: fetching dates would settle nothing"
     )
     assert "2 of these carry no upload date" in prev and ">fetch them now</button>" in prev
@@ -3424,3 +3442,21 @@ def test_preview_says_why_one_word_titles_go_unmatched_and_what_to_set(client: T
     assert "2 matched" in prev and "too short to look for" not in prev, (
         "inside the scope the words are looked for, and the hint has nothing to say"
     )
+
+
+def test_the_why_panel_waits_for_something_unmatched(client: TestClient) -> None:
+    from outriggarr.source import VideoRef
+
+    _seed_series(client)
+    client.app.state.source.recent = [
+        VideoRef("a", "Six Spicy Wings | Hot Ones", "https://y/a", 1, 1, None),
+        VideoRef("c", "Seven Spicy Wings | Hot Ones", "https://y/c", 1, 2, None),
+    ]
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={"connection_id": 1, "series_id": 5, "source_url": "https://www.youtube.com/@hotones"},
+    ).json()["id"]
+    prev = client.get(f"/subscriptions/{sub_id}/preview").text
+    assert "2 matched" in prev and "unmatched" not in prev
+    assert "a video match?" not in prev, "nothing went unmatched: nothing to explain"
+    assert "The listing" in prev, "the listing is always there"

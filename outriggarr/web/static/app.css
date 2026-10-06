@@ -201,6 +201,7 @@ label .hint { display: block; color: var(--o-muted); font-size: .88em; max-width
 .form-actions > .date-fetch { display: contents; }
 .form-actions .date-fetch .notice { flex-basis: 100%; order: 99; margin: .25rem 0 0; }
 .scan-summary { margin: 0 0 .5rem; }
+.scan-summary .ok, .scan-summary .warn { font-weight: 600; }  /* the counts that matter stand out of a muted line without a chip around them */
 ul.pins { list-style: none; padding-left: 0; }
 ul.pins li { display: flex; flex-wrap: wrap; gap: .5em; align-items: baseline; margin-bottom: .25rem; }
 details.season > summary { color: inherit; }

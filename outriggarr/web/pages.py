@@ -1372,13 +1372,9 @@ async def subscription_scan(
 ) -> HTMLResponse:
     """Refresh preview = a dry-run scan. Nothing is queued; that is the Download button."""
     report = await run_scan(deps, subscription_id, dry_run=True)
-    notice = None
-    if not report.error:
-        notice = (
-            f"Preview refreshed: {len(report.matches)} matched, {len(report.unmatched)} unmatched, "
-            f"{len(report.skipped_existing)} already have jobs. Nothing queued."
-        )
-    return _preview_response(request, session, report, notice)
+    # the card's subtitle flips to "what the next scan would do · just now" and the
+    # summary line carries the counts: nothing is left for a notice to add
+    return _preview_response(request, session, report)
 
 
 @router.post("/subscriptions/{subscription_id}/download")
@@ -1398,16 +1394,9 @@ async def subscription_download(
         report = await run_scan(deps, subscription_id, dry_run=True)
         return _preview_response(request, session, report, "Nothing selected.")
     report = await run_scan(deps, subscription_id, dry_run=False, manual=True, episode_ids=ids)
-    notice = None
-    if not report.error:
-        n = len(report.created_job_ids)
-        notice = (
-            f"Queued {n} job{'' if n == 1 else 's'}; they show under Recent jobs below and on "
-            "Activity."
-            if n
-            else "Nothing to queue: no new matches."
-        )
-    response = _preview_response(request, session, report, notice, scan_line=not report.error)
+    # the summary line says what was queued and the table says which; the Episodes and
+    # Recent jobs cards refresh on the trigger below — a notice would say it a fourth time
+    response = _preview_response(request, session, report, None, scan_line=not report.error)
     if report.created_job_ids:
         response.headers["HX-Trigger"] = (
             "jobs-changed"  # the Episodes and Recent jobs cards refresh
