@@ -818,15 +818,22 @@ def test_matches_recheck_and_confirm_clear_the_review_list(client: TestClient) -
         "Checked 4 matches: 3 video lengths and 3 runtimes fetched; 1 contradict their runtime."
         in r.text
     )
-    assert "1 could not be fetched" in r.text
+    assert (
+        "1 has no length at the source (gone, private or live). 1 has no runtime in Sonarr."
+        in r.text
+    )
+    assert "could not be fetched" not in r.text, "a gone video is an answer, not an error"
     assert 'Needs a look<span class="count warn">3</span>' in r.text, (
         "25 min vs 25 min cleared itself"
     )
     assert "Checked 4 matches" not in client.get("/matches").text, "the summary shows once"
-    assert "2 unchecked" in r.text, "the button says how much is left"
-    assert 'disabled title="Every match' not in r.text, "still something to check: enabled"
+    assert "unchecked" not in r.text.split('class="form-actions"', 1)[1].split("</div>", 1)[0], (
+        "what Sonarr and the source cannot give is not offered again"
+    )
+    assert "Nothing left to recheck." in r.text
     jobs = {j["video_id"]: j for j in client.get("/api/jobs").json()}
-    assert jobs["double"]["target_runtime"] is None, "a half-known runtime is no evidence"
+    assert jobs["double"]["target_runtime"] == 0, "a half-known runtime: asked, and none"
+    assert jobs["gone"]["video_duration"] == 0, "gone: asked, and none"
     assert "50:00, no runtime in Sonarr" in r.text
     assert "2:00 vs 25:00 ✗" in r.text
     assert "25:00 vs 25:00 ✓" in client.get("/matches?view=all").text
@@ -837,7 +844,7 @@ def test_matches_recheck_and_confirm_clear_the_review_list(client: TestClient) -
         if not status["running"]:
             break
         time.sleep(0.05)
-    assert status["checked"] == 2, "unfetched + half-known"
+    assert status["checked"] == 0, "gone and half-known were both answered: nothing to ask"
 
     short_id = jobs["short"]["id"]
     r = client.post(f"/matches/{short_id}/confirm")
@@ -3217,3 +3224,203 @@ def test_stuck_unmatched_and_a_shrunk_listing_are_said_on_both_pages(client: Tes
     prev = client.get(f"/subscriptions/{sub_id}/preview").text
     assert "The listing shrank: listed 3 videos where a scan has listed 12" in prev
     assert ">listing shrank</span>" in client.get("/series").text
+
+
+def test_recheck_remembers_what_sonarr_and_the_source_cannot_give(client: TestClient) -> None:
+    import time
+    from datetime import UTC, datetime, timedelta
+
+    from outriggarr.api.matches import unchecked_count
+    from outriggarr.arr.base import EpisodeRef, SeriesRef
+    from outriggarr.db.models import TargetKind
+    from outriggarr.source import VideoRef
+    from tests.fakes import FakeArrClient
+
+    aired = datetime.now(UTC) - timedelta(days=3)
+    client.app.state.arr_factory.by_url["http://sonarr-host:1234"] = FakeArrClient(
+        series_list=[SeriesRef(5, "Superwog", 2018, 1, True)],
+        episodes_by_series={
+            5: [
+                EpisodeRef(11, 4, 6, "Extra Beef", True, True, aired, runtime=None),
+                EpisodeRef(12, 4, 7, "Gone", False, True, aired, runtime=25),
+                EpisodeRef(13, 4, 8, "Live", False, True, aired, runtime=25),
+            ]
+        },
+    )
+    source = client.app.state.source
+    source.infos = {"https://y/live": VideoRef("live", "Live", "https://y/live", None, 1, None)}
+    client.post("/api/connections", json=SONARR)
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={
+            "connection_id": 1,
+            "series_id": 5,
+            "source_url": "https://www.youtube.com/@superwog",
+        },
+    ).json()["id"]
+    with client.app.state.session_factory() as s:
+        for eid, vid, duration, tier in (
+            (11, "beef", 436, "exact"),
+            (12, "gone", None, "contains"),
+            (13, "live", None, "contains"),
+        ):
+            s.add(
+                Job(
+                    connection_id=1,
+                    subscription_id=sub_id,
+                    target_kind=TargetKind.episode,
+                    series_id=5,
+                    episode_ids=[eid],
+                    target_key=f"episode:5:{eid}",
+                    video_id=vid,
+                    video_url=f"https://y/{vid}",
+                    video_title=vid,
+                    target_label=f"Superwog S04E0{eid - 5} - T{eid}",
+                    video_duration=duration,
+                    matched_by=tier,
+                    status=JobStatus.done,
+                )
+            )
+        s.commit()
+        assert unchecked_count(s) == 3
+    page = client.get("/matches").text
+    assert "3 unchecked" in page and 'Needs a look<span class="count warn">2</span>' in page, (
+        "the exact title vouches for the first; the other two are unchecked"
+    )
+    client.post("/matches/recheck")
+    for _ in range(100):
+        status = client.get("/api/matches/recheck").json()
+        if not status["running"]:
+            break
+        time.sleep(0.05)
+    assert status["failure"] is None, status
+    jobs = {j["video_id"]: j for j in client.get("/api/jobs").json()}
+    assert jobs["beef"]["target_runtime"] == 0, "asked: Sonarr has none"
+    assert jobs["gone"]["video_duration"] == 0, "asked: the video is gone, no retry changes that"
+    assert jobs["live"]["video_duration"] == 0, "asked: the source answered with no length"
+    with client.app.state.session_factory() as s:
+        assert unchecked_count(s) == 0, "nothing the button could still fetch"
+    review = client.get("/matches/content?view=review").text
+    assert "unchecked" not in review.split('class="form-actions"', 1)[1].split("</div>", 1)[0]
+    assert (
+        "2 have no length at the source (gone, private or live). 1 has no runtime in Sonarr."
+        in review
+    )
+    assert "Those are not asked again" in review and "could not be fetched" not in review
+    assert review.count(">no length at the source</span>") == 2, (
+        "the cell says what the source said"
+    )
+    assert 'Needs a look<span class="count warn">2</span>' in review, (
+        "nothing vouches for those two"
+    )
+    everything = client.get("/matches?view=all").text
+    assert "7:16, no runtime in Sonarr" in everything
+
+
+def test_recheck_says_nothing_about_runtimes_sonarr_did_not_answer(client: TestClient) -> None:
+    import time
+
+    from outriggarr.api.matches import unchecked_count
+    from outriggarr.arr.base import ArrError
+    from outriggarr.db.models import TargetKind
+
+    _seed_series(client)
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={"connection_id": 1, "series_id": 5, "source_url": "https://www.youtube.com/@hotones"},
+    ).json()["id"]
+    with client.app.state.session_factory() as s:
+        s.add(
+            Job(
+                connection_id=1,
+                subscription_id=sub_id,
+                target_kind=TargetKind.episode,
+                series_id=5,
+                episode_ids=[11],
+                target_key="episode:5:11",
+                video_id="a",
+                video_url="https://y/a",
+                video_title="a",
+                target_label="Hot Ones S30E06 - Six",
+                video_duration=1500,
+                matched_by="exact",
+                status=JobStatus.done,
+            )
+        )
+        s.commit()
+    arr = client.app.state.arr_factory.by_url["http://sonarr-host:1234"]
+
+    async def down(series_id: int):
+        raise ArrError("GET /api/v3/episode -> HTTP 503: down")
+
+    arr.episodes = down
+    client.post("/matches/recheck")
+    for _ in range(100):
+        status = client.get("/api/matches/recheck").json()
+        if not status["running"]:
+            break
+        time.sleep(0.05)
+    jobs = {j["video_id"]: j for j in client.get("/api/jobs").json()}
+    assert jobs["a"]["target_runtime"] is None, "no answer is not an answer of none"
+    with client.app.state.session_factory() as s:
+        assert unchecked_count(s) == 1
+    review = client.get("/matches/content?view=all").text
+    assert "1 could not be fetched" in review and "no runtime in Sonarr." not in review
+
+
+def test_preview_says_why_one_word_titles_go_unmatched_and_what_to_set(client: TestClient) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from outriggarr.arr.base import EpisodeRef
+    from outriggarr.source import VideoRef
+
+    _seed_series(client)
+    aired = datetime.now(UTC) - timedelta(days=3)
+    arr = client.app.state.arr_factory.by_url["http://sonarr-host:1234"]
+    arr.episodes_by_series[5] = [
+        EpisodeRef(11, 3, 1, "Bingo", False, True, aired),
+        EpisodeRef(12, 3, 2, "Cricket", False, True, aired),
+    ]
+    client.app.state.source.recent = [
+        VideoRef(
+            "b", "Bingo Read Aloud By Isla Fisher | Bluey Book Reads", "https://y/b", 300, 1, None
+        ),
+        VideoRef("p", "Bluey and Bingo Playtime", "https://y/p", 300, 2, None),
+        VideoRef(
+            "c",
+            "Cricket Bluey Book Read Aloud by Toni Collette | Bluey Book Reads",
+            "https://y/c",
+            300,
+            3,
+            None,
+        ),
+    ]
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={"connection_id": 1, "series_id": 5, "source_url": "https://www.youtube.com/@bluey"},
+    ).json()["id"]
+    prev = client.get(f"/subscriptions/{sub_id}/preview").text
+    assert "2 unmatched" in prev
+    assert (
+        "2 of these titles are too short to look for inside a video title (“Bingo”, “Cricket”)"
+        in prev
+    )
+    assert "<strong>Title must contain</strong> scope" in prev
+    r = client.post(
+        f"/subscriptions/{sub_id}/edit",
+        data={
+            "sources": "https://www.youtube.com/@bluey",
+            "strategies": ["title"],
+            "date_tolerance_days": "2",
+            "date_offset_days": "0",
+            "title_regex": "",
+            "title_require": "Book Read",
+            "format": "",
+        },
+        follow_redirects=False,
+    )
+    assert r.status_code == 303, r.text
+    prev = client.post(f"/subscriptions/{sub_id}/scan").text
+    assert "2 matched" in prev and "too short to look for" not in prev, (
+        "inside the scope the words are looked for, and the hint has nothing to say"
+    )

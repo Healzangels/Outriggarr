@@ -818,3 +818,49 @@ def test_explain_reads_a_wildcard_and_an_exact_title() -> None:
         MatchConfig(("title",)),
     )["title"]
     assert hit.passed is True
+
+
+def test_a_title_scope_lets_a_one_word_title_be_looked_for() -> None:
+    """Bluey Book Reads: the episodes are "Bingo", "Cricket", "Bedroom"; the channel's
+    uploads carry those words everywhere ("Bluey and Bingo Playtime", "Playing Cricket
+    with Rusty"). Unscoped, a one-word title is refused; inside the operator's scope
+    ("Book Read"), the pool is already the Book Reads series, and the word may be
+    looked for — ambiguity within the scope is still refused."""
+    from outriggarr.matcher import title_too_short
+
+    eps = [ep(1, 3, 1, "Bingo"), ep(2, 3, 2, "Cricket"), ep(3, 3, 3, "Bedroom")]
+    videos = [
+        vid("bingo", "Bingo Read Aloud By Isla Fisher ⭐️ | Bluey Book Reads Series 3 💙 | Bluey"),
+        vid("play", "Let's Play…Seesaw 💙 | Bluey and Bingo Playtime | Bluey"),
+        vid("cricket", "Cricket Bluey Book Read Aloud by Toni Collette 🏏 | Bluey Book Reads 💙"),
+        vid("rusty", "Playing Cricket with Rusty!💙🥎 | Outdoor Fun with Bluey🌳 | Bluey"),
+        vid("bedroom", "Bedroom Bluey Book Read Aloud by Tan France ✨ | Bluey Book Reads 💙"),
+        vid("build", "Bluey and Bingo Build the Bedroom! 😴 🧸 | 2 HOURS of Imaginative Play 💙"),
+    ]
+    assert title_too_short("Bingo") and not title_too_short("Six Spicy Wings")
+    unscoped = match(eps, videos, [], MatchConfig(("title",)))
+    assert unscoped.matches == () and len(unscoped.unmatched) == 3, "one word: refused"
+    scoped = match(eps, videos, [], MatchConfig(("title",), title_require="Book Read"))
+    assert {(m.episode.title, m.video.id, m.tier) for m in scoped.matches} == {
+        ("Bingo", "bingo", "contains"),
+        ("Cricket", "cricket", "contains"),
+        ("Bedroom", "bedroom", "contains"),
+    }
+    careless = match(eps, videos, [], MatchConfig(("title",), title_require="Bluey"))
+    assert careless.matches == (), "a scope that keeps everything narrows nothing: ambiguous"
+    assert all(len(u.candidates["title"]) >= 2 for u in careless.unmatched), (
+        "every video with the word was seen; none was taken"
+    )
+
+
+def test_explain_names_the_scope_as_the_remedy_for_a_short_title() -> None:
+    e = ep(1, 3, 2, "Cricket")
+    v = vid("cricket", "Cricket Bluey Book Read Aloud by Toni Collette | Bluey Book Reads")
+    refused = next(c for c in explain_pair(e, v, MatchConfig(("title",)), []) if c.name == "title")
+    assert refused.passed is False and "Title must contain scope" in refused.detail
+    allowed = next(
+        c
+        for c in explain_pair(e, v, MatchConfig(("title",), title_require="Book Read"), [])
+        if c.name == "title"
+    )
+    assert allowed.passed is True, allowed.detail

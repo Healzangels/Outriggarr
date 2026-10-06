@@ -323,12 +323,28 @@ def is_unavailable(video: Video) -> bool:
     return video.title == video.id
 
 
-def _title_candidates(ep: Episode, videos: list[Video]) -> tuple[str, list[Video]]:
+def title_too_short(title: str) -> bool:
+    """Whether an episode title is too short to look for inside another title: one word,
+    or under six characters, matches far too much ("Bingo" is in half a channel's
+    uploads). A subscription's title scope lifts this — see `_title_candidates`."""
+    want = normalise_title(title)
+    return len(want) < MIN_CONTAINMENT_LEN or len(want.split()) < MIN_CONTAINMENT_TOKENS
+
+
+def _title_candidates(
+    ep: Episode, videos: list[Video], *, scoped: bool = False
+) -> tuple[str, list[Video]]:
     """(tier, candidates): exact normalised equality first; otherwise containment on
     word boundaries, for episode titles with at least two words, skipping promos.
     Containment where both titles carry the show's own number and it agrees is tier
     "numbered": it settles a claim like an exact title, but it is still containment
-    ("KT #751 - … (clip)" contains "#751 - …"), so the length check still applies."""
+    ("KT #751 - … (clip)" contains "#751 - …"), so the length check still applies.
+
+    scoped: the pool is already narrowed by the subscription's title phrase. The
+    two-word minimum exists to keep a short title from matching across everything a
+    channel posts; inside a scope the operator has done that narrowing, so a one-word
+    title ("Cricket" in a Book Reads series whose videos all say "Book Read") may be
+    looked for — ambiguity within the scope is still refused, as ever."""
     want = normalise_title(ep.title)
     if not want:
         return ("none", [])
@@ -343,7 +359,7 @@ def _title_candidates(ep: Episode, videos: list[Video]) -> tuple[str, list[Video
     if exact:
         return ("exact", exact)
     want_tokens = want.split()
-    if len(want) < MIN_CONTAINMENT_LEN or len(want_tokens) < MIN_CONTAINMENT_TOKENS:
+    if not scoped and title_too_short(ep.title):
         return ("none", [])
     fragments = wildcard_fragments(ep.title)
     if fragments and PLACEHOLDER_FRAGMENTS & set(fragments):
@@ -403,7 +419,7 @@ def match(
                 if ep.id in matched:
                     continue
                 if strategy == "title":
-                    tier, cands = _title_candidates(ep, eligible)
+                    tier, cands = _title_candidates(ep, eligible, scoped=bool(cfg.title_require))
                 else:
                     tier, cands = strategy, _candidates(strategy, ep, eligible, by_video, cfg, rx)
                 seen[ep.id][strategy] = tuple(v.id for v in cands)
@@ -613,12 +629,14 @@ def _title_check(ep: Episode, video: Video, cfg: MatchConfig) -> Check:
     if want == have:
         return Check("title", True, f"the titles are the same once tidied: “{want}”")
     want_tokens = want.split()
-    if len(want) < MIN_CONTAINMENT_LEN or len(want_tokens) < MIN_CONTAINMENT_TOKENS:
+    if not cfg.title_require and title_too_short(ep.title):
         return Check(
             "title",
             False,
             f"“{want}” is too short to look for inside another title "
-            f"(needs {MIN_CONTAINMENT_LEN} characters and {MIN_CONTAINMENT_TOKENS} words)",
+            f"(needs {MIN_CONTAINMENT_LEN} characters and {MIN_CONTAINMENT_TOKENS} words); "
+            "a Title must contain scope on the subscription lifts that, since the scope "
+            "does the narrowing this rule exists for",
         )
     fragments = wildcard_fragments(ep.title)
     if fragments and PLACEHOLDER_FRAGMENTS & set(fragments):

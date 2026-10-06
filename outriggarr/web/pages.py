@@ -76,6 +76,7 @@ from outriggarr.matcher import (
     length_mismatch,
     mmss,
     normalise_title,
+    title_too_short,
 )
 from outriggarr.settings import (
     DEFAULTS,
@@ -287,6 +288,7 @@ def _code(season: int, episode: int) -> str:
 
 templates.env.globals["tier_label"] = tier_label
 templates.env.globals["tier_help"] = tier_help
+templates.env.tests["title_too_short"] = title_too_short
 templates.env.globals["same_title"] = same_title
 templates.env.globals["titles_match"] = titles_match
 # pages re-rendered on a form error do not recompute the scan timing; the header simply omits it
@@ -503,7 +505,7 @@ def review_entry(job: Job) -> dict:
     A length that contradicts the runtime always needs a look until confirmed."""
     tier = job.matched_by or _tier_inferred(job)
     reason = length_mismatch(job.target_runtime, job.video_duration)
-    evidence = job.video_duration is not None and bool(job.target_runtime)
+    evidence = bool(job.video_duration) and bool(job.target_runtime)  # 0 = asked, none: no evidence
     if job.reviewed_at is not None:
         state = "confirmed"
     elif reason:
@@ -514,6 +516,8 @@ def review_entry(job: Job) -> dict:
         state = "length ok"
     elif job.video_duration is None:
         state = "unchecked"
+    elif not job.video_duration:
+        state = "no length"  # asked: the source has none (gone, private, live)
     else:
         state = "no runtime"
     return {
@@ -524,7 +528,7 @@ def review_entry(job: Job) -> dict:
         "state": state,
         "video_length": mmss(job.video_duration) if job.video_duration else None,
         "runtime_length": mmss(job.target_runtime * 60) if job.target_runtime else None,
-        "needs_look": state in ("length mismatch", "unchecked", "no runtime"),
+        "needs_look": state in ("length mismatch", "unchecked", "no length", "no runtime"),
     }
 
 

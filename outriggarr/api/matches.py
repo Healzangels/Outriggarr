@@ -20,7 +20,7 @@ from outriggarr.api.deps import track_task
 from outriggarr.arr.base import ArrError
 from outriggarr.db.models import Connection, Job, utcnow
 from outriggarr.matcher import length_mismatch
-from outriggarr.source import SourceError, is_rate_limited
+from outriggarr.source import SourceError, is_permanent_failure, is_rate_limited
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/matches", tags=["matches"])
@@ -39,6 +39,8 @@ class RecheckProgress:
     done: int = 0  # videos fetched so far (success or failure)
     runtimes_filled: int = 0
     durations_filled: int = 0
+    no_runtime: int = 0  # Sonarr was asked and has none: remembered, not asked again
+    no_length: int = 0  # the source has no length (gone, private, live): likewise
     flagged: int = 0
     error_count: int = 0
     first_error: str | None = None
@@ -66,11 +68,21 @@ class RecheckProgress:
         if self.finished_at is None:
             return ""
         if self.checked == 0:
-            return "Nothing left to check: every match already has its length evidence."
+            return "Nothing left to check: every match has been looked up."
         text = (
             f"Checked {self.checked} matches: {self.durations_filled} video lengths and "
             f"{self.runtimes_filled} runtimes fetched; {self.flagged} contradict their runtime."
         )
+        if self.no_length:
+            text += (
+                f" {self.no_length} {'has' if self.no_length == 1 else 'have'} no length at the "
+                "source (gone, private or live)."
+            )
+        if self.no_runtime:
+            n = self.no_runtime
+            text += f" {n} {'has' if n == 1 else 'have'} no runtime in Sonarr."
+        if self.no_length or self.no_runtime:
+            text += " Those are not asked again: the title has to vouch."
         if self.error_count:
             text += f" {self.error_count} could not be fetched (first: {self.first_error})."
         if self.skipped:
@@ -128,9 +140,10 @@ async def recheck_evidence(
     )
     progress.checked = len(jobs)
     runtimes: dict[tuple[int, int], dict[int, int | None]] = {}
+    failed: set[tuple[int, int]] = set()  # Sonarr did not answer: say nothing about those
     with session.no_autoflush:
         for job in jobs:
-            if job.target_runtime or not (job.series_id and job.episode_ids):
+            if job.target_runtime is not None or not (job.series_id and job.episode_ids):
                 continue
             key = (job.connection_id, job.series_id)
             if key not in runtimes:
@@ -141,10 +154,16 @@ async def recheck_evidence(
                 except ArrError as exc:
                     _note_error(progress, f"{conn.name}: {exc}")
                     runtimes[key] = {}
+                    failed.add(key)
             found = [runtimes[key].get(eid) for eid in job.episode_ids]
             if found and all(found):  # a half-known multi-episode runtime is no evidence
                 job.target_runtime = sum(found)  # type: ignore[arg-type]
                 progress.runtimes_filled += 1
+            elif key not in failed:
+                # asked, and Sonarr has none: 0 says so, where NULL would offer the same
+                # unanswerable fetch on every visit (the "1 unchecked" that never clears)
+                job.target_runtime = 0
+                progress.no_runtime += 1
         session.commit()
 
         need = [j for j in jobs if j.video_duration is None]
@@ -174,8 +193,13 @@ async def recheck_evidence(
                     progress.durations_filled += 1
                 elif err == SKIPPED:
                     progress.skipped += 1
-                elif err:
+                elif err and not is_permanent_failure(err):
                     _note_error(progress, err)
+                else:
+                    # the source answered with no length (a live stream, a premiere) or
+                    # with an answer no retry changes (gone, private): 0 remembers that
+                    job.video_duration = 0
+                    progress.no_length += 1
                 progress.done += 1
                 since_commit += 1
                 if since_commit >= COMMIT_EVERY:

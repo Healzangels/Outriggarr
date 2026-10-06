@@ -105,6 +105,7 @@
 <h4>Unmatched <span class="muted">{{ report.unmatched | length }}{% if report.unmatched | length > shown | length %} · showing the first {{ shown | length }}{% endif %}</span></h4>
 {% set strategy_names = (["pins"] if sub.overrides else []) + (sub.strategies or []) %}
 <p class="muted">{% if not any_candidates %}{% if strategy_names %}No strategy saw a candidate for any of these ({{ strategy_names | join(", ") }}). {% else %}Pins only, and none set yet. {% endif %}{% endif %}Pin a video to an episode by picking one of the listed videos or pasting a video URL. Pins always win on the next scan.</p>
+{% if not sub.title_require and "title" in sub.strategies %}{% set short = shown | map(attribute="title") | select("title_too_short") | list %}{% if short %}<p class="muted">{{ short | length }} of these {{ 'title is' if short | length == 1 else 'titles are' }} too short to look for inside a video title ({% for t in short[:3] %}“{{ t }}”{{ ', ' if not loop.last }}{% endfor %}{% if short | length > 3 %}, …{% endif %}): one word matches far too much of a channel. A <strong>Title must contain</strong> scope under Subscription settings — the phrase every episode's video carries — lifts that limit, since the scope does the narrowing.</p>{% endif %}{% endif %}
 <div class="table-wrap">
 <table>
   <thead><tr><th>Episode</th>{% if any_candidates %}<th>What each strategy saw</th>{% endif %}<th>Pin a video</th></tr></thead>
