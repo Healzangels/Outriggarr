@@ -3230,13 +3230,18 @@ def test_stuck_unmatched_and_a_shrunk_listing_are_said_on_both_pages(client: Tes
     ).json()["id"]
     client.post(f"/subscriptions/{sub_id}/download")  # a real scan: S30E07 unmatched, once
     prev = client.get(f"/subscriptions/{sub_id}/preview").text
-    assert "S30E07" in prev and "still unmatched since" not in prev, "seen once: new, not stuck"
-    assert "· 1 stuck" not in client.get("/series").text
+    assert "S30E07" in prev and "unmatched for" not in prev, "seen once: new, not persistent"
+    assert " for " not in client.get("/series").text.split("1 unmatched", 1)[1][:12]
     client.post(f"/subscriptions/{sub_id}/download")
     prev = client.get(f"/subscriptions/{sub_id}/preview").text
-    assert "still unmatched since" in prev and "· 2 scans" in prev
+    assert "unmatched for " in prev and "· 2 scans" in prev
     series = client.get("/series").text
-    assert "1 unmatched · 1 stuck" in series and "has been unmatched since" in series
+    row = series.split("Hot Ones</a>", 1)[1].split("</tr>", 1)[0]
+    assert "1 unmatched for " in row and "has been unmatched for" in row, (
+        "the same words as the row"
+    )
+    assert "stuck" not in row, "one vocabulary: a duration, not a label"
+    assert "0 matched" not in row and "0 new job" not in row, "counts of nothing are not said"
     source.recent = source.recent[:3]
     client.post(f"/subscriptions/{sub_id}/download")
     prev = client.get(f"/subscriptions/{sub_id}/preview").text
@@ -3460,3 +3465,33 @@ def test_the_why_panel_waits_for_something_unmatched(client: TestClient) -> None
     assert "2 matched" in prev and "unmatched" not in prev
     assert "a video match?" not in prev, "nothing went unmatched: nothing to explain"
     assert "The listing" in prev, "the listing is always there"
+
+
+def test_for_text_says_how_long_without_the_suffix() -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from outriggarr.web.pages import for_text
+
+    now = datetime.now(UTC)
+    assert for_text(now - timedelta(days=10, hours=3)) == "10 days"
+    assert for_text((now - timedelta(hours=3)).isoformat()) == "3 hr", "an ISO string from a report"
+    assert for_text(now - timedelta(seconds=5)) == "under a minute"
+    assert for_text(None) == ""
+
+
+def test_header_scan_tail_says_only_non_zero_counts(client: TestClient) -> None:
+    from outriggarr.db.models import Subscription
+
+    _seed_series(client)
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={"connection_id": 1, "series_id": 5, "source_url": "https://www.youtube.com/@hotones"},
+    ).json()["id"]
+    with client.app.state.session_factory() as s:
+        sub = s.get(Subscription, sub_id)
+        sub.last_scan_at = sub.created_at
+        sub.last_scan_result = {"matched": 0, "created": 0, "unmatched": 2, "error": None}
+        s.commit()
+    page = client.get(f"/subscriptions/{sub_id}").text
+    tail = page.split('id="scan-line"', 1)[1].split("</dd>", 1)[0]
+    assert "2 unmatched" in tail and "0 matched" not in tail

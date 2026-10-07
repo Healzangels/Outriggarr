@@ -225,6 +225,19 @@ def same_title(target_label: str | None, video_title: str | None) -> str | None:
 templates.env.filters["ago"] = ago
 templates.env.filters["day_label"] = day_label
 
+
+def for_text(value: datetime | str | None) -> str:
+    """'10 days' / '3 hr' / '20 min': how long something has been so, from a datetime
+    or an ISO string (a report's `unmatched_since`), in `ago`'s units without the suffix."""
+    if value is None:
+        return ""
+    dt = datetime.fromisoformat(value) if isinstance(value, str) else value
+    text = ago(dt)
+    return "under a minute" if text == "just now" else text.removesuffix(" ago")
+
+
+templates.env.filters["for_text"] = for_text
+
 # How a match was made, in the words the page uses (the matcher's tier and strategy
 # names are internal). "override" is a pin on screen; "title" as a bare strategy only
 # appears where the tier is unknown.
