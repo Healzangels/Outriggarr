@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -659,6 +659,66 @@ async def test_every_source_is_listed_and_videos_are_pooled_once(deps, session_f
     r2 = await scan_subscription(deps, sub_id)
     assert r2.error.startswith("https://www.youtube.com/@show: ERROR: [youtube:tab]")
     assert r2.created_job_ids == [] and r2.matches == []
+
+
+def test_future_policy_measures_on_one_clock_not_two_calendars() -> None:
+    """An evening US episode (airDate D, airDateUtc D+1 01:00Z) subscribed to at D+1
+    00:30Z aired AFTER the subscription; a Tokyo morning one (airDate D+1, airDateUtc
+    D 23:00Z) aired BEFORE it. Two calendars said the opposite of both."""
+    from outriggarr.worker.scheduler import _episode, auto_queues
+
+    sub = Subscription(auto_download="future", created_at=datetime(2026, 9, 2, 0, 30, tzinfo=UTC))
+    us_evening = _episode(
+        EpisodeRef(
+            1,
+            1,
+            1,
+            "US",
+            False,
+            True,
+            datetime(2026, 9, 2, 1, 0, tzinfo=UTC),
+            air_date=date(2026, 9, 1),
+        )
+    )
+    tokyo_morning = _episode(
+        EpisodeRef(
+            2,
+            1,
+            2,
+            "JP",
+            False,
+            True,
+            datetime(2026, 9, 1, 23, 0, tzinfo=UTC),
+            air_date=date(2026, 9, 2),
+        )
+    )
+    assert auto_queues(sub, us_evening) is True, "aired half an hour after subscribing"
+    assert auto_queues(sub, tokyo_morning) is False, "aired an hour and a half before"
+    # no instant from Sonarr: the calendar day is all there is
+    day_only = _episode(EpisodeRef(3, 1, 3, "D", False, True, None, air_date=date(2026, 9, 2)))
+    assert day_only.air_at is None and auto_queues(sub, day_only) is True
+
+
+async def test_a_settings_change_keeps_how_long_an_episode_has_been_unmatched(
+    deps, session_factory
+) -> None:
+    from outriggarr.worker.scheduler import bookkeeping_only
+
+    sub_id, conn_id = make_sub(session_factory)
+    client = fake_client(deps, conn_id)
+    client.episodes_by_series[5] = [EpisodeRef(11, 30, 6, "Nothing alike", False, True, NOW)]
+    first = await scan_subscription(deps, sub_id)
+    assert first.unmatched_scans == {"S30E06": 1}
+    with session_factory() as s:  # what the API does when a matching setting changes
+        sub = s.get(Subscription, sub_id)
+        sub.last_report = bookkeeping_only(sub.last_report)
+        assert sub.last_report["stale"] is True and "matches" not in sub.last_report
+        s.commit()
+    deps.now = lambda: NOW + timedelta(days=3)
+    second = await scan_subscription(deps, sub_id)
+    assert second.unmatched_scans == {"S30E06": 2}, "the count survived the clear"
+    assert second.unmatched_since == {"S30E06": first.unmatched_since["S30E06"]}
+    assert bookkeeping_only(None) is None and bookkeeping_only({}) is None
 
 
 async def test_auto_download_policy_gates_scheduled_scans_only(deps, session_factory) -> None:

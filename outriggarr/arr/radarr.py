@@ -16,7 +16,7 @@ from outriggarr.arr.common import ArrHttp
 class RadarrClient(ArrHttp):
     async def target_info(self, target: Target) -> TargetInfo:
         if not target.is_movie:
-            raise ArrError("Radarr cannot import an episode target")
+            raise ArrError("Radarr cannot import an episode target", retryable=False)
         m = await self.get(f"movie/{target.movie_id}")
         return TargetInfo(
             title=str(m.get("title", "")),

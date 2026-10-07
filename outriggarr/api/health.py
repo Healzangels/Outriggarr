@@ -67,44 +67,53 @@ def _write_lock_free(engine) -> bool:
     return True
 
 
+def tooling_status(app) -> dict[str, object]:
+    """The tooling as /health reports it and the footer shows it: one dict, so the two
+    cannot drift."""
+    from yt_dlp.version import __version__ as ytdlp_version
+
+    with app.state.session_factory() as session:
+        cookies_path = get_setting(session, "cookies_path")
+    pot_probe = getattr(app.state, "pot_probe", None)
+    return {
+        "yt_dlp": ytdlp_version,
+        "js_runtime": js_runtime(),
+        "ffmpeg": shutil.which("ffmpeg") is not None,
+        # off = age-gated videos top out at 480p (YouTube wants a proof-of-origin token)
+        "po_token_provider": pot_provider_ready(app.state.settings.pot_server_home)
+        and not pot_probe,
+        "po_token_probe": pot_probe,
+        # none / unreadable / signed in / signed out — "signed out" means age-gated videos
+        # will fail until the cookies file is exported again
+        "youtube_session": cookies_state(cookies_path),
+        # set while a rate-limit answer has the queue, the scans and the fetches paused
+        "youtube_cooloff": cooloff_status(
+            getattr(getattr(app.state, "runner_deps", None), "cooloff", None)
+        ),
+        # False means downloads will fail: fix the mount's ownership (see entrypoint.sh)
+        "staging_writable": staging_writable(app.state.settings.staging_dir),
+    }
+
+
 @router.get("/health")
 def health(request: Request, response: Response) -> dict[str, object]:
     """200 when downloads can work; 503 "degraded" with the reasons when they cannot."""
     with request.app.state.session_factory() as session:
         session.execute(text("SELECT 1"))
-        cookies_path = get_setting(session, "cookies_path")
     # a reader never blocks under WAL, so SELECT 1 cannot see a wedged writer; ask for
     # the write lock for two seconds and give it straight back
     write_lock_ok = _write_lock_free(request.app.state.engine)
-    from yt_dlp.version import __version__ as ytdlp_version
-
-    staging = request.app.state.settings.staging_dir
     tasks = getattr(request.app.state, "background_tasks", {}) or {}
     # a task that was never started (tests, --no-worker) is neither alive nor dead
     liveness = {name: (not t.done()) for name, t in tasks.items() if t is not None}
     body: dict[str, object] = {
         "status": "ok",
         "version": __version__,
-        "yt_dlp": ytdlp_version,
-        "js_runtime": js_runtime(),
-        "ffmpeg": shutil.which("ffmpeg") is not None,
-        # off = age-gated videos top out at 480p (YouTube wants a proof-of-origin token)
-        "po_token_provider": pot_provider_ready(request.app.state.settings.pot_server_home)
-        and not getattr(request.app.state, "pot_probe", None),
-        # none / unreadable / signed in / signed out — "signed out" means age-gated videos
-        # will fail until the cookies file is exported again
-        "youtube_session": cookies_state(cookies_path),
-        # set while a rate-limit answer has the queue, the scans and the fetches paused
-        "youtube_cooloff": cooloff_status(
-            getattr(getattr(request.app.state, "runner_deps", None), "cooloff", None)
-        ),
-        # False means downloads will fail: fix the mount's ownership (see entrypoint.sh)
-        "staging_writable": staging_writable(staging),
+        **tooling_status(request.app),
         "worker_alive": liveness.get("worker"),
         "scheduler_alive": liveness.get("scheduler"),
     }
     body["write_lock"] = write_lock_ok
-    body["po_token_probe"] = getattr(request.app.state, "pot_probe", None)
     problems = [k for k in ("ffmpeg", "staging_writable", "write_lock") if not body[k]]
     problems += [k for k, alive in liveness.items() if alive is False]
     if getattr(request.app.state, "worker_note", None):

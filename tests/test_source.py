@@ -190,7 +190,9 @@ def test_subtitle_opts_and_sidecars(tmp_path) -> None:
     o = subtitle_opts(("en", "es"), False)
     assert o["writesubtitles"] is True and o["writeautomaticsub"] is False
     assert o["subtitleslangs"] == ["en", "es"] and o["subtitlesformat"] == "srt/best"
-    assert o["postprocessors"] == [{"key": "FFmpegSubtitlesConvertor", "format": "srt"}]
+    assert o["postprocessors"] == [
+        {"key": "FFmpegSubtitlesConvertor", "format": "srt", "when": "before_dl"}
+    ], "the captions pass skips the download, after which yt-dlp runs no post-processing"
     assert subtitle_opts(("en",), True)["writeautomaticsub"] is True
 
     (tmp_path / "abc.en.srt").write_text("x")
@@ -1361,6 +1363,65 @@ def test_an_age_gated_video_is_downloaded_again_with_the_session(monkeypatch, tm
     assert kinds == [("video", False), ("video", True), ("subs", True)]
     assert result.path.read_bytes() == b"real" and result.height == 1080
     assert [p.name for p in result.subtitles] == ["v1.en.srt"], "captions from the second pass"
+
+
+def test_a_failed_signed_in_attempt_keeps_the_embedded_file(monkeypatch, tmp_path) -> None:
+    import yt_dlp
+    from yt_dlp.utils import DownloadError
+
+    from outriggarr.source import YtDlpSource
+
+    class SignedInFails(_AgeGateYDL):
+        def extract_info(self, url, download=False):
+            if "cookiefile" in self.opts and not self.opts.get("skip_download"):
+                raise DownloadError("ERROR: unable to download video data: HTTP Error 403")
+            return super().extract_info(url, download)
+
+    _AgeGateYDL.instances = []
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", SignedInFails)
+    jar = tmp_path / "c.txt"
+    jar.write_text("# cookies")
+    src = YtDlpSource(extra_opts=lambda: {"cookiefile": str(jar)})
+    monkeypatch.setattr(src, "_pot_ready", lambda: True)
+    result = src.download(
+        "https://youtu.be/v1",
+        tmp_path / "out",
+        fmt="best",
+        merge_container="mkv",
+        progress=lambda p: None,
+        should_abort=lambda: False,
+    )
+    assert result.path.read_bytes() == b"poor" and result.height == 480, (
+        "the embedded client's file is the job's file, not a failure"
+    )
+    assert sorted(p.name for p in result.path.parent.iterdir()) == ["v1.mkv"], "nothing left aside"
+
+
+def test_a_playlist_that_lists_a_video_twice_yields_it_once() -> None:
+    from outriggarr.source import videos_from_info
+
+    info = {
+        "_type": "playlist",
+        "id": "PL1",
+        "entries": [
+            {"id": "a", "title": "A", "live_status": "was_live"},
+            {"id": "b", "title": "B"},
+            {"id": "a", "title": "A again"},
+        ],
+    }
+    videos = videos_from_info(info)
+    assert [(v.id, v.playlist_index) for v in videos] == [("a", 1), ("b", 2)]
+    assert videos[0].live_status == "was_live" and videos[1].live_status is None
+
+
+def test_check_ytdlp_options_rejects_what_yt_dlp_would() -> None:
+    import pytest
+
+    from outriggarr.source import check_ytdlp_options
+
+    check_ytdlp_options({"format": "best"})
+    with pytest.raises(ValueError, match="yt-dlp rejected it"):
+        check_ytdlp_options({"format": "bestvideo[["})
 
 
 def test_captions_are_best_effort(monkeypatch, tmp_path) -> None:

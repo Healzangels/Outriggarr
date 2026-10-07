@@ -12,12 +12,12 @@
     {% set when = job.finished_at or job.created_at %}
     {% set day = when | day_label %}
     {% if day != ns.day %}{% set ns.day = day %}<tr class="day-group"><td colspan="5">{{ day }}</td></tr>{% endif %}
-    <tr id="job-{{ job.id }}" class="{{ 'quiet' if job.status.value in ('done', 'cancelled') else '' }}">
+    <tr id="job-{{ job.id }}" class="{{ 'quiet' if job.status in (JobStatus.done, JobStatus.cancelled) else '' }}">
       <td class="nowrap">
         <span class="job-id mono">#{{ job.id }}</span>
         <span class="badge badge-{{ job.status.value }} status status-{{ job.status.value }}">{{ job.status.value }}</span>
-        {% if job.status.value == "downloading" %}<span class="two-line"><progress value="{{ job.progress_pct }}" max="100"></progress> <span class="muted">{{ job.progress_pct }}%</span></span>
-        {% elif job.status.value == "importing" %}<span class="two-line"><progress></progress></span>{% endif %}
+        {% if job.status == JobStatus.downloading %}<span class="two-line"><progress value="{{ job.progress_pct }}" max="100"></progress> <span class="muted">{{ job.progress_pct }}%</span></span>
+        {% elif job.status == JobStatus.importing %}<span class="two-line"><progress></progress></span>{% endif %}
         {% if job.next_retry_at %}<span class="two-line muted">retry {{ job.next_retry_at | ago }}</span>{% endif %}
         {% if job.attempts > 1 %}<span class="two-line muted">attempt {{ job.attempts }}</span>{% endif %}
       </td>
@@ -28,13 +28,13 @@
         {% if not job.subscription_id %} <span class="chip" title="Queued from Grab, not by a subscription">by hand</span>{% endif %}
       </td>
       <td>{% set note = same_title(job.target_label, job.video_title) %}{% if note %}<a href="{{ job.video_url }}" target="_blank" rel="noopener" class="truncate same-title" title="{{ note }}">same title</a>{% else %}<a href="{{ job.video_url }}" target="_blank" rel="noopener" class="truncate" title="{{ job.video_title or job.video_id }}">{{ job.video_title or job.video_id }}</a>{% endif %}
-        {% if job.error and not (job.status.value == "cancelled" and job.error == "cancelled") %}<details class="error" id="err-{{ job.id }}-{{ job.attempts }}" hx-preserve><summary class="{{ 'warn' if job.status.value == 'done' else ('muted' if job.status.value == 'cancelled' else 'bad') }}">{{ job.error.splitlines()[0] | truncate(60) }}</summary><pre>{{ job.error }}</pre></details>{% if causes is defined and causes.get(job.id) %}<span class="cause">{{ causes[job.id] }}</span>{% endif %}{% endif %}
+        {% if job.error and not (job.status == JobStatus.cancelled and job.error == "cancelled") %}<details class="error" id="err-{{ job.id }}-{{ fingerprint(job.error) }}" hx-preserve><summary class="{{ 'warn' if job.status == JobStatus.done else ('muted' if job.status == JobStatus.cancelled else 'bad') }}">{{ job.error.splitlines()[0] | truncate(60) }}</summary><pre>{{ job.error }}</pre></details>{% if causes is defined and causes.get(job.id) %}<span class="cause">{{ causes[job.id] }}</span>{% endif %}{% endif %}
       </td>
       <td class="muted when"><time datetime="{{ when.isoformat() }}" title="created {{ job.created_at.strftime('%Y-%m-%d %H:%M') }}Z{% if job.finished_at %} · finished {{ job.finished_at.strftime('%Y-%m-%d %H:%M') }}Z{% endif %}">{{ when | ago }}</time></td>
       <td class="actions">
-        {% if job.status in RETRYABLE %}<button id="retry-{{ job.id }}" {% if job.status.value == "cancelled" %}class="secondary outline" {% endif %}hx-post="/activity/jobs/{{ job.id }}/retry?view={{ view }}" hx-target="#jobs">Retry</button>{% endif %}
-        {% if job.status in CANCELLABLE and not (job.status.value == "failed" and not job.next_retry_at) %}<button id="cancel-{{ job.id }}" class="secondary outline" hx-post="/activity/jobs/{{ job.id }}/cancel?view={{ view }}" hx-target="#jobs" hx-confirm="Stop job #{{ job.id }} and mark it cancelled?">Cancel</button>{% endif %}
-        {% if job.status in DELETABLE and not (job.status.value == "failed" and job.next_retry_at) %}<button id="delete-{{ job.id }}" class="secondary outline" hx-post="/activity/jobs/{{ job.id }}/delete?view={{ view }}" hx-target="#jobs" hx-confirm="Delete job #{{ job.id }}? Only its staging folder goes; a file already imported into {{ job.connection.name }} stays." title="Delete this job and its staging folder">Delete</button>{% endif %}
+        {% if job.status in RETRYABLE %}<button id="retry-{{ job.id }}" {% if job.status == JobStatus.cancelled %}class="secondary outline" {% endif %}hx-post="/activity/jobs/{{ job.id }}/retry?view={{ view }}" hx-target="#jobs">Retry</button>{% endif %}
+        {% if job.status in CANCELLABLE and not (job.status == JobStatus.failed and not job.next_retry_at) %}<button id="cancel-{{ job.id }}" class="secondary outline" hx-post="/activity/jobs/{{ job.id }}/cancel?view={{ view }}" hx-target="#jobs" hx-confirm="Stop job #{{ job.id }} and mark it cancelled?">Cancel</button>{% endif %}
+        {% if job.status in DELETABLE and not (job.status == JobStatus.failed and job.next_retry_at) %}<button id="delete-{{ job.id }}" class="secondary outline" hx-post="/activity/jobs/{{ job.id }}/delete?view={{ view }}" hx-target="#jobs" hx-confirm="Delete job #{{ job.id }}? Only its staging folder goes; a file already imported into {{ job.connection.name }} stays." title="Delete this job and its staging folder">Delete</button>{% endif %}
       </td>
     </tr>
   {% endfor %}

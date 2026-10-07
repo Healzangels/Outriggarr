@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import html
 import logging
 import re
-import shutil
+import zlib
 from datetime import UTC, date, datetime, timedelta, tzinfo
 from pathlib import Path
 from types import SimpleNamespace
@@ -31,7 +32,7 @@ from outriggarr.api.connections import (
 from outriggarr.api.dates import progress_map as date_progress_map
 from outriggarr.api.dates import start_date_fetch
 from outriggarr.api.deps import ArrFactoryDep, DbSession, RunnerDepsDep
-from outriggarr.api.health import cooloff_status, staging_writable
+from outriggarr.api.health import tooling_status
 from outriggarr.api.jobs import (
     CANCELLABLE,
     DELETABLE,
@@ -54,6 +55,7 @@ from outriggarr.api.subscriptions import (
     run_scan,
     set_override,
     set_override_by_url,
+    subscription_or_404,
     update_subscription,
 )
 from outriggarr.arr.base import ArrError
@@ -78,6 +80,7 @@ from outriggarr.matcher import (
     normalise_title,
     title_too_short,
 )
+from outriggarr.naming import split_label
 from outriggarr.settings import (
     DEFAULTS,
     FORMAT_PRESETS,
@@ -86,7 +89,7 @@ from outriggarr.settings import (
     get_setting,
     preset_for,
 )
-from outriggarr.source import cookies_state, js_runtime, pot_provider_ready
+from outriggarr.source import cookies_state
 from outriggarr.worker.scheduler import ScanReport, known_date_ids
 
 log = logging.getLogger(__name__)
@@ -156,7 +159,9 @@ def ago(dt: datetime | None, now: datetime | None = None, tz: tzinfo | None = No
     if secs < 60:
         return "in under a minute" if future else "just now"
     if secs >= 86400:
-        n = abs((now.astimezone(tz).date() - dt.astimezone(tz).date()).days)
+        # at least one: a DST fall-back makes a 25-hour day, and 24 hours of it is not
+        # "0 days ago" (or "Today")
+        n = max(1, abs((now.astimezone(tz).date() - dt.astimezone(tz).date()).days))
         label = f"{n} day{'s' if n != 1 else ''}"
         return f"in {label}" if future else f"{label} ago"
     for unit, size in (("hr", 3600), ("min", 60)):
@@ -166,7 +171,6 @@ def ago(dt: datetime | None, now: datetime | None = None, tz: tzinfo | None = No
     return "just now"
 
 
-_LABEL_TITLE = re.compile(r"\sS\d+E\d+(?:-E\d+)?\s-\s(.+)$")
 _SEPARATORS = " -:|–—"
 
 
@@ -216,10 +220,10 @@ def same_title(target_label: str | None, video_title: str | None) -> str | None:
     what precedes the code names the series."""
     if not target_label or not video_title:
         return None
-    m = _LABEL_TITLE.search(target_label)
-    if not m:
+    series, code, title = split_label(target_label)
+    if not code:
         return None
-    return titles_match(m.group(1), video_title, target_label[: m.start()].strip())
+    return titles_match(title, video_title, series)
 
 
 templates.env.filters["ago"] = ago
@@ -304,27 +308,23 @@ templates.env.globals["tier_help"] = tier_help
 templates.env.tests["title_too_short"] = title_too_short
 templates.env.globals["same_title"] = same_title
 templates.env.globals["titles_match"] = titles_match
+templates.env.globals["split_label"] = split_label
+
+
+def fingerprint(text: object) -> str:
+    """A short, stable id for a piece of text: an element whose id carries it is a new
+    element to htmx once the text changes (hx-preserve keeps the old one otherwise)."""
+    return f"{zlib.crc32(str(text).encode()):08x}"
+
+
+templates.env.globals["fingerprint"] = fingerprint
 # pages re-rendered on a form error do not recompute the scan timing; the header simply omits it
 templates.env.globals.update(next_scan=None, next_scans={}, warning=None)
 
 
 def _tooling(request: Request) -> dict:
-    from yt_dlp.version import __version__ as ytdlp_version
-
-    staging = request.app.state.settings.staging_dir
-    with request.app.state.session_factory() as session:
-        cookies_path = get_setting(session, "cookies_path")
-    deps = getattr(request.app.state, "runner_deps", None)
     return {
-        "youtube_session": cookies_state(cookies_path),
-        "youtube_cooloff": cooloff_status(getattr(deps, "cooloff", None)),
-        "yt_dlp": ytdlp_version,
-        "js_runtime": js_runtime(),
-        "ffmpeg": shutil.which("ffmpeg") is not None,
-        "po_token_provider": pot_provider_ready(request.app.state.settings.pot_server_home)
-        and not getattr(request.app.state, "pot_probe", None),
-        "po_token_probe": getattr(request.app.state, "pot_probe", None),
-        "staging_writable": staging_writable(staging),
+        **tooling_status(request.app),
         # a worker or scheduler task that ended is a dead loop behind a live page: say so
         "dead_loops": [
             name
@@ -501,8 +501,7 @@ def _tier_inferred(job: Job) -> str:
     sub = job.subscription
     if sub is not None and any(o.video_id == job.video_id for o in sub.overrides):
         return "override"
-    label = job.target_label or ""
-    want = normalise_title(label.split(" - ", 1)[1] if " - " in label else "")
+    want = normalise_title(split_label(job.target_label)[2])
     have = normalise_title(job.video_title or "")
     if want and want == have:
         return "exact"
@@ -527,12 +526,12 @@ def review_entry(job: Job) -> dict:
         state = "vouched"
     elif evidence:
         state = "length ok"
-    elif job.video_duration is None:
-        state = "unchecked"
+    elif job.video_duration is None or job.target_runtime is None:
+        state = "unchecked"  # not asked yet: what Recheck lengths fetches, and counts
     elif not job.video_duration:
-        state = "no length"  # asked: the source has none (gone, private, live)
+        state = "no length"  # asked: the source has none (gone, private)
     else:
-        state = "no runtime"
+        state = "no runtime"  # asked: Sonarr has none (0)
     return {
         "job": job,
         "tier": tier,
@@ -1027,9 +1026,7 @@ def subscription_page(request: Request, subscription_id: int, session: DbSession
 @router.get("/subscriptions/{subscription_id}/recent")
 def subscription_recent(request: Request, subscription_id: int, session: DbSession) -> HTMLResponse:
     """The Recent jobs card, refreshed after a download queues jobs (jobs-changed)."""
-    sub = session.get(Subscription, subscription_id)
-    if sub is None:
-        raise HTTPException(status_code=404, detail="no such subscription")
+    sub = subscription_or_404(session, subscription_id)
     return templates.TemplateResponse(
         request,
         "partials/recent_jobs.html",
@@ -1068,11 +1065,12 @@ def _preview_response(
     report,
     notice: str | None = None,
     notice_bad: bool = False,
-    scan_line: bool = False,
 ):
-    """scan_line: the response also carries the header's "Last scan" cell out of band —
-    a real scan moved it, and only the preview card is otherwise swapped."""
+    """The response also carries the header's "Last scan" cell out of band: a real scan
+    moved it, and a dry run makes the card stop showing the last real scan, so the cell
+    has to say its result again. Both are decided in scan_line.html by identity."""
     sub = session.get(Subscription, report.subscription_id)
+    session.refresh(sub)  # the scan wrote through its own session; the stamps must be its
     # "this source may not carry the series" is only a fair reading for a subscription
     # that has never matched anything: one job on record is enough to drop the hint
     has_history = bool(
@@ -1087,10 +1085,9 @@ def _preview_response(
             "notice": notice,
             "notice_bad": notice_bad,
             "has_history": has_history,
-            "scan_line": scan_line,
             "next_scan": (
                 next_scan_text(sub.last_scan_at, int(get_setting(session, "scan_interval_minutes")))
-                if scan_line and sub.enabled
+                if sub.enabled
                 else None
             ),
             **_date_fetch_context(request, session, sub, report),
@@ -1102,9 +1099,7 @@ def _preview_response(
 async def subscription_fetch_dates(
     request: Request, subscription_id: int, session: DbSession
 ) -> HTMLResponse:
-    sub = session.get(Subscription, subscription_id)
-    if sub is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "subscription not found")
+    sub = subscription_or_404(session, subscription_id)
     start_date_fetch(request.app, subscription_id)
     return templates.TemplateResponse(
         request,
@@ -1117,9 +1112,7 @@ async def subscription_fetch_dates(
 async def subscription_fetch_dates_status(
     request: Request, subscription_id: int, session: DbSession
 ) -> HTMLResponse:
-    sub = session.get(Subscription, subscription_id)
-    if sub is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "subscription not found")
+    sub = subscription_or_404(session, subscription_id)
     return templates.TemplateResponse(
         request,
         "partials/date_fetch.html",
@@ -1158,9 +1151,7 @@ async def subscription_listed_videos(
 ) -> HTMLResponse:
     """The picker's options for the "why?" panel: hundreds of titles, fetched when the
     panel is opened rather than shipped with every preview."""
-    sub = session.get(Subscription, subscription_id)
-    if sub is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "subscription not found")
+    sub = subscription_or_404(session, subscription_id)
     report = cached_report(sub)
     if report is None:
         report = await run_scan(deps, subscription_id, dry_run=True)
@@ -1178,9 +1169,7 @@ async def subscription_explain(
 ) -> HTMLResponse:
     """Why one listed video does or does not pair with one wanted episode: the matcher's
     own reasoning, strategy by strategy, over the preview's own report."""
-    sub = session.get(Subscription, subscription_id)
-    if sub is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "subscription not found")
+    sub = subscription_or_404(session, subscription_id)
     report = cached_report(sub)
     if report is None:
         report = await run_scan(deps, subscription_id, dry_run=True)
@@ -1365,9 +1354,7 @@ async def subscription_season_rows(
     arr_factory: ArrFactoryDep,
 ) -> HTMLResponse:
     """One season's episodes, fetched when its row is opened."""
-    sub = session.get(Subscription, subscription_id)
-    if sub is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "subscription not found")
+    sub = subscription_or_404(session, subscription_id)
     seasons, error = await _seasons(sub, session, arr_factory)
     if error:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, error)
@@ -1409,7 +1396,7 @@ async def subscription_download(
     report = await run_scan(deps, subscription_id, dry_run=False, manual=True, episode_ids=ids)
     # the summary line says what was queued and the table says which; the Episodes and
     # Recent jobs cards refresh on the trigger below — a notice would say it a fourth time
-    response = _preview_response(request, session, report, None, scan_line=not report.error)
+    response = _preview_response(request, session, report)
     if report.created_job_ids:
         response.headers["HX-Trigger"] = (
             "jobs-changed"  # the Episodes and Recent jobs cards refresh
@@ -1586,7 +1573,7 @@ async def settings_downloads_post(request: Request, session: DbSession) -> HTMLR
         for k in ("notify_on_failed", "notify_on_scan_error", "notify_on_done"):
             changes[k] = "1" if data.get(k) == "1" else "0"
     try:
-        update_settings(session, changes)
+        await asyncio.to_thread(update_settings, session, changes)
     except Exception as exc:
         session.rollback()
         detail = error_text(exc)
@@ -1642,6 +1629,20 @@ FIELD_LABELS = {
     "api_key": "API key",
     "staging_path_remote": "Staging path",
     "enabled": "Enabled",
+    # the subscribe / subscription settings forms
+    "connection_id": "Connection",
+    "series_id": "Series",
+    "sources": "Source URLs",
+    "source_url": "Source URLs",
+    "format": "Format",
+    "video_limit": "Videos to list",
+    "audio_language": "Audio language",
+    "auto_download": "Automatic downloads",
+    "strategies": "Strategies",
+    "date_tolerance_days": "Date tolerance",
+    "date_offset_days": "Date offset",
+    "title_regex": "Title regex",
+    "title_require": "Title must contain",
 }
 
 

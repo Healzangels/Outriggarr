@@ -43,6 +43,9 @@ class VideoRef:
     # "3 years ago" / "2 days ago": what the listing page says, when it says anything.
     # A guess to the unit, never a date: shown with a ~, never matched on.
     approx_age: str | None = None
+    # yt-dlp's is_live / is_upcoming / was_live / not_live, when the source says: a
+    # stream or premiere has no length yet, which is not the same as having none
+    live_status: str | None = None
 
 
 @dataclass(frozen=True)
@@ -758,8 +761,24 @@ class YtDlpSource:
             # the embedded client's poorer formats. The signed-in session plus a PO
             # token is what gets the real ones, so do it again with the cookies.
             log.info("%s: age-gated; downloading again with the signed-in session", url)
-            result.path.unlink(missing_ok=True)
-            result = attempt(True)
+            # The first file is kept until the signed-in attempt has produced its own:
+            # that attempt can fail (a stale cookie, a 403 on the better formats), and
+            # a poorer file beats a failed job. Moved aside, not left in place, so
+            # yt-dlp does not see it as already downloaded and skip the fetch.
+            first = result
+            aside = first.path.with_name(first.path.name + ".embedded")
+            first.path.replace(aside)
+            try:
+                result = attempt(True)
+            except SourceError as exc:
+                log.warning(
+                    "%s: the signed-in download failed (%s); keeping the first file", url, exc
+                )
+                aside.replace(first.path)
+                result = first
+                used["cookies"] = False
+            else:
+                aside.unlink(missing_ok=True)
         if subtitle_langs:
             # a separate, best-effort pass: a caption that 404s or 429s must not fail
             # (or misclassify) a video that downloaded fine
@@ -802,6 +821,18 @@ class YtDlpSource:
         return pot_provider_ready(self._pot_home)
 
 
+def check_ytdlp_options(opts: dict[str, Any]) -> None:
+    """Raise ValueError when yt-dlp would refuse these options. yt-dlp validates format
+    strings and many options only when constructing the downloader; a setting is
+    checked here so a typo is a 422, not an 'internal error' on every job."""
+    import yt_dlp
+
+    try:
+        yt_dlp.YoutubeDL({**opts, "quiet": True, "no_warnings": True})
+    except Exception as exc:
+        raise ValueError(f"yt-dlp rejected it: {exc}") from None
+
+
 def subtitle_opts(langs: tuple[str, ...], auto: bool) -> dict[str, Any]:
     """yt-dlp options that fetch the wanted caption tracks and convert them to .srt."""
     return {
@@ -809,7 +840,11 @@ def subtitle_opts(langs: tuple[str, ...], auto: bool) -> dict[str, Any]:
         "writeautomaticsub": bool(auto),
         "subtitleslangs": list(langs),
         "subtitlesformat": "srt/best",
-        "postprocessors": [{"key": "FFmpegSubtitlesConvertor", "format": "srt"}],
+        # before_dl: the captions pass skips the download, and yt-dlp runs its
+        # post_process stage only after one, so a convertor left there never ran
+        "postprocessors": [
+            {"key": "FFmpegSubtitlesConvertor", "format": "srt", "when": "before_dl"}
+        ],
     }
 
 
@@ -869,9 +904,14 @@ def videos_from_info(info: dict[str, Any]) -> list[VideoRef]:
     if info.get("_type") == "playlist":
         out: list[VideoRef] = []
         skipped: dict[str, int] = {}
+        seen: set[str] = set()
         for i, e in enumerate(info.get("entries") or [], start=1):
             if not e or e.get("_type") == "playlist" or not e.get("id"):
                 continue
+            if str(e["id"]) in seen:  # a playlist may carry one video twice: one entry
+                skipped["listed twice"] = skipped.get("listed twice", 0) + 1
+                continue
+            seen.add(str(e["id"]))
             why = skip_reason(e)
             if why:
                 skipped[why] = skipped.get(why, 0) + 1
@@ -937,6 +977,7 @@ def _ref(e: dict[str, Any], index: int | None) -> VideoRef:
         # a flat entry's timestamp is yt-dlp's reading of "N units ago" (approximate_date)
         approx_age=None if upload_date else relative_age(e.get("timestamp")),
         upload_date=str(e["upload_date"]) if e.get("upload_date") else None,
+        live_status=str(e["live_status"]) if e.get("live_status") else None,
     )
 
 

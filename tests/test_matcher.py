@@ -668,6 +668,19 @@ def test_wildcard_placeholder_episode_never_matches() -> None:
     assert [u.candidates["title"] for u in r.unmatched] == [(), ()]
 
 
+def test_a_bare_placeholder_title_never_matches_even_inside_a_scope() -> None:
+    # "TBA" is not a title. A scope lifts the short-title rule, so the placeholder has
+    # to be refused on its own, and an upload literally titled TBA is not the episode
+    eps = [ep(1, 3, 4, "TBA")]
+    videos = [vid("a", "Bluey Book Read: Guest TBA"), vid("b", "TBA")]
+    scoped = MatchConfig(("title",), title_require="Book Read")
+    r = match(eps, videos, [], scoped)
+    assert r.matches == () and r.held == ()
+    assert match(eps, videos, [], MatchConfig(("title",))).matches == ()
+    why = next(c for c in explain_pair(eps[0], videos[0], scoped, []) if c.name == "title")
+    assert why.passed is False and "placeholder" in why.detail
+
+
 def test_wildcard_fragments_are_word_bounded() -> None:
     eps = [ep(1, 31, 1, "Caleb William .... Spicy Wing")]
     videos = [vid("a", "Caleb Williams Goes Iceman Mode While Eating Spicy Wings")]

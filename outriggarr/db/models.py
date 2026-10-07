@@ -140,7 +140,9 @@ class Subscription(Base):
     # The last successful scan's whole report, so opening the subscription page shows the
     # preview at once instead of listing the source again (4-6 s and a request against
     # the rate limit per page open). Cleared when a setting that changes matching changes.
-    last_report: Mapped[dict | None] = mapped_column(JSON)
+    # the whole cached preview (a megabyte for a 5 000-video listing): loaded on read, so
+    # the status polls, Matches, Series and Grab lookups that never read it do not pay for it
+    last_report: Mapped[dict | None] = mapped_column(JSON, deferred=True)
     last_scan_result: Mapped[dict | None] = mapped_column(JSON)
 
     connection: Mapped[Connection] = relationship()

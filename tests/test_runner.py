@@ -343,11 +343,12 @@ async def test_progress_written_to_row(deps, session_factory, monkeypatch) -> No
             progress(pct)
             seen.append(get_job(deps, job_id).progress_pct)
 
+        p(-1.0)  # a chunked stream: bytes flow, no size known — nothing for the bar
         return real(url, dest_dir, progress=p, **kw)
 
     deps.source.download = spy
     await process_job(deps, job_id)
-    assert seen == [50, 100]
+    assert seen == [0, 50, 100], "-1 is for the stall guard, never a percentage"
 
 
 def test_claim_next_jobs_picks_due_in_order(session_factory) -> None:
@@ -838,6 +839,28 @@ async def test_cancel_racing_the_importing_transition_wins(deps, session_factory
     job = get_job(deps, job_id)
     assert job.status is JobStatus.cancelled and fake.imports == []
     assert not (deps.staging_dir / str(job_id)).exists()
+
+
+async def test_cancel_during_target_info_is_not_overwritten_by_done(deps, session_factory) -> None:
+    conn_id = add_connection(session_factory)
+    job_id = add_job(session_factory, conn_id)
+    fake = fake_for(deps, conn_id)
+    fake.has_file[Target(series_id=5, episode_ids=(42,))] = True
+    real = fake.target_info
+
+    async def cancel_then_answer(target):
+        with session_factory() as s:  # the user cancels while Sonarr is being asked
+            j = s.get(Job, job_id)
+            j.status, j.error, j.finished_at = JobStatus.cancelled, "cancelled", NOW
+            s.commit()
+        return await real(target)
+
+    fake.target_info = cancel_then_answer
+    await process_job(deps, job_id)
+    job = get_job(deps, job_id)
+    assert job.status is JobStatus.cancelled and job.error == "cancelled", (
+        "the satisfied-target answer must not overwrite a Cancel that landed first"
+    )
 
 
 async def test_satisfied_target_is_detected_before_download(deps, session_factory) -> None:
@@ -1546,3 +1569,58 @@ async def test_staged_path_is_recorded_before_the_audio_tag_remux(deps, session_
     await process_job(deps, job_id)
     assert get_job(deps, job_id).status is JobStatus.done
     assert seen and seen[0] and seen[0].endswith(".mkv"), "committed before the remux ran"
+
+
+def test_an_unwritable_lock_file_does_not_stop_startup(tmp_path: Path) -> None:
+    import os
+
+    from outriggarr.worker.runner import acquire_instance_lock
+
+    if os.geteuid() == 0:
+        pytest.skip("root can write anywhere")
+    ro = tmp_path / "ro"
+    ro.mkdir()
+    ro.chmod(0o500)
+    try:
+        lock = acquire_instance_lock(ro)
+        assert lock is not None, "no lock to take is not 'another instance holds it'"
+    finally:
+        ro.chmod(0o700)
+
+
+async def test_a_resumed_job_is_tagged_before_import(deps, session_factory) -> None:
+    conn_id = add_connection(session_factory)
+    job_id = add_job(session_factory, conn_id)
+    staged = deps.staging_dir / str(job_id) / "Show - S02E03 - The Title [WEBDL-1080p].mkv"
+    staged.parent.mkdir(parents=True)
+    staged.write_bytes(b"x")
+    with session_factory() as s:  # the path was committed; the stop landed in the remux
+        s.get(Job, job_id).staged_path = str(staged)
+        s.commit()
+    fake_for(deps, conn_id)
+    await process_job(deps, job_id)
+    job = get_job(deps, job_id)
+    assert job.status is JobStatus.done and deps.source.calls == [], "no second download"
+    assert deps.source.tagged == [(staged, "eng")], "the tag the stop may have interrupted"
+
+
+async def test_a_failed_second_import_of_a_file_the_first_moved_is_done(
+    deps, session_factory
+) -> None:
+    conn_id = add_connection(session_factory)
+    job_id = add_job(session_factory, conn_id)
+    fake = fake_for(deps, conn_id)
+    fake.command_statuses = ["started", "failed"]
+    real = fake.command
+
+    async def failed_because_already_moved(command_id):
+        st = await real(command_id)
+        if st.status == "failed":  # the first ManualImport (before a restart) did the move
+            fake.has_file[Target(series_id=5, episode_ids=(42,))] = True
+        return st
+
+    fake.command = failed_because_already_moved
+    await process_job(deps, job_id)
+    job = get_job(deps, job_id)
+    assert job.status is JobStatus.done and job.error is None, "the target has its file"
+    assert not (deps.staging_dir / str(job_id)).exists()

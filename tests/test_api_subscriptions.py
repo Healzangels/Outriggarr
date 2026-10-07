@@ -115,6 +115,31 @@ def test_update_and_delete_keep_jobs(client, arr, source) -> None:
         assert job is not None and job.subscription_id is None
 
 
+def test_a_matching_setting_change_clears_the_matches_but_keeps_the_bookkeeping(
+    client, arr, source
+) -> None:
+    from outriggarr.db.models import Subscription
+    from outriggarr.web.pages import cached_report
+
+    conn_id = seed(client, arr, source)
+    sub_id = client.post("/api/subscriptions", json=body(conn_id)).json()["id"]
+    client.post(f"/api/subscriptions/{sub_id}/scan")
+    with client.app.state.session_factory() as s:
+        sub = s.get(Subscription, sub_id)
+        sub.last_report = {
+            **sub.last_report,
+            "unmatched_since": {"S01E09": "2026-01-01T00:00:00+00:00"},
+        }
+        s.commit()
+    r = client.put(f"/api/subscriptions/{sub_id}", json=body(conn_id, auto_download="none"))
+    assert r.status_code == 200, r.text
+    with client.app.state.session_factory() as s:
+        sub = s.get(Subscription, sub_id)
+        assert sub.last_report["stale"] is True and "matches" not in sub.last_report
+        assert sub.last_report["unmatched_since"] == {"S01E09": "2026-01-01T00:00:00+00:00"}
+        assert cached_report(sub) is None, "a stale stub is not a preview: the page scans"
+
+
 def test_preview_scan_and_overrides(client, arr, source) -> None:
     conn_id = seed(client, arr, source)
     sub_id = client.post("/api/subscriptions", json=body(conn_id)).json()["id"]

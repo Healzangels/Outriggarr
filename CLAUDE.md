@@ -40,7 +40,7 @@ tests/             fakes for ArrClient and VideoSource; no network in tests
 Dockerfile · pyproject.toml · DESIGN.md · CLAUDE.md
 ```
 
-Dependency direction: `web → api → db/arr/source/matcher`; `worker → db/arr/source/matcher`. `web` never calls the worker; it writes rows and the worker picks them up.
+Dependency direction: `web → api → db/arr/source/matcher`; `worker → db/arr/source/matcher`. `web` never drives the job runner; it writes rows and the worker picks them up. A scan (`worker/scheduler.scan_subscription`) is a library function the scheduler loop, the API and the pages all call.
 
 ## Commands
 

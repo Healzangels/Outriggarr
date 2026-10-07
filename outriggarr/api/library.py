@@ -43,6 +43,7 @@ class TTLCache:
             value = await loader()
         except BaseException as exc:
             fut.set_exception(exc)
+            fut.exception()  # retrieved: with no waiter, asyncio would log it at GC as never read
             raise
         else:
             self._items[key] = (self.now(), value)

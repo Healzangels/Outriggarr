@@ -13,7 +13,7 @@ from outriggarr.settings import DEFAULTS, get_setting, set_setting, validate_set
     [
         ("scan_interval_minutes", " 15 ", "15"),
         ("concurrency", "3", "3"),
-        ("scan_video_limit", "500", "500"),
+        ("scan_video_limit", "5000", "5000"),
         ("default_format", "best", "best"),
         ("merge_container", "mp4", "mp4"),
         ("ytdlp_extra_opts", '{"ratelimit": 1}', '{"ratelimit": 1}'),
@@ -36,6 +36,7 @@ def test_validate_setting_ok(key: str, value: str, expected: str) -> None:
         ("scan_interval_minutes", "x"),
         ("concurrency", "9"),
         ("scan_video_limit", "0"),
+        ("scan_video_limit", "5001"),
         ("default_format", "  "),
         ("merge_container", "avi"),
         ("ytdlp_extra_opts", "{not json"),

@@ -121,6 +121,21 @@ def test_sanitize_drops_del_too() -> None:
     assert sanitize("a\x7fb") == "a-b"
 
 
+def test_split_label_splits_at_the_episode_code_not_the_first_dash() -> None:
+    from outriggarr.naming import split_label
+
+    assert split_label("Bluey - Book Reads S01E03 - Cricket") == (
+        "Bluey - Book Reads",
+        "S01E03",
+        "Cricket",
+    )
+    assert split_label("Kill Tony S2026E01 - #751 - JOE") == ("Kill Tony", "S2026E01", "#751 - JOE")
+    assert split_label("Hot Ones S01E01-E02 - Two") == ("Hot Ones", "S01E01-E02", "Two")
+    assert split_label("Series S01E02") == ("Series", "S01E02", "")
+    assert split_label("Movie (2020)") == ("", "", "Movie (2020)"), "no code: all title"
+    assert split_label(None) == ("", "", "")
+
+
 def test_compact_codes_folds_consecutive_episodes() -> None:
     from outriggarr.naming import compact_codes
 

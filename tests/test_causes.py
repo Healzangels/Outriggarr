@@ -34,6 +34,15 @@ RATE = (
         # the bot check is the address, not the account: never a cookies instruction
         ("ERROR: [youtube] a: Sign in to confirm you're not a bot", "none", "bot check"),
         (RATE, "signed in", "rate-limited the session"),
+        # the same words the app pauses on, including the ones causes.py once lacked
+        ("ERROR: [youtube] a: rate limit exceeded", "signed in", "rate-limited the session"),
+        # a 429 from another host is that request's problem: nothing paused
+        (
+            "ERROR: unable to download https://archive.org/x: HTTP Error 429: Too Many Requests",
+            "signed in",
+            "That host rate-limited the request",
+        ),
+        ("ERROR: [youtube] a: Video is unavailable", "signed in", "gone from YouTube"),
         ("ERROR: [youtube] a: Video unavailable", "signed in", "gone from YouTube"),
         (
             "ERROR: [youtube] a: This video is no longer available because the YouTube account "

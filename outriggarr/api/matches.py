@@ -20,7 +20,7 @@ from outriggarr.api.deps import track_task
 from outriggarr.arr.base import ArrError
 from outriggarr.db.models import Connection, Job, utcnow
 from outriggarr.matcher import length_mismatch
-from outriggarr.source import SourceError, is_permanent_failure, is_rate_limited
+from outriggarr.source import SourceError, VideoRef, is_permanent_failure, is_rate_limited
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/matches", tags=["matches"])
@@ -45,6 +45,7 @@ class RecheckProgress:
     error_count: int = 0
     first_error: str | None = None
     skipped: int = 0  # left for the next run: a rate-limit answer paused the fetches
+    not_yet: int = 0  # live or upcoming: no length until it ends; asked again next time
     started_at: datetime | None = None
     finished_at: datetime | None = None
     failure: str | None = None
@@ -85,6 +86,12 @@ class RecheckProgress:
             text += " Those are not asked again: the title has to vouch."
         if self.error_count:
             text += f" {self.error_count} could not be fetched (first: {self.first_error})."
+        if self.not_yet:
+            n = self.not_yet
+            text += (
+                f" {n} {'is' if n == 1 else 'are'} live or upcoming, with no length until "
+                "it ends: asked again next time."
+            )
         if self.skipped:
             text += (
                 f" {self.skipped} left for later: the source rate-limited us, "
@@ -170,7 +177,7 @@ async def recheck_evidence(
         progress.total = len(need)
         gate = asyncio.Semaphore(RECHECK_PARALLEL)
 
-        async def fetch(job: Job) -> tuple[Job, int | None, str | None]:
+        async def fetch(job: Job) -> tuple[Job, VideoRef | None, str | None]:
             async with gate:
                 if deps.cooloff.active():
                     return job, None, SKIPPED
@@ -181,20 +188,24 @@ async def recheck_evidence(
                         deps.cooloff.hit(str(exc))  # the rest of this run skips
                         return job, None, SKIPPED
                     return job, None, f"{job.video_id}: {exc}"
-                return job, info.duration, None
+                return job, info, None
 
         since_commit = 0
         tasks = [asyncio.create_task(fetch(j)) for j in need]
         try:
             for fut in asyncio.as_completed(tasks):
-                job, duration, err = await fut
-                if duration:
-                    job.video_duration = int(duration)
+                job, info, err = await fut
+                if info is not None and info.duration:
+                    job.video_duration = int(info.duration)
                     progress.durations_filled += 1
                 elif err == SKIPPED:
                     progress.skipped += 1
                 elif err and not is_permanent_failure(err):
                     _note_error(progress, err)
+                elif info is not None and info.live_status in ("is_live", "is_upcoming"):
+                    # no length YET: a stream or premiere gets one when it ends, so NULL
+                    # stays and the next recheck asks again
+                    progress.not_yet += 1
                 else:
                     # the source answered with no length (a live stream, a premiere) or
                     # with an answer no retry changes (gone, private): 0 remembers that

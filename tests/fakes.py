@@ -160,6 +160,26 @@ class FakeArrClient:
         self.calls.append(("target_info", target))
         if self.info_error is not None:
             raise self.info_error
+        # the real clients refuse these for good, so the fake must too
+        if target.is_movie and self.kind is ConnectionKind.sonarr:
+            raise ArrError("Sonarr cannot import a movie target", retryable=False)
+        if not target.is_movie and self.kind is ConnectionKind.radarr:
+            raise ArrError("Radarr cannot import an episode target", retryable=False)
+        known = self.episodes_by_series.get(target.series_id) if not target.is_movie else None
+        if known:
+            by_id = {e.id: e for e in known}
+            foreign = [eid for eid in target.episode_ids if eid not in by_id]
+            if foreign:
+                raise ArrError(
+                    f"episode ids {foreign} do not belong to series {target.series_id}",
+                    retryable=False,
+                )
+            seasons = {by_id[eid].season_number for eid in target.episode_ids}
+            if len(seasons) > 1:
+                raise ArrError(
+                    f"episodes span several seasons {sorted(seasons)}; one job per season",
+                    retryable=False,
+                )
         return self._info(target)
 
     async def manual_import_candidates(self, folder: str) -> list[ImportCandidate]:
@@ -200,7 +220,10 @@ class FakeArrClient:
         if self.import_error is not None:
             raise self.import_error
         self.imports.append(list(files))
-        if self.import_sets_has_file:
+        # the *arr moves the file when the command completes, not when it is posted
+        if self.import_sets_has_file and (
+            not self.command_statuses or self.command_statuses[-1] == "completed"
+        ):
             for f in files:
                 self.has_file[f.target] = True
         return 1000 + len(self.imports)
@@ -271,6 +294,8 @@ class FakeVideoSource:
         self.fetched.append(url)
         if url not in self.infos:
             raise SourceError(f"ERROR: [youtube] {url}: Video unavailable")
+        if isinstance(self.infos[url], Exception):  # a per-video answer other than gone
+            raise self.infos[url]
         return self.infos[url]
 
     subtitle_langs_available: tuple[str, ...] = ("en",)  # what the fake "upload" carries

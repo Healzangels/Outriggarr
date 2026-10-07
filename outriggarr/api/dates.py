@@ -17,8 +17,8 @@ from sqlalchemy.orm import Session
 from outriggarr.api.deps import track_task
 from outriggarr.db.models import Subscription, utcnow
 from outriggarr.settings import get_setting
-from outriggarr.source import SourceError, is_rate_limited
-from outriggarr.worker.scheduler import _date_known, _remember_date, list_source_videos
+from outriggarr.source import SourceError, is_permanent_failure, is_rate_limited
+from outriggarr.worker.scheduler import _remember_date, known_date_ids, list_source_videos
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/subscriptions", tags=["dates"])
@@ -98,11 +98,10 @@ async def fetch_dates(
             deps.cooloff.hit(str(exc))  # the wall is everyone's, not this fetch's
         raise
     with session.no_autoflush:
-        need = [
-            r
-            for r in refs
-            if r.upload_date is None and r.title != r.id and not _date_known(session, r.id)
-        ][:DATE_FETCH_MAX]
+        known = known_date_ids(session, [r.id for r in refs])
+        need = [r for r in refs if r.upload_date is None and r.title != r.id and r.id not in known][
+            :DATE_FETCH_MAX
+        ]
     progress.total = len(need)
     gate = asyncio.Semaphore(DATE_FETCH_PARALLEL)
 
@@ -132,7 +131,9 @@ async def fetch_dates(
                 if err:
                     progress.error_count += 1
                     progress.first_error = progress.first_error or f"{ref.id}: {err}"
-                    _remember_date(session, ref.id, None)  # do not re-ask for a week
+                    if is_permanent_failure(err):  # a final answer: no date, for a week
+                        _remember_date(session, ref.id, None)
+                    # a transient one (a bot check, a 5xx) says nothing: ask again next time
                 else:
                     _remember_date(session, ref.id, upload_date)
                     if upload_date:

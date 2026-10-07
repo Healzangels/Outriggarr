@@ -9,9 +9,10 @@ what the GUI's match preview shows.
 
 from __future__ import annotations
 
+import functools
 import re
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 STRATEGY_ORDER: tuple[str, ...] = ("override", "regex", "title", "date")
 OPTIONAL_STRATEGIES: frozenset[str] = frozenset({"regex", "title", "date"})
@@ -37,6 +38,7 @@ class Episode:
     title: str
     air_date: date | None
     runtime_minutes: int | None = None  # the *arr's runtime (TVDB); 0/None = unknown
+    air_at: datetime | None = None  # the instant it aired (the *arr's airDateUtc), when known
 
 
 @dataclass(frozen=True)
@@ -146,6 +148,7 @@ _EP_PREFIX = re.compile(
 _HASH_NUMBER = re.compile(r"^\s*(?:[^\s#]+\s*)?#\s*(\d+)")
 
 
+@functools.lru_cache(maxsize=50_000)
 def show_number(title: str) -> int | None:
     """A show's own episode count in a title: "#751 - JOE ROGAN" / "KT #751 - …" → 751.
     Not Sonarr's numbering (that is S2026E01), so it never drives the regex strategy; it
@@ -154,6 +157,10 @@ def show_number(title: str) -> int | None:
     return int(m.group(1)) if m else None
 
 
+# Memoised: a scan asks for every video's tidied title once per wanted episode per
+# round (300 episodes x 5 000 videos was nine seconds on the event loop); the strings
+# repeat, so the answer is a lookup after the first.
+@functools.lru_cache(maxsize=50_000)
 def normalise_title(text: str) -> str:
     text = text.lower()
     text = _EP_PREFIX.sub("", text)
@@ -346,7 +353,9 @@ def _title_candidates(
     title ("Cricket" in a Book Reads series whose videos all say "Book Read") may be
     looked for — ambiguity within the scope is still refused, as ever."""
     want = normalise_title(ep.title)
-    if not want:
+    if not want or want in PLACEHOLDER_FRAGMENTS:
+        # "TBA": a title Sonarr has not got yet. Neither an exact "TBA" upload nor a
+        # scope (which lifts the short-title rule) may pair it with anything.
         return ("none", [])
     want_no = show_number(ep.title)
 
@@ -623,6 +632,12 @@ def _title_check(ep: Episode, video: Video, cfg: MatchConfig) -> Check:
     want, have = normalise_title(ep.title), normalise_title(video.title)
     if not want:
         return Check("title", False, "the episode's title is only a placeholder once tidied")
+    if want in PLACEHOLDER_FRAGMENTS:
+        return Check(
+            "title",
+            False,
+            "the episode's title is still a placeholder (TBA), so it matches nothing",
+        )
     want_no, have_no = show_number(ep.title), show_number(video.title)
     if want_no is not None and have_no is not None and have_no != want_no:
         return Check("title", False, f"the show's own numbers disagree: #{want_no} and #{have_no}")

@@ -178,6 +178,30 @@ def test_ttlcache_unit() -> None:
     assert asyncio.run(c.get("k", load)) == 3
 
 
+def test_ttlcache_failed_load_leaves_no_unretrieved_future() -> None:
+    import asyncio
+    import contextlib
+    import gc
+
+    complaints: list[dict] = []
+
+    async def run():
+        asyncio.get_running_loop().set_exception_handler(lambda loop, ctx: complaints.append(ctx))
+        c = TTLCache(60)
+
+        async def boom():
+            raise RuntimeError("Sonarr is down")
+
+        for _ in range(3):
+            with contextlib.suppress(RuntimeError):
+                await c.get("k", boom)
+        gc.collect()  # the dropped futures are finalised here, inside the loop
+        await asyncio.sleep(0)
+
+    asyncio.run(run())
+    assert complaints == [], "every caller got the exception; nothing was left unread"
+
+
 def test_ttlcache_coalesces_concurrent_loads() -> None:
     import asyncio
 

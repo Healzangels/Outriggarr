@@ -80,6 +80,7 @@ def create_app(
                 "Another Outriggarr instance holds this database, so this one serves "
                 "the pages only: nothing downloads or scans from here."
             )
+            app.state.runner_deps.page_only = True
         else:
             run_migrations(settings.database_url)
         engine = make_engine(settings.database_url)

@@ -65,6 +65,20 @@ def sanitize(text: str) -> str:
     return text.strip(" .")
 
 
+_LABEL = re.compile(r"^(?P<series>.*?)\s*\b(?P<code>S\d+E\d+(?:-E\d+)?)(?:\s-\s(?P<title>.+))?$")
+
+
+def split_label(label: str | None) -> tuple[str, str, str]:
+    """A job label "Series S01E02 - Title" as (series, code, title). The split is at
+    the episode code, never the first dash: a series name or a title may carry one of
+    its own ("Bluey - Book Reads S01E03 - Cricket"). A label with no code is all
+    title, and a code with nothing after it has an empty title."""
+    m = _LABEL.match(label or "")
+    if m is None:
+        return ("", "", label or "")
+    return (m.group("series"), m.group("code"), m.group("title") or "")
+
+
 def episode_code(season: int, episode_numbers: list[int]) -> str:
     numbers = sorted(set(episode_numbers))
     if not numbers:

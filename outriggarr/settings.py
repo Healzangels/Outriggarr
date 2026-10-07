@@ -18,6 +18,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from outriggarr.db.models import Setting
+from outriggarr.source import check_ytdlp_options
 
 
 @dataclass(frozen=True)
@@ -162,6 +163,9 @@ MERGE_CONTAINERS = ("mkv", "mp4")  # webm cannot hold the default H.264/AAC stre
 # yt-dlp options the app owns; the operator passthrough may not set them (it would
 # redirect output outside staging, drop our progress/abort hooks, or run arbitrary
 # post-processors such as `Exec`).
+# one listing cap, global and per subscription: a flat listing of ~1200 entries takes
+# ~13 s, so this bounds a scan
+MAX_VIDEO_LIMIT = 5000
 RESERVED_YTDLP_KEYS = frozenset(
     {
         # "verbose" prints yt-dlp's debug header on every probe and every download
@@ -218,7 +222,7 @@ def validate_setting(key: str, value: str) -> str:
         lo, hi = {
             "scan_interval_minutes": (1, 1440),
             "concurrency": (1, 8),
-            "scan_video_limit": (1, 500),
+            "scan_video_limit": (1, MAX_VIDEO_LIMIT),
             "job_retention_days": (0, 3650),
         }[key]
         if not lo <= n <= hi:
@@ -227,7 +231,7 @@ def validate_setting(key: str, value: str) -> str:
     if key == "default_format":
         if not value:
             raise ValueError("default_format must not be empty")
-        _probe_ytdlp({"format": value})
+        check_ytdlp_options({"format": value})
         return value
     if key == "merge_container":
         if value not in MERGE_CONTAINERS:
@@ -247,7 +251,7 @@ def validate_setting(key: str, value: str) -> str:
             raise ValueError(
                 f"ytdlp_extra_opts may not set {reserved}: Outriggarr owns those options"
             )
-        _probe_ytdlp(parsed)
+        check_ytdlp_options(parsed)
         return json.dumps(parsed)
     if key == "cookies_path":
         if value:
@@ -261,7 +265,7 @@ def validate_setting(key: str, value: str) -> str:
         from outriggarr.notify import validate_apprise_urls
 
         return "\n".join(validate_apprise_urls(value))
-    if key in ("notify_on_failed", "notify_on_scan_error", "notify_on_done"):
+    if key in ("notify_on_failed", "notify_on_scan_error", "notify_on_done", "subtitles_auto"):
         if value not in ("0", "1"):
             raise ValueError(f"{key} must be 0 or 1")
         return value
@@ -271,10 +275,6 @@ def validate_setting(key: str, value: str) -> str:
         if bad:
             raise ValueError(f"subtitles_langs: not language codes: {bad}")
         return ",".join(dict.fromkeys(langs))
-    if key == "subtitles_auto":
-        if value not in ("0", "1"):
-            raise ValueError("subtitles_auto must be 0 or 1")
-        return value
     if key == "audio_language":
         if value and not re.fullmatch(r"[a-z]{3}", value):
             raise ValueError("audio_language must be a 3-letter ISO 639-2 code (e.g. eng) or blank")
@@ -283,18 +283,7 @@ def validate_setting(key: str, value: str) -> str:
         if value and (len(value) > 50 or " " in value or value != value.lower()):
             raise ValueError("sonarr_tag must be a short lowercase label without spaces")
         return value
-    return value  # cookies_path: free text
-
-
-def _probe_ytdlp(opts: dict[str, Any]) -> None:
-    """yt-dlp validates format strings and many options only when constructing the
-    downloader; do that here so a typo is a 422, not an 'internal error' on every job."""
-    import yt_dlp
-
-    try:
-        yt_dlp.YoutubeDL({**opts, "quiet": True, "no_warnings": True})
-    except Exception as exc:
-        raise ValueError(f"yt-dlp rejected it: {exc}") from None
+    return value  # any other key is free text
 
 
 def ytdlp_options(session: Session) -> dict[str, Any]:

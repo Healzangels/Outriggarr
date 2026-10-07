@@ -17,12 +17,13 @@ from outriggarr.arr import ArrFactory
 from outriggarr.arr.base import ArrError
 from outriggarr.db.models import Connection, ConnectionKind, Override, Subscription
 from outriggarr.matcher import OPTIONAL_STRATEGIES, compile_title_regex
-from outriggarr.settings import get_setting
+from outriggarr.settings import MAX_VIDEO_LIMIT, get_setting
 from outriggarr.source import SourceError, VideoSource
 from outriggarr.worker.scheduler import (
     AUTO_DOWNLOAD,
     ScanReport,
     SubscriptionNotFound,
+    bookkeeping_only,
     scan_subscription,
 )
 
@@ -31,7 +32,6 @@ router = APIRouter(prefix="/api/subscriptions", tags=["subscriptions"])
 
 
 MAX_SOURCES = 10  # channels/playlists per subscription; each is listed on every scan
-MAX_VIDEO_LIMIT = 5000  # a flat listing of ~1200 entries takes ~13 s; this bounds a scan
 
 
 class SubscriptionIn(BaseModel):
@@ -177,7 +177,7 @@ class OverrideByUrlIn(OverrideIn):
         return v
 
 
-def _get_or_404(session: Session, subscription_id: int) -> Subscription:
+def subscription_or_404(session: Session, subscription_id: int) -> Subscription:
     sub = session.get(Subscription, subscription_id)
     if sub is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"subscription {subscription_id} not found")
@@ -249,7 +249,7 @@ _MATCHING_FIELDS = (
 async def update_subscription(
     session: Session, arr_factory: ArrFactory, subscription_id: int, body: SubscriptionIn
 ) -> Subscription:
-    sub = _get_or_404(session, subscription_id)
+    sub = subscription_or_404(session, subscription_id)
     moved = (body.connection_id, body.series_id) != (sub.connection_id, sub.series_id)
     old_conn, old_series = sub.connection, sub.series_id
     if moved:
@@ -261,7 +261,8 @@ async def update_subscription(
     for k, v in body.model_dump().items():
         setattr(sub, k, v)
     if moved or any(getattr(sub, k) != before[k] for k in _MATCHING_FIELDS):
-        sub.last_report = None  # the cached preview was matched under the old settings
+        # the cached preview was matched under the old settings; its bookkeeping stays
+        sub.last_report = bookkeeping_only(sub.last_report)
     try:
         session.commit()
     except IntegrityError:
@@ -294,7 +295,7 @@ async def _apply_tag(
 async def delete_subscription(
     session: Session, arr_factory: ArrFactory, subscription_id: int
 ) -> None:
-    sub = _get_or_404(session, subscription_id)
+    sub = subscription_or_404(session, subscription_id)
     conn, series_id = sub.connection, sub.series_id
     for job in sub.jobs:
         job.subscription_id = None
@@ -306,7 +307,7 @@ async def delete_subscription(
 def set_override(
     session: Session, subscription_id: int, video_id: str, body: OverrideIn
 ) -> Override:
-    sub = _get_or_404(session, subscription_id)
+    sub = subscription_or_404(session, subscription_id)
     row = next((o for o in sub.overrides if o.video_id == video_id), None)
     if row is None:
         row = Override(
@@ -323,7 +324,7 @@ async def set_override_by_url(
     session: Session, source: VideoSource, subscription_id: int, body: OverrideByUrlIn
 ) -> Override:
     """Resolve a pasted URL to one video and pin it; works for videos outside the listing."""
-    sub = _get_or_404(session, subscription_id)
+    sub = subscription_or_404(session, subscription_id)
     try:
         # fetch_info is a single-video extract (noplaylist), so a watch URL copied from a
         # playlist view (`watch?v=…&list=…`) resolves to that video, not the playlist.
@@ -343,7 +344,7 @@ async def set_override_by_url(
 
 
 def delete_override(session: Session, subscription_id: int, video_id: str) -> None:
-    sub = _get_or_404(session, subscription_id)
+    sub = subscription_or_404(session, subscription_id)
     row = next((o for o in sub.overrides if o.video_id == video_id), None)
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"no override for video {video_id!r}")
@@ -363,6 +364,12 @@ async def run_scan(
     manual: bool = False,
     episode_ids: set[int] | None = None,
 ) -> ScanReport:
+    if deps.page_only:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "another Outriggarr instance holds this database; scan from that one (this "
+            "instance serves the pages only)",
+        )
     try:
         return await scan_subscription(
             deps, subscription_id, dry_run=dry_run, manual=manual, episode_ids=episode_ids
@@ -390,7 +397,7 @@ async def create(
 
 @router.get("/{subscription_id}", response_model=SubscriptionOut)
 def get_subscription(subscription_id: int, session: DbSession) -> Subscription:
-    return _get_or_404(session, subscription_id)
+    return subscription_or_404(session, subscription_id)
 
 
 @router.put("/{subscription_id}", response_model=SubscriptionOut)
@@ -407,7 +414,7 @@ async def delete(subscription_id: int, session: DbSession, arr_factory: ArrFacto
 
 @router.get("/{subscription_id}/overrides", response_model=list[OverrideOut])
 def list_overrides(subscription_id: int, session: DbSession) -> list[Override]:
-    return list(_get_or_404(session, subscription_id).overrides)
+    return list(subscription_or_404(session, subscription_id).overrides)
 
 
 @router.put("/{subscription_id}/overrides/{video_id}", response_model=OverrideOut)

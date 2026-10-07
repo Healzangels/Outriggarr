@@ -128,6 +128,31 @@ async def test_path_visible_lists_parent_and_looks_for_the_dir(
     assert await client.path_visible(path) is expected
 
 
+async def test_path_visible_matches_a_windows_listing() -> None:
+    # a Windows-hosted Sonarr lists "C:\\staging\\" with its own trailing separator
+    client, _ = make(
+        SonarrClient,
+        lambda r: httpx.Response(200, json={"directories": [{"path": "C:\\staging\\"}]}),
+    )
+    assert await client.path_visible("C:\\staging") is True
+
+
+async def test_a_malformed_url_is_an_arr_error_not_a_crash() -> None:
+    http = httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(200)))
+    client = SonarrClient("http://[::1", KEY, http)
+    with pytest.raises(ArrError, match="http://\\[::1") as e:
+        await client.status()
+    assert e.value.retryable is False, "a config mistake, not a blip"
+
+
+async def test_a_non_json_body_is_surfaced_whole() -> None:
+    body = "<html>" + "x" * 900 + "</html>"
+    client, _ = make(SonarrClient, lambda r: httpx.Response(200, text=body))
+    with pytest.raises(ArrError) as e:
+        await client.status()
+    assert body in str(e.value), "verbatim, like every other *arr answer"
+
+
 async def test_path_visible_rejects_root() -> None:
     client, rec = make(SonarrClient, lambda r: httpx.Response(200, json={"directories": []}))
     assert await client.path_visible("/") is False
@@ -381,12 +406,15 @@ async def test_sonarr_target_info_rejects_foreign_episode_and_mixed_seasons() ->
     client, _ = make(
         SonarrClient, lambda r: httpx.Response(200, json=eps[r.url.path.rsplit("/", 1)[1]])
     )
-    with pytest.raises(ArrError, match="do not belong to series 5"):
+    with pytest.raises(ArrError, match="do not belong to series 5") as foreign:
         await client.target_info(Target(series_id=5, episode_ids=(1, 2)))
-    with pytest.raises(ArrError, match="several seasons"):
+    with pytest.raises(ArrError, match="several seasons") as mixed:
         await client.target_info(Target(series_id=5, episode_ids=(1, 3)))
-    with pytest.raises(ArrError, match="cannot import a movie"):
+    with pytest.raises(ArrError, match="cannot import a movie") as movie:
         await client.target_info(Target(movie_id=1))
+    assert [e.value.retryable for e in (foreign, mixed, movie)] == [False] * 3, (
+        "an answer no retry changes must not burn the retry ladder"
+    )
 
 
 async def test_radarr_target_info() -> None:
@@ -399,8 +427,9 @@ async def test_radarr_target_info() -> None:
     info = await client.target_info(Target(movie_id=77))
     assert str(rec.requests[0].url) == f"{BASE}/api/v3/movie/77"
     assert (info.title, info.year, info.has_file, info.season) == ("Film", 2001, True, None)
-    with pytest.raises(ArrError, match="cannot import an episode"):
+    with pytest.raises(ArrError, match="cannot import an episode") as wrong_kind:
         await client.target_info(Target(series_id=1, episode_ids=(1,)))
+    assert wrong_kind.value.retryable is False
 
 
 def test_languages_for_import_defaults_to_english() -> None:
@@ -591,6 +620,27 @@ async def test_arr_error_retryable_classification() -> None:
     with pytest.raises(ArrError) as ei:
         await client.status()
     assert ei.value.retryable is True
+
+
+async def test_quality_definitions_are_fetched_once_per_client() -> None:
+    from outriggarr.arr.base import ImportCandidate, ImportFile, Language, Target
+
+    def handler(r: httpx.Request) -> httpx.Response:
+        if r.url.path.endswith("/qualitydefinition"):
+            return httpx.Response(200, json=QUALITY_DEFS)
+        if r.url.path.endswith("/manualimport"):
+            return httpx.Response(202, json=[{"id": 7, "rejections": []}])
+        return httpx.Response(201, json={"id": 1})
+
+    client, rec = make(SonarrClient, handler)
+    cand = ImportCandidate(7, "/data/outriggarr/1/x.mkv", "x.mkv", "x", 1, (), ())
+    target = Target(series_id=5, episode_ids=(42,))
+    await client.reprocess(cand, target, "WEBDL-1080p", (Language(1, "English"),), 1)
+    await client.manual_import(
+        [ImportFile(path=cand.path, quality_name="WEBDL-1080p", languages=(), target=target)]
+    )
+    lookups = [r for r in rec.requests if r.url.path.endswith("/qualitydefinition")]
+    assert len(lookups) == 1, "a client lives for one job: ask once"
 
 
 async def test_sonarr_reprocess_posts_ids_and_returns_remaining_rejections() -> None:

@@ -128,6 +128,24 @@ class ScanReport:
 
 
 SHRINK_FLOOR = 10  # a listing this small says nothing about the next one
+_CARRIED = (
+    "scanned_at",
+    "unmatched",
+    "unmatched_since",
+    "unmatched_scans",
+    "listed_count",
+    "listed_high",
+)
+
+
+def bookkeeping_only(previous: dict | None) -> dict | None:
+    """What a cleared report keeps: the bookkeeping `_carry_forward` reads. A settings
+    change invalidates the matches, not how long an episode has been unmatched or how
+    big the listing normally is; marked stale, so the page shows nothing from it and
+    scans instead."""
+    if not previous:
+        return None
+    return {"stale": True, **{k: previous[k] for k in _CARRIED if k in previous}}
 
 
 def _carry_forward(report: ScanReport, previous: dict, now: datetime, *, human: bool) -> None:
@@ -188,6 +206,7 @@ def _episode(e: EpisodeRef) -> Episode:
         title=e.title,
         air_date=e.air_date or (e.air_date_utc.date() if e.air_date_utc else None),
         runtime_minutes=e.runtime,
+        air_at=e.air_date_utc,
     )
 
 
@@ -239,15 +258,13 @@ def existing_jobs_for_series(
             job.status is JobStatus.failed and job.next_retry_at is None
         )
         for eid in job.episode_ids or []:
-            if terminal and _pinned_elsewhere(job, int(eid), pinned_video_by_episode, session):
+            if terminal and _pinned_elsewhere(job, pinned_video_by_episode):
                 continue
             out.setdefault(int(eid), job)
     return out
 
 
-def _pinned_elsewhere(
-    job: Job, episode_id: int, pins: dict[tuple[int, int], str], session: Session
-) -> bool:
+def _pinned_elsewhere(job: Job, pins: dict[tuple[int, int], str]) -> bool:
     """True if the user pinned this episode to a video other than the job's."""
     if not pins:
         return False
@@ -282,6 +299,12 @@ def auto_queues(sub: Subscription, ep: Episode) -> bool:
     if sub.auto_download == "all":
         return True
     if sub.auto_download == "future":
+        # "future" is measured on one clock: the instant it aired against the instant
+        # the subscription was made. Sonarr's airDate is the network's calendar day and
+        # created_at is UTC; comparing those two calendars put an evening US episode a
+        # day into the past (or a morning Tokyo one a day into the future).
+        if ep.air_at is not None:
+            return ep.air_at >= sub.created_at
         return ep.air_date is not None and ep.air_date >= sub.created_at.date()
     return False
 
@@ -528,15 +551,6 @@ def known_date_ids(session: Session, video_ids: list[str], now: datetime | None 
     at = now or datetime.now(UTC)
     rows = session.scalars(select(VideoMeta).where(VideoMeta.video_id.in_(video_ids)))
     return {m.video_id for m in rows if m.upload_date or at - m.fetched_at < DATE_RETRY_AFTER}
-
-
-def _date_known(session: Session, video_id: str, now: datetime | None = None) -> bool:
-    m = session.get(VideoMeta, video_id)
-    if m is None:
-        return False
-    if m.upload_date:
-        return True
-    return (now or datetime.now(UTC)) - m.fetched_at < DATE_RETRY_AFTER
 
 
 def _remember_date(session: Session, video_id: str, upload_date: str | None) -> None:

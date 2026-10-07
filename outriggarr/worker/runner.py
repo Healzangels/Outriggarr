@@ -79,6 +79,9 @@ class RunnerDeps:
     scheduler_tick_seconds: float = 60.0
     notifier: Notifier = field(default_factory=NullNotifier)
     lock_dir: Path | None = None  # where the single-instance lock file lives (config dir)
+    # another instance holds the database: this one serves the pages, and no scan,
+    # fetch or download starts from here (the lock covers all three, not only the worker)
+    page_only: bool = False
     now: Callable[[], datetime] = utcnow
     sleep: Callable[[float], object] = field(default=asyncio.sleep)
     cooloff: CoolOff = field(default_factory=CoolOff)  # shared with the scheduler and fetches
@@ -307,6 +310,9 @@ def recover_stale_jobs(session: Session, exclude: Iterable[int] = ()) -> int:
     return len(rows)
 
 
+_NO_LOCK = object()  # "held" without a file: the lock could not be taken, so nobody else can
+
+
 def acquire_instance_lock(config_dir: Path):
     """One worker per database. Returns the open lock file (keep it alive) or None when
     another live instance holds it; on filesystems without flock it warns and proceeds."""
@@ -315,16 +321,24 @@ def acquire_instance_lock(config_dir: Path):
     path = config_dir / ".outriggarr.lock"
     try:
         fh = open(path, "a+")  # noqa: SIM115 — held for the process lifetime
+    except OSError as exc:  # a read-only or full config dir: no lock, but no crash either
+        log.warning("instance lock file %s cannot be opened (%s); continuing without it", path, exc)
+        return _NO_LOCK
+    try:
         fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
+        fh.close()
         return None
     except OSError as exc:
         log.warning("instance lock unavailable on this filesystem (%s); continuing", exc)
-        return open(path, "a+")  # noqa: SIM115
-    fh.seek(0)
-    fh.truncate()
-    fh.write(f"{os.getpid()}\n")
-    fh.flush()
+        return fh
+    try:
+        fh.seek(0)
+        fh.truncate()
+        fh.write(f"{os.getpid()}\n")
+        fh.flush()
+    except OSError as exc:  # the pid is a courtesy for whoever reads the file
+        log.warning("could not note the pid in %s (%s)", path, exc)
     return fh
 
 
@@ -529,10 +543,17 @@ async def process_job(
             # Nothing left to do: the *arr already has the file (imported by an earlier
             # attempt of this job, a twin job, or elsewhere). That is a finished job, not a
             # user cancellation, so it neither covers the episode nor blocks a re-grab.
-            job.status = JobStatus.done
-            job.progress_pct = 100
-            job.staged_path = None
-            job.error = "target already had a file; nothing imported"
+            # Still `downloading`, so still cancellable: a conditional write, like every
+            # other worker write a Cancel could race.
+            _set_unless_cancelled(
+                session,
+                job,
+                status=JobStatus.done,
+                progress_pct=100,
+                staged_path=None,
+                error="target already had a file; nothing imported",
+                finished_at=job.finished_at,
+            )
             log.info("job %d: target already satisfied", job.id)
         session.commit()
 
@@ -585,8 +606,13 @@ async def _download_stage(
 ) -> Path | None:
     """Returns the staged file, or None when the target already has a file (nothing to do)."""
     if job.staged_path and Path(job.staged_path).exists():
+        staged = Path(job.staged_path)
         log.info("job %d: staged file already present, skipping download", job.id)
-        return Path(job.staged_path)
+        # the path is committed before the audio-tag remux, so a stop in that window
+        # lands here with the tag perhaps missing: tagging again is a copy, and harmless
+        await _tag_audio(deps, session, job, staged, None)
+        session.commit()
+        return staged
 
     try:
         info = await client.target_info(target)
@@ -614,6 +640,8 @@ async def _download_stage(
         # Called from the yt-dlp thread; throttle DB writes.
         nonlocal last_write
         guard.advanced(pct, downloaded)
+        if pct < 0:  # bytes flowing, no size known: nothing for the bar
+            return
         t = time.monotonic()
         if t - last_write < PROGRESS_WRITE_INTERVAL:
             return
@@ -681,20 +709,26 @@ async def _download_stage(
 
     if result.subtitles:
         log.info("job %d: %d subtitle sidecar(s) staged", job.id, len(result.subtitles))
-    language, origin = audio_language_for(
-        job, result.audio_language, get_setting(session, "audio_language")
-    )
-    if language:
-        try:
-            await asyncio.to_thread(deps.source.tag_audio_language, staged, language)
-            log.info("job %d: audio tagged %s (%s)", job.id, language, origin)
-        except SourceError as exc:
-            # The file is still importable; keep the note on the job rather than fail it.
-            log.warning("job %d: audio language tag failed: %s", job.id, exc)
-            job.error = f"audio language tag failed (file imported untagged): {exc}"
+    await _tag_audio(deps, session, job, staged, result.audio_language)
     job.progress_pct = 100
     session.commit()
     return staged
+
+
+async def _tag_audio(
+    deps: RunnerDeps, session: Session, job: Job, staged: Path, declared: str | None
+) -> None:
+    """Stamp the audio language the settings decide; a failure is a note on the job,
+    never a failed job (the file is still importable)."""
+    language, origin = audio_language_for(job, declared, get_setting(session, "audio_language"))
+    if not language:
+        return
+    try:
+        await asyncio.to_thread(deps.source.tag_audio_language, staged, language)
+        log.info("job %d: audio tagged %s (%s)", job.id, language, origin)
+    except SourceError as exc:
+        log.warning("job %d: audio language tag failed: %s", job.id, exc)
+        job.error = f"audio language tag failed (file imported untagged): {exc}"
 
 
 def _staging_name(target: Target, info: TargetInfo, quality: str, ext: str) -> str:
@@ -734,7 +768,8 @@ async def _import_stage(
             (
                 c
                 for c in candidates
-                if c.relative_path == staged.name or c.path.endswith("/" + staged.name)
+                if c.relative_path == staged.name
+                or c.path.endswith(("/" + staged.name, "\\" + staged.name))
             ),
             None,
         )
@@ -752,9 +787,14 @@ async def _import_stage(
             [ImportFile(path=cand.path, quality_name=quality, languages=languages, target=target)]
         )
         status = await _wait_for_command(deps, client, command_id, should_abort)
+        after = await client.target_info(target)
+        if not status.ok and after.has_file:
+            # a restart between the first ManualImport and its move resumed this job
+            # and imported again; the target got its file, which is what counts
+            log.warning("job %d: ManualImport %s; the target has its file", job.id, status.status)
+            return True
         if not status.ok:
             raise _NoRetry(f"ManualImport {status.status}: {status.message or ''}".rstrip(": "))
-        after = await client.target_info(target)
         if not after.has_file:
             raise _NoRetry(
                 "ManualImport completed but the server still reports no file for the target; "

@@ -16,17 +16,21 @@ from outriggarr.arr.common import ArrHttp, parse_date, parse_datetime
 class SonarrClient(ArrHttp):
     async def target_info(self, target: Target) -> TargetInfo:
         if target.is_movie:
-            raise ArrError("Sonarr cannot import a movie target")
+            raise ArrError("Sonarr cannot import a movie target", retryable=False)
         episodes = [await self.get(f"episode/{eid}") for eid in target.episode_ids]
         wrong = [e for e in episodes if int(e.get("seriesId", -1)) != target.series_id]
         if wrong:
+            ids = [e["id"] for e in wrong]
             raise ArrError(
-                f"episode ids {[e['id'] for e in wrong]} do not belong to series {target.series_id}"
+                f"episode ids {ids} do not belong to series {target.series_id}", retryable=False
             )
         series = episodes[0].get("series") or await self.get(f"series/{target.series_id}")
         seasons = {int(e["seasonNumber"]) for e in episodes}
         if len(seasons) != 1:
-            raise ArrError(f"episodes span several seasons {sorted(seasons)}; one job per season")
+            raise ArrError(
+                f"episodes span several seasons {sorted(seasons)}; one job per season",
+                retryable=False,
+            )
         ordered = sorted(episodes, key=lambda e: int(e["episodeNumber"]))
         return TargetInfo(
             title=str(series.get("title", "")),

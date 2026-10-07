@@ -33,6 +33,7 @@ class ArrHttp:
         self._base = base_url.rstrip("/")
         self._headers = {"X-Api-Key": api_key}
         self._http = http
+        self._quality_defs: list[QualityDefinition] | None = None
 
     # -- transport -------------------------------------------------------------------
 
@@ -43,6 +44,8 @@ class ArrHttp:
         url = f"{self._base}/api/v3/{path.lstrip('/')}"
         try:
             r = await self._http.request(method, url, headers=self._headers, **kw)
+        except httpx.InvalidURL as exc:  # not an HTTPError: a malformed base URL
+            raise ArrError(f"{method} {url}: {exc}", retryable=False) from exc
         except httpx.HTTPError as exc:
             raise ArrError(f"{method} {url}: {exc}", retryable=True) from exc
         if r.status_code >= 400:
@@ -61,9 +64,7 @@ class ArrHttp:
         try:
             return r.json()
         except ValueError as exc:
-            raise ArrError(
-                f"{method} {url}: non-JSON response: {r.text[:500]}", retryable=False
-            ) from exc
+            raise ArrError(f"{method} {url}: non-JSON response: {r.text}", retryable=False) from exc
 
     async def get(self, path: str, params: dict[str, Any] | None = None) -> Any:
         return await self._request("GET", path, params=params)
@@ -105,7 +106,7 @@ class ArrHttp:
             {"path": parent, "includeFiles": "false", "allowFoldersWithoutTrailingSlashes": "true"},
         )
         return any(
-            str(d.get("path", "")).rstrip("/") == target for d in data.get("directories", [])
+            str(d.get("path", "")).rstrip("/\\") == target for d in data.get("directories", [])
         )
 
     async def extra_files_config(self) -> ExtraFilesConfig:
@@ -146,7 +147,9 @@ class ArrHttp:
         return [_candidate(d) for d in data]
 
     async def _quality_model(self, quality_name: str) -> dict[str, Any]:
-        by_name = {q.name: q for q in await self.quality_definitions()}
+        if self._quality_defs is None:  # a client lives for one job: once per job
+            self._quality_defs = await self.quality_definitions()
+        by_name = {q.name: q for q in self._quality_defs}
         q = by_name.get(quality_name)
         if q is None:
             raise ArrError(

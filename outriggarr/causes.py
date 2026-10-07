@@ -10,7 +10,10 @@ from __future__ import annotations
 
 import re
 
+from outriggarr.source import RATE_LIMITED, is_rate_limited
+
 _R = re.IGNORECASE
+_WALL = "YouTube rate-limited the session. Everything pauses and resumes by itself; nothing to do."
 
 # (pattern, advice) — first match wins, so the specific comes before the general.
 _YOUTUBE_SESSION: tuple[tuple[re.Pattern[str], str], ...] = (
@@ -49,16 +52,13 @@ _GENERAL: tuple[tuple[re.Pattern[str], str], ...] = (
         "Only this video's requests are refused (a caption or fragment URL), not the whole "
         "session; the job retries on the normal ladder.",
     ),
-    (
-        re.compile(r"rate[- ]limited|try again later|http error 429|too many requests", _R),
-        "YouTube rate-limited the session. Everything pauses and resumes by itself; nothing to do.",
-    ),
+    (RATE_LIMITED, _WALL),  # the same words the app pauses on, so the two cannot drift
     (
         re.compile(r"account associated with this video has been terminated", _R),
         "The channel is gone from YouTube. Pin another video to the episode.",
     ),
     (
-        re.compile(r"video unavailable|has been removed|no longer available", _R),
+        re.compile(r"video (is )?unavailable|has been removed|no longer available", _R),
         "The video is gone from YouTube (removed, or never public). Pin another upload to "
         "the episode.",
     ),
@@ -167,5 +167,12 @@ def likely_cause(error: str | None, *, youtube_session: str = "none") -> str | N
             return advice.format(session=session)
     for pattern, advice in _GENERAL:
         if pattern.search(error):
+            if advice is _WALL and not is_rate_limited(error):
+                # a 429 that names another host (archive.org, a caption CDN): that
+                # request's own problem, and nothing paused
+                return (
+                    "That host rate-limited the request; not YouTube's session wall, so "
+                    "nothing is paused. The job retries on its normal ladder."
+                )
             return advice
     return None

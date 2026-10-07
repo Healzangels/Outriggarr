@@ -1817,7 +1817,13 @@ def test_error_details_are_keyed_by_attempt_and_tabs_are_links(client: TestClien
         )
         s.commit()
     page = client.get("/activity?view=failed").text
-    assert 'id="err-1-2" hx-preserve' in page, "a new attempt's text replaces the preserved node"
+    from outriggarr.web.pages import fingerprint
+
+    assert f'id="err-1-{fingerprint("ERROR: second try")}" hx-preserve' in page, (
+        "keyed by the text: a new error replaces the preserved node, even after the "
+        "runner rewinds the attempt count"
+    )
+    assert fingerprint("ERROR: second try") != fingerprint("ERROR: HTTP Error 403")
     assert 'role="tab"' not in page and 'aria-current="page"' in page
 
 
@@ -1891,6 +1897,11 @@ def test_ago_counts_the_same_days_the_activity_headers_do() -> None:
     late = datetime(2026, 9, 5, 3, 0, tzinfo=UTC)  # Friday 23:00 in New York
     assert ago(thursday_night, now=late, tz=UTC) == "2 days ago"
     assert ago(thursday_night, now=late, tz=ny) == "1 day ago"
+    # a DST fall-back makes a 25-hour day: 24 hours into it is the same calendar day,
+    # which must not read as "0 days ago" (or "Today" beside a 24-hour-old time)
+    fall_back_start = datetime(2026, 11, 1, 4, 30, tzinfo=UTC)  # 00:30 EDT, Sunday 1 Nov
+    a_day_on = fall_back_start + timedelta(hours=24)  # 23:30 EST, still Sunday
+    assert ago(fall_back_start, now=a_day_on, tz=ny) == "1 day ago"
 
 
 def test_same_title_ignores_only_the_channels_own_prefix() -> None:
@@ -2138,7 +2149,7 @@ def test_matches_show_one_row_per_target_the_newest_job(client: TestClient) -> N
         s.commit()
     page = client.get("/matches?view=all").text
     assert "Video New" in page and "Video Old" not in page
-    assert page.count("<strong>Show S30E06</strong> Six") == 1
+    assert page.count('<span class="muted">Show</span> <strong>S30E06</strong> Six') == 1
     assert 'All<span class="count">1</span>' in page
     assert 'Needs a look<span class="count">0</span>' in page, "the superseded job's gap is moot"
 
@@ -2443,6 +2454,9 @@ def test_stale_connection_form_says_so(client: TestClient) -> None:
 def test_page_scripts_cover_network_errors_and_sticky_banners(client: TestClient) -> None:
     page = client.get("/activity").text
     assert "htmx:sendError" in page and "htmx:timeout" in page
+    assert page.count("unspin(e.detail.target") == 2, (
+        "a request that never left clears its spinner as a 5xx does"
+    )
     assert "htmx:afterRequest" in page and "bar.remove()" in page
     assert ":not([data-sticky])" in page
 
@@ -3039,9 +3053,18 @@ def test_download_all_refreshes_the_header_scan_line(client: TestClient) -> None
     assert '<dd id="scan-line" hx-swap-oob="true">' in r.text, (
         "a real scan moved the header: send it"
     )
-    assert "just now" in r.text.split('id="scan-line"', 1)[1]
+    cell = r.text.split('id="scan-line"', 1)[1].split("</dd>", 1)[0]
+    assert "just now" in cell and "What the last real scan did" not in cell, (
+        "the card below shows that very scan: the cell does not say its result again"
+    )
     prev = client.get(f"/subscriptions/{sub_id}/preview").text
-    assert 'id="scan-line"' not in prev, "a dry run moves nothing: nothing to resend"
+    cell = prev.split('id="scan-line" hx-swap-oob="true">', 1)[1].split("</dd>", 1)[0]
+    assert "What the last real scan did" not in cell, "the cached card is still that scan"
+    dry = client.post(f"/subscriptions/{sub_id}/scan").text
+    cell = dry.split('id="scan-line" hx-swap-oob="true">', 1)[1].split("</dd>", 1)[0]
+    assert "What the last real scan did" in cell and "queued" in cell, (
+        "the card now shows a dry run, so the cell has to say what the real scan did"
+    )
     page = client.get(f"/subscriptions/{sub_id}").text
     assert page.count('id="scan-line"') == 1 and "hx-swap-oob" not in page
 
@@ -3497,3 +3520,247 @@ def test_header_scan_tail_says_only_non_zero_counts(client: TestClient) -> None:
     page = client.get(f"/subscriptions/{sub_id}").text
     tail = page.split('id="scan-line"', 1)[1].split("</dd>", 1)[0]
     assert "2 unmatched" in tail and "0 matched" not in tail
+
+
+def _sub_with_cached_scan(client: TestClient, **extra) -> int:
+    """A subscription whose last real scan succeeded and is cached on the page."""
+    _seed_series(client)
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={
+            "connection_id": 1,
+            "series_id": 5,
+            "sources": ["https://www.youtube.com/@hotones"],
+            **extra,
+        },
+    ).json()["id"]
+    assert client.post(f"/subscriptions/{sub_id}/download").status_code == 200
+    return sub_id
+
+
+def test_a_failed_scan_after_a_good_one_is_said_in_the_header(client: TestClient) -> None:
+    from outriggarr.source import SourceError
+
+    sub_id = _sub_with_cached_scan(client)
+    client.app.state.source.recent_error = SourceError("ERROR: [youtube:tab] @hotones: gone")
+    r = client.post(f"/api/subscriptions/{sub_id}/scan")
+    assert r.status_code == 502 and r.json()["detail"]["error"].endswith("gone"), r.text
+    page = client.get(f"/subscriptions/{sub_id}").text
+    cell = page.split('id="scan-line"', 1)[1].split("</dd>", 1)[0]
+    assert "failed: " in cell and "@hotones: gone" in cell, (
+        "the card keeps the last good report; the header is the one place that says the "
+        "latest scan failed"
+    )
+    assert "what the last good scan did" in page, "the card says which scan it shows"
+    assert "Scan failed" not in page.split('id="preview"', 1)[1], "the good report, unpoisoned"
+
+
+def test_a_failed_download_scan_says_so_in_the_cards_subtitle(client: TestClient) -> None:
+    from outriggarr.source import SourceError
+
+    sub_id = _sub_with_cached_scan(client)
+    client.app.state.source.recent_error = SourceError("ERROR: [youtube:tab] @hotones: gone")
+    r = client.post(f"/subscriptions/{sub_id}/download").text
+    assert 'hx-swap-oob="true">· the scan failed · just now' in r, (
+        "not 'what the last scan did': it did nothing"
+    )
+    cell = r.split('id="scan-line" hx-swap-oob="true">', 1)[1].split("</dd>", 1)[0]
+    assert "just now" in cell and "What the last real scan did" not in cell, (
+        "the header cell moved with the failed scan; the card says the result"
+    )
+
+
+def test_skipped_matches_are_labelled_by_their_own_reason(client: TestClient) -> None:
+    _seed_series(client)
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={
+            "connection_id": 1,
+            "series_id": 5,
+            "sources": ["https://www.youtube.com/@hotones"],
+            "auto_download": "none",
+        },
+    ).json()["id"]
+    assert client.post(f"/api/subscriptions/{sub_id}/scan").status_code == 200  # scheduled-style
+    page = client.get(f"/subscriptions/{sub_id}/preview").text
+    line = page.split('class="scan-summary', 1)[1].split("</p>", 1)[0]
+    assert "1 waiting for Download" in line
+    assert "Automatic downloads are off for this subscription" in line
+    assert "aired after you subscribed" not in line, "the future-only tooltip is not this policy"
+    # a Download of other episodes: the match is "not selected", which is not a policy
+    client.post(f"/subscriptions/{sub_id}/download", data={"selected": "1", "episode_id": ["12"]})
+    page = client.get(f"/subscriptions/{sub_id}/preview").text
+    line = page.split('class="scan-summary', 1)[1].split("</p>", 1)[0]
+    assert "1 not selected" in line and "waiting for Download" not in line, line
+
+
+def test_the_recheck_button_counts_what_the_rows_call_unchecked(client: TestClient) -> None:
+    from outriggarr.db.models import Job, TargetKind
+
+    _seed_series(client)
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={"connection_id": 1, "series_id": 5, "sources": ["https://www.youtube.com/@x"]},
+    ).json()["id"]
+    with client.app.state.session_factory() as s:
+        s.add(
+            Job(
+                connection_id=1,
+                subscription_id=sub_id,
+                target_kind=TargetKind.episode,
+                series_id=5,
+                episode_ids=[11],
+                target_key="episode:5:11",
+                video_id="v",
+                video_url="https://y/v",
+                video_title="Something else",
+                target_label="Hot Ones S30E06 - Six Spicy Wings",
+                video_duration=1500,  # the length is known; Sonarr was never asked
+            )
+        )
+        s.commit()
+    page = client.get("/matches").text
+    assert "1 unchecked" in page, "the button counts a runtime nobody fetched yet"
+    assert "25:00, runtime unchecked" in page, "…and the row calls it the same thing"
+    assert "no runtime in Sonarr" not in page, "'no runtime' is Sonarr's answer, not its absence"
+
+
+def test_season_rows_show_the_networks_calendar_day(client: TestClient) -> None:
+    from datetime import UTC, date, datetime
+
+    from outriggarr.arr.base import EpisodeRef
+
+    _seed_series(client)
+    arr = client.app.state.arr_factory.by_url["http://sonarr-host:1234"]
+    arr.episodes_by_series[5] = [
+        EpisodeRef(
+            11,
+            30,
+            6,
+            "Six Spicy Wings",
+            False,
+            True,
+            datetime(2026, 9, 2, 1, 0, tzinfo=UTC),  # 21:00 on the 1st, US east coast
+            air_date=date(2026, 9, 1),
+        )
+    ]
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={"connection_id": 1, "series_id": 5, "sources": ["https://www.youtube.com/@x"]},
+    ).json()["id"]
+    rows = client.get(f"/subscriptions/{sub_id}/episodes/30").text
+    assert "2026-09-01" in rows and "2026-09-02" not in rows, (
+        "the same day the preview prints, not the UTC date"
+    )
+
+
+def test_a_transient_date_fetch_error_is_asked_again(client: TestClient, monkeypatch) -> None:
+    import time
+    from datetime import UTC, datetime, timedelta
+
+    from outriggarr.arr.base import EpisodeRef, SeriesRef
+    from outriggarr.db.models import VideoMeta
+    from outriggarr.source import SourceError, VideoRef
+    from outriggarr.worker import scheduler
+    from tests.fakes import FakeArrClient
+
+    monkeypatch.setattr(scheduler, "DATE_FETCH_LIMIT", 0)  # the scan's own trickle: off
+    now = datetime.now(UTC)
+    client.app.state.arr_factory.by_url["http://sonarr-host:1234"] = FakeArrClient(
+        series_list=[SeriesRef(5, "Show", 2015, 1, True)],
+        episodes_by_series={
+            5: [EpisodeRef(11, 30, 6, "Nothing alike", False, True, now - timedelta(days=400))]
+        },
+    )
+    source = client.app.state.source
+    source.recent = [
+        VideoRef("p", "Permanent", "https://y/p", 100, 1, None),
+        VideoRef("t", "Transient", "https://y/t", 100, 2, None),
+    ]
+    source.infos = {"https://y/t": SourceError("ERROR: unable to download webpage: HTTP Error 503")}
+    client.post("/api/connections", json=SONARR)
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={
+            "connection_id": 1,
+            "series_id": 5,
+            "sources": ["https://www.youtube.com/@x"],
+            "strategies": ["title", "date"],
+        },
+    ).json()["id"]
+    for expected_total in (2, 1):
+        client.post(f"/subscriptions/{sub_id}/dates")
+        for _ in range(100):
+            st = client.get(f"/api/subscriptions/{sub_id}/dates").json()
+            if not st["running"]:
+                break
+            time.sleep(0.05)
+        assert st["failure"] is None and st["total"] == expected_total, st
+        with client.app.state.session_factory() as s:
+            rows = {m.video_id: m.upload_date for m in s.query(VideoMeta).all()}
+        assert rows == {"p": None}, "gone is an answer for a week; a 503 is not an answer"
+
+
+def test_a_live_video_keeps_its_length_unchecked_until_it_ends(client: TestClient) -> None:
+    import time
+    from datetime import UTC, datetime, timedelta
+
+    from outriggarr.arr.base import EpisodeRef, SeriesRef
+    from outriggarr.db.models import Job, TargetKind
+    from outriggarr.source import VideoRef
+    from tests.fakes import FakeArrClient
+
+    aired = datetime.now(UTC) - timedelta(days=1)
+    client.app.state.arr_factory.by_url["http://sonarr-host:1234"] = FakeArrClient(
+        series_list=[SeriesRef(5, "Show", 2015, 1, True)],
+        episodes_by_series={5: [EpisodeRef(11, 30, 6, "Six", False, True, aired, runtime=25)]},
+    )
+    source = client.app.state.source
+    source.recent = []
+    source.infos = {
+        "https://y/live": VideoRef(
+            "live", "x", "https://y/live", None, 1, None, live_status="is_live"
+        )
+    }
+    client.post("/api/connections", json=SONARR)
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={"connection_id": 1, "series_id": 5, "sources": ["https://www.youtube.com/@x"]},
+    ).json()["id"]
+    with client.app.state.session_factory() as s:
+        s.add(
+            Job(
+                connection_id=1,
+                subscription_id=sub_id,
+                target_kind=TargetKind.episode,
+                series_id=5,
+                episode_ids=[11],
+                target_key="episode:5:11",
+                video_id="live",
+                video_url="https://y/live",
+                video_title="x",
+                target_label="Show S30E06 - Six",
+            )
+        )
+        s.commit()
+    client.post("/matches/recheck")
+    for _ in range(100):
+        status = client.get("/api/matches/recheck").json()
+        if not status["running"]:
+            break
+        time.sleep(0.05)
+    assert status["not_yet"] == 1 and "live or upcoming" in status["summary"], status
+    job = client.get("/api/jobs").json()[0]
+    assert job["video_duration"] is None and job["target_runtime"] == 25, (
+        "no length YET is not 'no length': the next recheck asks again"
+    )
+    assert "1 unchecked" in client.get("/matches").text
+
+
+def test_a_page_only_instance_refuses_to_scan(client: TestClient) -> None:
+    sub_id = _sub_with_cached_scan(client)
+    client.app.state.runner_deps.page_only = True
+    r = client.post(f"/api/subscriptions/{sub_id}/scan")
+    assert r.status_code == 409 and "serves the pages only" in r.json()["detail"]
+    assert client.post(f"/subscriptions/{sub_id}/download").status_code == 409
+    assert client.get(f"/subscriptions/{sub_id}").status_code == 200, "the pages still serve"
