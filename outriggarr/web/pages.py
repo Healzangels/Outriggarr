@@ -392,7 +392,7 @@ def counts_for(session: DbSession) -> dict[str, int]:
     }
 
 
-def _jobs(session: DbSession, view: str) -> list[Job]:
+def _jobs(session: DbSession, view: str, *, show_all: bool = False) -> list[Job]:
     # ordered by the same moment each row shows (finished, else created), so the day
     # dividers run monotonically down the page
     when = func.coalesce(Job.finished_at, Job.created_at)
@@ -400,7 +400,18 @@ def _jobs(session: DbSession, view: str) -> list[Job]:
     statuses = FILTERS.get(view)
     if statuses:
         q = q.where(Job.status.in_(statuses))
-    return list(session.scalars(q.limit(ACTIVITY_LIMIT)))
+    return list(session.scalars(q if show_all else q.limit(ACTIVITY_LIMIT)))
+
+
+def _show_all(session: Session, view: str, limit: str, job: int | None) -> bool:
+    """Whether the table lists every job of the view: asked for (`limit=all`), or a
+    link came for a job older than the newest ACTIVITY_LIMIT — the page is the only
+    place a job is shown in full, so that link must land on its row, not on nothing."""
+    if limit == "all":
+        return True
+    if job is None:
+        return False
+    return job not in {j.id for j in _jobs(session, view)}
 
 
 def _has_connections(session: Session) -> bool:
@@ -413,8 +424,9 @@ def _rows(
     view: str,
     notice: str | None = None,
     notice_bad: bool = False,
+    show_all: bool = False,
 ) -> HTMLResponse:
-    jobs = _jobs(session, view)
+    jobs = _jobs(session, view, show_all=show_all)
     version = jobs_version(session)
     total = counts_for(session).get(view, len(jobs))
     return templates.TemplateResponse(
@@ -427,6 +439,7 @@ def _rows(
             "notice_bad": notice_bad,
             "total": total,
             "limit": ACTIVITY_LIMIT,
+            "show_all": show_all,
             "causes": _causes(session, jobs),
             "has_connections": _has_connections(session),
             "jobs_version": version,
@@ -458,11 +471,16 @@ def favicon() -> FileResponse:
 
 @router.get("/activity")
 def activity(
-    request: Request, session: DbSession, view: Annotated[str, Query()] = "all"
+    request: Request,
+    session: DbSession,
+    view: Annotated[str, Query()] = "all",
+    limit: Annotated[str, Query()] = "",
+    job: Annotated[int | None, Query()] = None,
 ) -> HTMLResponse:
     view = view if view in FILTERS else "all"
     counts = counts_for(session)
-    jobs = _jobs(session, view)
+    show_all = _show_all(session, view, limit, job)
+    jobs = _jobs(session, view, show_all=show_all)
     return templates.TemplateResponse(
         request,
         "activity.html",
@@ -473,6 +491,7 @@ def activity(
             "counts": counts,
             "total": counts.get(view, len(jobs)),
             "limit": ACTIVITY_LIMIT,
+            "show_all": show_all,
             "has_connections": _has_connections(session),
             "jobs_version": jobs_version(session),
             "causes": _causes(session, jobs),
@@ -705,23 +724,32 @@ def activity_rows(
     session: DbSession,
     view: Annotated[str, Query()] = "all",
     v: Annotated[str, Query()] = "",
+    limit: Annotated[str, Query()] = "",
 ) -> Response:
     """The polled table. `v` is the stamp the page already shows: while it holds there is
     nothing to send, and htmx leaves the rows (and the user's selection) alone."""
     if v and v == jobs_version(session):
         return Response(status_code=status.HTTP_204_NO_CONTENT)
-    return _rows(request, session, view if view in FILTERS else "all")
+    return _rows(request, session, view if view in FILTERS else "all", show_all=limit == "all")
 
 
 @router.post("/activity/jobs/{job_id}/retry")
 def activity_retry(
-    request: Request, job_id: int, session: DbSession, view: Annotated[str, Query()] = "all"
+    request: Request,
+    job_id: int,
+    session: DbSession,
+    view: Annotated[str, Query()] = "all",
+    limit: Annotated[str, Query()] = "",
 ) -> HTMLResponse:
     try:
         retry_job(session, job_id)
     except HTTPException as exc:
-        return _rows(request, session, view, notice=str(exc.detail), notice_bad=True)
-    return _rows(request, session, view, notice=f"Job #{job_id} queued again.")
+        return _rows(
+            request, session, view, notice=str(exc.detail), notice_bad=True, show_all=limit == "all"
+        )
+    return _rows(
+        request, session, view, notice=f"Job #{job_id} queued again.", show_all=limit == "all"
+    )
 
 
 @router.post("/activity/jobs/{job_id}/delete")
@@ -731,23 +759,34 @@ def activity_delete(
     session: DbSession,
     deps: RunnerDepsDep,
     view: Annotated[str, Query()] = "all",
+    limit: Annotated[str, Query()] = "",
 ) -> HTMLResponse:
     try:
         delete_job(session, job_id, deps.staging_dir)
     except HTTPException as exc:
-        return _rows(request, session, view, notice=str(exc.detail), notice_bad=True)
-    return _rows(request, session, view, notice=f"Job #{job_id} deleted.")
+        return _rows(
+            request, session, view, notice=str(exc.detail), notice_bad=True, show_all=limit == "all"
+        )
+    return _rows(request, session, view, notice=f"Job #{job_id} deleted.", show_all=limit == "all")
 
 
 @router.post("/activity/jobs/{job_id}/cancel")
 def activity_cancel(
-    request: Request, job_id: int, session: DbSession, view: Annotated[str, Query()] = "all"
+    request: Request,
+    job_id: int,
+    session: DbSession,
+    view: Annotated[str, Query()] = "all",
+    limit: Annotated[str, Query()] = "",
 ) -> HTMLResponse:
     try:
         cancel_job(session, job_id)
     except HTTPException as exc:
-        return _rows(request, session, view, notice=str(exc.detail), notice_bad=True)
-    return _rows(request, session, view, notice=f"Job #{job_id} cancelled.")
+        return _rows(
+            request, session, view, notice=str(exc.detail), notice_bad=True, show_all=limit == "all"
+        )
+    return _rows(
+        request, session, view, notice=f"Job #{job_id} cancelled.", show_all=limit == "all"
+    )
 
 
 # ---- Series / subscriptions -------------------------------------------------------

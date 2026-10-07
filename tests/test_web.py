@@ -1591,7 +1591,7 @@ def test_subscription_page_labels_its_facts_and_orders_the_preview(client: TestC
     assert "Listed just now" in prev, "the preview says how old its look at the source is"
     fresh = client.post(f"/subscriptions/{sub_id}/scan").text  # Refresh preview
     assert "1 wanted episode already has a job" in fresh, "the scan queued it: not a match row now"
-    assert '<a href="/activity#job-' in client.get(f"/subscriptions/{sub_id}/episodes").text
+    assert '<a href="/activity?job=' in client.get(f"/subscriptions/{sub_id}/episodes").text
 
 
 def test_notify_test_result_is_escaped(client: TestClient) -> None:
@@ -2675,7 +2675,7 @@ def test_matches_episode_cell_mutes_the_series_and_bolds_the_code(client: TestCl
         s.commit()
     page = client.get("/matches?view=all").text
     assert '<span class="muted">Hot Ones</span> <strong>S30E06</strong> Six Spicy Wings' in page
-    assert 'href="/activity#job-' in page, "the job ref lands on its Activity row"
+    assert 'href="/activity?job=' in page, "the job ref lands on its Activity row"
 
 
 def test_the_preview_is_cached_so_a_page_open_costs_no_listing(client: TestClient) -> None:
@@ -3175,7 +3175,7 @@ def test_preview_card_reads_as_a_record_after_a_real_scan(client: TestClient) ->
     assert 'id="tick-all"' not in picks and 'name="episode_id"' not in picks, (
         "nothing can be ticked: no selection column"
     )
-    assert "1 matched</span>, queued" in prev and 'href="/activity#job-' in prev
+    assert "1 matched</span>, queued" in prev and 'href="/activity?job=' in prev
     assert "Nothing to queue" not in prev and "Queued 1 job" not in prev, "said once"
     assert "every match already has a job" not in prev and "already have jobs" not in prev
     assert "had a job already" not in prev, "a count of nothing is not said"
@@ -3803,3 +3803,58 @@ def test_phone_width_keeps_the_telling_columns(client: TestClient) -> None:
     assert '<table class="picks">' in page and '<td class="col-tier">' in page
     assert '<td class="col-video">' in page and '<table class="unmatched">' in page
     assert '<table class="recent">' in client.get(f"/subscriptions/{sub_id}/recent").text
+
+
+def test_a_job_link_lands_on_its_row_however_old_the_job(client: TestClient, monkeypatch) -> None:
+    """Activity lists the newest ACTIVITY_LIMIT jobs; a job older than that is linked from
+    Matches, Recent jobs and the Episodes card, and the link must land on its row, not
+    on nothing. `?job=` expands the table when needed, `limit=all` expands it on request,
+    and the poll and the row actions keep an expanded table expanded."""
+    import outriggarr.web.pages as pages
+    from outriggarr.db.models import Job, JobStatus, TargetKind
+
+    monkeypatch.setattr(pages, "ACTIVITY_LIMIT", 2)
+    _seed_series(client)
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={"connection_id": 1, "series_id": 5, "sources": ["https://www.youtube.com/@x"]},
+    ).json()["id"]
+    with client.app.state.session_factory() as s:
+        for i in range(3):
+            s.add(
+                Job(
+                    connection_id=1,
+                    subscription_id=sub_id,
+                    target_kind=TargetKind.episode,
+                    series_id=5,
+                    episode_ids=[11 + i],
+                    target_key=f"episode:5:{11 + i}",
+                    video_id=f"v{i}",
+                    video_url=f"https://y/v{i}",
+                    video_title=f"Video {i}",
+                    target_label=f"Hot Ones S30E0{6 + i} - Title {i}",
+                    status=JobStatus.done,
+                )
+            )
+        s.commit()
+        oldest, newest = 1, 3
+    page = client.get("/activity").text
+    assert page.count('<tr id="job-') == 2 and f'id="job-{oldest}"' not in page
+    assert (
+        'Showing the newest 2 of 3. <a href="/activity?view=all&amp;limit=all">Show all 3</a>'
+        in (page)
+    )
+    page = client.get(f"/activity?job={oldest}").text
+    assert f'<tr id="job-{oldest}"' in page and page.count('<tr id="job-') == 3, (
+        "the link's job is older than the cap: the table expands to reach it"
+    )
+    assert 'hx-get="/activity/rows?view=all&limit=all"' in page, "the poll keeps it expanded"
+    assert f'hx-post="/activity/jobs/{oldest}/delete?view=all&limit=all"' in page
+    assert 'Showing all 3. <a href="/activity?view=all">Newest 2 only</a>' in page
+    assert client.get(f"/activity?job={newest}").text.count('<tr id="job-') == 2, (
+        "a job within the newest rows expands nothing"
+    )
+    assert client.get("/activity/rows?view=all&limit=all").text.count('<tr id="job-') == 3
+    assert client.get("/activity/rows?view=all").text.count('<tr id="job-') == 2
+    for url in ("/matches?view=all", f"/subscriptions/{sub_id}/recent"):
+        assert f'href="/activity?job={oldest}#job-{oldest}"' in client.get(url).text, url
