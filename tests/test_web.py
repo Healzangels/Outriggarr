@@ -435,7 +435,9 @@ def test_branding_assets_and_favicon(client: TestClient) -> None:
     assert client.get("/static/outriggarr.png").status_code == 200
     page = client.get("/activity").text
     assert '<link rel="icon" href="/static/favicon.ico?v=' in page
-    assert 'class="brand"><svg' in page, "the logo is inline; no request, no flicker"
+    assert 'class="brand" aria-label="Outriggarr"><svg' in page, (
+        "the logo is inline; no request, no flicker"
+    )
 
 
 def test_settings_page_has_subtitle_fields(client: TestClient) -> None:
@@ -874,7 +876,9 @@ def test_matches_recheck_and_confirm_clear_the_review_list(client: TestClient) -
 def test_static_assets_are_cacheable_and_the_logo_is_inline(client: TestClient) -> None:
     page = client.get("/activity").text
     assert "/static/app.css?v=" in page and 'src="/static/outriggarr.svg"' not in page
-    assert '<a href="/activity" class="brand"><svg' in page, "no fetch, no flicker"
+    assert '<a href="/activity" class="brand" aria-label="Outriggarr"><svg' in page, (
+        "no fetch, no flicker"
+    )
     r = client.get("/static/app.css")
     assert r.headers["cache-control"] == "public, max-age=3600"
     r = client.get("/static/app.css?v=abc")
@@ -3764,3 +3768,38 @@ def test_a_page_only_instance_refuses_to_scan(client: TestClient) -> None:
     assert r.status_code == 409 and "serves the pages only" in r.json()["detail"]
     assert client.post(f"/subscriptions/{sub_id}/download").status_code == 409
     assert client.get(f"/subscriptions/{sub_id}").status_code == 200, "the pages still serve"
+
+
+def test_phone_width_keeps_the_telling_columns(client: TestClient) -> None:
+    """Under Pico's 767 px breakpoint every table drops the column that said least
+    (a source URL, a second copy of the title, a tier chip) so the ones that say
+    something — the state chips, the status and time, the pin field — are in view
+    instead of behind a horizontal scroll. The classes are the hook; the stylesheet
+    hides them; the logo link keeps a name once its wordmark hides."""
+    from pathlib import Path
+
+    css = Path("outriggarr/web/static/app.css").read_text()
+    phone = css.split("@media (max-width: 767px)", 1)[1]
+    assert (
+        ".col-source, .col-order, .col-video, .col-when, .col-seen, .col-tier, .col-year, "
+        ".col-tvdb { display: none; }"
+    ) in phone
+    assert "table.subs, table.unmatched, table.picks, table.recent, table.found, table.jobs {" in (
+        phone
+    )
+    sub_id = _sub_with_cached_scan(client)
+    page = client.get("/series").text
+    assert 'class="col-source">Source</th>' in page and '<td class="col-source">' in page
+    assert '<table class="subs">' in page and 'class="nowrap col-order">' in page
+    rows = client.get("/series/rows?q=hot").text
+    assert '<table class="found">' in rows and 'class="col-year">' in rows
+    assert 'class="mono col-tvdb">' in rows
+    page = client.get("/activity").text
+    assert 'class="col-video">Video</th>' in page and '<td class="col-video">' in page
+    assert 'class="brand" aria-label="Outriggarr">' in page, "the wordmark hides on a phone"
+    page = client.get("/matches?view=all").text
+    assert 'class="col-when">When</th>' in page and 'class="muted when col-when">' in page
+    page = client.get(f"/subscriptions/{sub_id}/preview").text  # the card is fetched by htmx
+    assert '<table class="picks">' in page and '<td class="col-tier">' in page
+    assert '<td class="col-video">' in page and '<table class="unmatched">' in page
+    assert '<table class="recent">' in client.get(f"/subscriptions/{sub_id}/recent").text

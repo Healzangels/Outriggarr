@@ -45,16 +45,16 @@
 {% if report.matches %}
 <h4>Matches</h4>
 <div class="table-wrap">
-<table>
+<table class="picks">
   {% set show_job = report.matches | selectattr("job_id") | list or report.matches | selectattr("skipped") | list or (report.dry_run and auto_count) %}
-  <thead><tr>{% if queueable %}<th><input type="checkbox" id="tick-all" aria-label="tick all"></th>{% endif %}<th>Episode</th><th>Video</th><th>Matched by</th>{% if show_job %}<th>Job</th>{% endif %}</tr></thead>
+  <thead><tr>{% if queueable %}<th><input type="checkbox" id="tick-all" aria-label="tick all"></th>{% endif %}<th>Episode</th><th class="col-video">Video</th><th class="col-tier">Matched by</th>{% if show_job %}<th>Job</th>{% endif %}</tr></thead>
   <tbody id="match-picks">
   {% for m in report.matches %}
     <tr>
       {% if queueable %}<td>{% if not m.job_id %}<input type="checkbox" name="episode_id" value="{{ m.episode_id }}" aria-label="download {{ m.code }}">{% endif %}</td>{% endif %}
       <td><strong>{{ m.code }}</strong> {{ m.title }}<span class="two-line muted">{{ m.air_date or "" }}</span></td>
-      <td>{% set note = titles_match(m.title, m.video_title, sub.title) %}{% if note %}<a href="{{ m.video_url }}" target="_blank" rel="noopener" class="truncate same-title" title="{{ note }} · {{ m.video_id }}">same title</a>{% else %}<a href="{{ m.video_url }}" target="_blank" rel="noopener" class="truncate" title="{{ m.video_title }} · {{ m.video_id }}">{{ m.video_title }}</a>{% endif %}</td>
-      <td><span class="chip">{{ tier_label(m.tier if m.strategy == "title" else m.strategy) }}</span></td>
+      <td class="col-video">{% set note = titles_match(m.title, m.video_title, sub.title) %}{% if note %}<a href="{{ m.video_url }}" target="_blank" rel="noopener" class="truncate same-title" title="{{ note }} · {{ m.video_id }}">same title</a>{% else %}<a href="{{ m.video_url }}" target="_blank" rel="noopener" class="truncate" title="{{ m.video_title }} · {{ m.video_id }}">{{ m.video_title }}</a>{% endif %}</td>
+      <td class="col-tier"><span class="chip">{{ tier_label(m.tier if m.strategy == "title" else m.strategy) }}</span></td>
       {% if show_job %}<td>{% if m.job_id %}<a href="/activity#job-{{ m.job_id }}" class="job-ref">#{{ m.job_id }}</a>{% elif m.skipped %}<span class="muted">{{ m.skipped }}</span>{% elif report.dry_run and m.auto %}<span class="muted nowrap">queues on the next scan</span>{% endif %}</td>{% endif %}
     </tr>
   {% endfor %}
@@ -118,13 +118,13 @@
 <p class="muted">{% if not any_candidates %}{% if strategy_names %}No strategy saw a candidate for any of these ({{ strategy_names | join(", ") }}). {% else %}Pins only, and none set yet. {% endif %}{% endif %}Pin a video to an episode by picking one of the listed videos or pasting a video URL. Pins always win on the next scan.</p>
 {% if not sub.title_require and "title" in sub.strategies %}{% set short = shown | map(attribute="title") | select("title_too_short") | list %}{% if short %}<p class="muted">{{ short | length }} of these {{ 'title is' if short | length == 1 else 'titles are' }} too short to look for inside a video title ({% for t in short[:3] %}“{{ t }}”{{ ', ' if not loop.last }}{% endfor %}{% if short | length > 3 %}, …{% endif %}): one word matches far too much of a channel. A <strong>Title must contain</strong> scope under Subscription settings — the phrase every episode's video carries — lifts that limit, since the scope does the narrowing.</p>{% endif %}{% endif %}
 <div class="table-wrap">
-<table>
-  <thead><tr><th>Episode</th>{% if any_candidates %}<th>What each strategy saw</th>{% endif %}<th>Pin a video</th></tr></thead>
+<table class="unmatched">
+  <thead><tr><th>Episode</th>{% if any_candidates %}<th class="col-seen">What each strategy saw</th>{% endif %}<th>Pin a video</th></tr></thead>
   <tbody>
   {% for u in shown %}
     <tr>
       <td><strong>{{ u.code }}</strong> {{ u.title }}<span class="two-line muted">{{ u.air_date or "" }}{% set stuck = report.unmatched_scans.get(u.code, 0) %}{% if stuck >= 2 %} · <span class="warn" title="No source has carried this episode in {{ stuck }} scans. Pin a video, or unmonitor it in Sonarr if it is not coming.">unmatched for {{ report.unmatched_since[u.code] | for_text }} · {{ stuck }} scans</span>{% endif %}</span></td>
-      {% if any_candidates %}<td>
+      {% if any_candidates %}<td class="col-seen">
         {% if not (u.candidates.values() | map("length") | sum) %}{% set names = [] %}{% for strategy in u.candidates if strategy != "override" or sub.overrides %}{% set _ = names.append("pins" if strategy == "override" else strategy) %}{% endfor %}<span class="muted">{% if names %}no candidate by {{ names[:-1] | join(", ") ~ (" or " if names | length > 1 else "") ~ names[-1] }}{% else %}pins only, and none set yet{% endif %}</span>
         {% else %}{% for strategy, cands in u.candidates.items() %}
           <span class="nowrap"><span class="chip">{{ "pins" if strategy == "override" else strategy }}</span>

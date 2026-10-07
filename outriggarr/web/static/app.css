@@ -268,4 +268,17 @@ table.jobs { min-width: 860px; }  /* the episode label needs room, or a phone sh
   .fill-row { grid-template-columns: 1fr; }
   td.actions :is(button, a[role=button]), form.inline button { padding: .45em .8em; }
   table [type=checkbox] { width: 1.4em; height: 1.4em; }
+  /* a phone shows the columns that say something: the state chips, the status and
+     the time, the pin field — not the source URL or a second copy of the title, which
+     sat in view while those scrolled off the right edge */
+  table.subs, table.unmatched, table.picks, table.recent, table.found, table.jobs { min-width: 0; }
+  table.matches { min-width: 560px; }  /* both titles in view; the evidence by a short scroll */
+  .col-source, .col-order, .col-video, .col-when, .col-seen, .col-tier, .col-year, .col-tvdb { display: none; }
+  /* the Unmatched table stacks: the episode on one line, the pin field full width under
+     it — the one action a phone wants here, instead of a Pin button off the right edge */
+  table.unmatched thead { display: none; }
+  table.unmatched tr, table.unmatched td { display: block; }
+  table.unmatched td { border: 0; padding: .35rem 0; }
+  table.unmatched tr { border-bottom: var(--pico-border-width) solid var(--pico-table-border-color); padding: .4rem 0; }
+  table.unmatched fieldset[role=group].pin input { min-width: 0; }
 }

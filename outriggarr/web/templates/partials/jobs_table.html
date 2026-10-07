@@ -5,7 +5,7 @@
 {% else %}
 <div class="table-wrap">
 <table class="jobs">
-  <thead><tr><th scope="col">Job</th><th scope="col">Episode / movie</th><th scope="col">Video</th><th scope="col">When</th><th class="actions" scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
+  <thead><tr><th scope="col">Job</th><th scope="col">Episode / movie</th><th scope="col" class="col-video">Video</th><th scope="col">When</th><th class="actions" scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
   <tbody>
   {% set ns = namespace(day=None) %}
   {% for job in jobs %}
@@ -27,7 +27,7 @@
         {% endif %}
         {% if not job.subscription_id %} <span class="chip" title="Queued from Grab, not by a subscription">by hand</span>{% endif %}
       </td>
-      <td>{% set note = same_title(job.target_label, job.video_title) %}{% if note %}<a href="{{ job.video_url }}" target="_blank" rel="noopener" class="truncate same-title" title="{{ note }}">same title</a>{% else %}<a href="{{ job.video_url }}" target="_blank" rel="noopener" class="truncate" title="{{ job.video_title or job.video_id }}">{{ job.video_title or job.video_id }}</a>{% endif %}
+      <td class="col-video">{% set note = same_title(job.target_label, job.video_title) %}{% if note %}<a href="{{ job.video_url }}" target="_blank" rel="noopener" class="truncate same-title" title="{{ note }}">same title</a>{% else %}<a href="{{ job.video_url }}" target="_blank" rel="noopener" class="truncate" title="{{ job.video_title or job.video_id }}">{{ job.video_title or job.video_id }}</a>{% endif %}
         {% if job.error and not (job.status == JobStatus.cancelled and job.error == "cancelled") %}<details class="error" id="err-{{ job.id }}-{{ fingerprint(job.error) }}" hx-preserve><summary class="{{ 'warn' if job.status == JobStatus.done else ('muted' if job.status == JobStatus.cancelled else 'bad') }}">{{ job.error.splitlines()[0] | truncate(60) }}</summary><pre>{{ job.error }}</pre></details>{% if causes is defined and causes.get(job.id) %}<span class="cause">{{ causes[job.id] }}</span>{% endif %}{% endif %}
       </td>
       <td class="muted when"><time datetime="{{ when.isoformat() }}" title="created {{ job.created_at.strftime('%Y-%m-%d %H:%M') }}Z{% if job.finished_at %} · finished {{ job.finished_at.strftime('%Y-%m-%d %H:%M') }}Z{% endif %}">{{ when | ago }}</time></td>
