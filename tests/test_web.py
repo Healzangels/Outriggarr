@@ -3473,7 +3473,9 @@ def test_for_text_says_how_long_without_the_suffix() -> None:
     from outriggarr.web.pages import for_text
 
     now = datetime.now(UTC)
-    assert for_text(now - timedelta(days=10, hours=3)) == "10 days"
+    # whole days only: `ago` counts calendar days, so ten days and three hours is
+    # eleven calendar days when the clock reads 00:30 (CI, UTC) and ten at 20:30
+    assert for_text(now - timedelta(days=10)) == "10 days"
     assert for_text((now - timedelta(hours=3)).isoformat()) == "3 hr", "an ISO string from a report"
     assert for_text(now - timedelta(seconds=5)) == "under a minute"
     assert for_text(None) == ""
