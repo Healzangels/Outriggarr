@@ -624,8 +624,9 @@ class YtDlpSource:
         if proc.returncode != 0 and CONTAINER_REFUSED.search(proc.stderr):
             # a 2008-era archive.org mp4 carries a "subtitle" track with no codec (a
             # chapter or text track) that an mp4 output refuses to write, and five files
-            # went into the library untagged for it. No player showed that track; the
-            # language tag is what the remux is for, so do it again without subtitles.
+            # skipped the tag for it (they happened to carry one from the source). No
+            # player showed that track; the tag is what the remux is for, so do it again
+            # without subtitles.
             log.warning(
                 "%s: the container refuses a stream (%s); remuxing without subtitle streams",
                 path.name,
