@@ -867,7 +867,7 @@ def _subscription_form_context(sub: Subscription | None, session: Session) -> di
 @router.get("/series/{series_id}/subscribe")
 async def subscribe_form(
     request: Request, series_id: int, session: DbSession, arr_factory: ArrFactoryDep
-) -> HTMLResponse:
+) -> Response:
     conn = _sonarr(session)
     if conn is None:
         return RedirectResponse("/series", status_code=302)
@@ -924,7 +924,7 @@ def _form_to_body(
     series_id: int,
     sources: str,
     format: str,
-    strategies: list[str],
+    strategies: list[str] | None,
     date_tolerance_days: str,
     date_offset_days: str,
     title_regex: str,
@@ -937,8 +937,8 @@ def _form_to_body(
     video_limit = video_limit.strip()
     if video_limit and not video_limit.isdigit():
         raise ValueError("Videos to list must be a whole number, or blank for the global setting")
-    date_tolerance_days = _whole_number("Date tolerance", date_tolerance_days, 2)
-    date_offset_days = _whole_number("Date offset", date_offset_days, 0)
+    tolerance = _whole_number("Date tolerance", date_tolerance_days, 2)
+    offset = _whole_number("Date offset", date_offset_days, 0)
     return SubscriptionIn(
         video_limit=int(video_limit) if video_limit else None,
         audio_language=audio_language,
@@ -949,8 +949,8 @@ def _form_to_body(
         sources=sources.splitlines(),
         format=format,
         strategies=strategies or [],
-        date_tolerance_days=date_tolerance_days,
-        date_offset_days=date_offset_days,
+        date_tolerance_days=tolerance,
+        date_offset_days=offset,
         title_regex=title_regex,
         enabled=enabled,
     )
@@ -972,7 +972,7 @@ async def subscribe_submit(
     audio_language: Annotated[str, Form()] = "",
     auto_download: Annotated[str, Form()] = "future",
     title_require: Annotated[str, Form()] = "",
-) -> HTMLResponse:
+) -> Response:
     conn = _sonarr(session)
     if conn is None:
         return RedirectResponse("/series", status_code=302)
@@ -1043,7 +1043,7 @@ def _recent_jobs(session: Session, subscription_id: int) -> list[Job]:
 
 
 @router.get("/subscriptions/{subscription_id}")
-def subscription_page(request: Request, subscription_id: int, session: DbSession) -> HTMLResponse:
+def subscription_page(request: Request, subscription_id: int, session: DbSession) -> Response:
     sub = session.get(Subscription, subscription_id)
     if sub is None:
         return RedirectResponse("/series", status_code=302)
@@ -1108,7 +1108,7 @@ def _preview_response(
     """The response also carries the header's "Last scan" cell out of band: a real scan
     moved it, and a dry run makes the card stop showing the last real scan, so the cell
     has to say its result again. Both are decided in scan_line.html by identity."""
-    sub = session.get(Subscription, report.subscription_id)
+    sub = subscription_or_404(session, report.subscription_id)
     session.refresh(sub)  # the scan wrote through its own session; the stamps must be its
     # "this source may not carry the series" is only a fair reading for a subscription
     # that has never matched anything: one job on record is enough to drop the hint
@@ -1272,7 +1272,7 @@ async def subscription_explain(
 @router.get("/subscriptions/{subscription_id}/episodes")
 async def subscription_episodes(
     request: Request, subscription_id: int, session: DbSession, arr_factory: ArrFactoryDep
-) -> HTMLResponse:
+) -> Response:
     """Sonarr's view of every episode of the series, with the job that covers each."""
     sub = session.get(Subscription, subscription_id)
     if sub is None:
@@ -1288,7 +1288,7 @@ async def subscription_clear_job(
     session: DbSession,
     arr_factory: ArrFactoryDep,
     deps: RunnerDepsDep,
-) -> HTMLResponse:
+) -> Response:
     """The red ✗ on a missing episode whose job is history (the file was deleted in
     Sonarr after the import): delete that job here rather than hunting it in Activity.
     A cancelled or terminally failed job is history too, and clearing it also puts the
@@ -1513,7 +1513,7 @@ async def subscription_edit(
     audio_language: Annotated[str, Form()] = "",
     auto_download: Annotated[str, Form()] = "future",
     title_require: Annotated[str, Form()] = "",
-) -> HTMLResponse:
+) -> Response:
     sub = session.get(Subscription, subscription_id)
     if sub is None:
         return RedirectResponse("/series", status_code=302)
@@ -1605,7 +1605,7 @@ async def _read_form(request: Request) -> dict[str, str]:
 
 
 @router.post("/settings/downloads")
-async def settings_downloads_post(request: Request, session: DbSession) -> HTMLResponse:
+async def settings_downloads_post(request: Request, session: DbSession) -> Response:
     data = await _read_form(request)
     changes = {k: data.get(k, "") for k in DEFAULTS if k in data}
     if data.get("_notify_form"):  # unchecked boxes are simply absent from the POST
@@ -1645,7 +1645,7 @@ def _connection_body(data: dict[str, str]) -> ConnectionIn:
 
 
 @router.post("/settings/notify/test")
-async def settings_notify_test(request: Request, session: DbSession, deps: RunnerDepsDep):
+async def settings_notify_test(session: DbSession, deps: RunnerDepsDep) -> HTMLResponse:
     from outriggarr.api.settings import notify_test
 
     try:
@@ -1701,7 +1701,7 @@ def error_text(exc: BaseException) -> str:
 
 
 @router.post("/settings/connections")
-async def settings_connection_create(request: Request, session: DbSession) -> HTMLResponse:
+async def settings_connection_create(request: Request, session: DbSession) -> Response:
     data = await _read_form(request)
     try:
         created = create_connection(_connection_body(data), session)
@@ -1723,7 +1723,7 @@ async def settings_connection_create(request: Request, session: DbSession) -> HT
 @router.post("/settings/connections/{connection_id}")
 async def settings_connection_update(
     request: Request, connection_id: int, session: DbSession
-) -> HTMLResponse:
+) -> Response:
     data = await _read_form(request)
     conn = session.get(Connection, connection_id)
     if conn is None:  # a stale form: deleted in another tab; the card to show it on is gone

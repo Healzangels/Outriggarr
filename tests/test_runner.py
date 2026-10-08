@@ -680,9 +680,9 @@ async def test_subtitle_sidecar_names_before_import(deps, session_factory, monke
     seen: list[str] = []
     real = runner._import_stage
 
-    async def spy(deps_, session, job, client, target, remote_folder, staged, *rest):
+    async def spy(deps_, job, client, target, remote_folder, staged, *rest):
         seen.extend(sorted(p.name for p in staged.parent.iterdir()))
-        return await real(deps_, session, job, client, target, remote_folder, staged, *rest)
+        return await real(deps_, job, client, target, remote_folder, staged, *rest)
 
     monkeypatch.setattr(runner, "_import_stage", spy)
     await process_job(deps, job_id)

@@ -301,8 +301,8 @@ class CoolOff:
 
 def has_signin_cookie(netscape: str) -> bool:
     """True when a Netscape cookie jar carries YouTube's sign-in cookie."""
-    for line in netscape.splitlines():
-        line = line.removeprefix("#HttpOnly_")
+    for raw in netscape.splitlines():
+        line = raw.removeprefix("#HttpOnly_")
         if not line or line.startswith("#"):
             continue
         parts = line.split("\t")
@@ -418,10 +418,10 @@ class YtDlpSource:
                 },
             )
             docs = (data.get("response") or {}).get("docs") or []
-            for d in docs:
-                if not isinstance(d, dict):
+            for doc in docs:
+                if not isinstance(doc, dict):
                     continue
-                d = {k: (v[0] if isinstance(v, list) and v else v) for k, v in d.items()}
+                d = {k: (v[0] if isinstance(v, list) and v else v) for k, v in doc.items()}
                 if d.get("mediatype") not in ARCHIVE_MEDIATYPES or not d.get("identifier"):
                     continue
                 date = str(d.get("date") or "")[:10].replace("-", "")
@@ -507,6 +507,7 @@ class YtDlpSource:
         was_signed_in = has_signin_cookie(Path(original).read_text(errors="replace"))
         fd, private = tempfile.mkstemp(prefix="outriggarr-cookies-", suffix=".txt")
         os.close(fd)
+        staged: str | None = None  # the half-written copy to remove if the write-back fails
         try:
             shutil.copyfile(original, private)
         except OSError:
@@ -545,8 +546,9 @@ class YtDlpSource:
                     os.replace(staged, original)  # atomic: a concurrent run sees old or new
             except OSError as exc:
                 log.warning("could not write rotated cookies back to %s: %s", original, exc)
-                with contextlib.suppress(OSError, NameError):
-                    os.unlink(staged)  # a half-written copy beside the export helps nobody
+                if staged is not None:
+                    with contextlib.suppress(OSError):
+                        os.unlink(staged)  # a half-written copy beside the export helps nobody
             finally:
                 with contextlib.suppress(OSError):
                     os.unlink(private)
@@ -618,20 +620,18 @@ class YtDlpSource:
 
     def tag_audio_language(self, path: Path, language: str) -> None:
         tmp = path.with_name(f"{path.stem}.lang{path.suffix}")
-        try:
-            proc = subprocess.run(
-                ffmpeg_language_command(path, tmp, language),
-                capture_output=True,
-                text=True,
-                timeout=REMUX_TIMEOUT_SECONDS,
+        proc = _remux(ffmpeg_language_command(path, tmp, language), tmp)
+        if proc.returncode != 0 and CONTAINER_REFUSED.search(proc.stderr):
+            # a 2008-era archive.org mp4 carries a "subtitle" track with no codec (a
+            # chapter or text track) that an mp4 output refuses to write, and five files
+            # went into the library untagged for it. No player showed that track; the
+            # language tag is what the remux is for, so do it again without subtitles.
+            log.warning(
+                "%s: the container refuses a stream (%s); remuxing without subtitle streams",
+                path.name,
+                proc.stderr.strip().splitlines()[0],
             )
-        except OSError as exc:  # ffmpeg missing
-            raise SourceError(f"ffmpeg could not be run: {exc}") from exc
-        except subprocess.TimeoutExpired as exc:  # a stream copy never takes this long
-            tmp.unlink(missing_ok=True)
-            raise SourceError(
-                f"ffmpeg gave up after {int(REMUX_TIMEOUT_SECONDS // 60)} min of remuxing"
-            ) from exc
+            proc = _remux(ffmpeg_language_command(path, tmp, language, subtitles=False), tmp)
         if proc.returncode != 0:
             tmp.unlink(missing_ok=True)
             raise SourceError(f"ffmpeg exited {proc.returncode}: {proc.stderr.strip()}")
@@ -853,11 +853,32 @@ def subtitle_sidecars(dest_dir: Path, video_id: str) -> tuple[Path, ...]:
     return tuple(sorted(p for p in dest_dir.glob(f"{video_id}.*.srt") if p.is_file()))
 
 
-def ffmpeg_language_command(src: Path, dst: Path, language: str) -> list[str]:
-    """Remux `src` to `dst` copying the video, every audio stream and any subtitles,
-    tagging all audio streams. Not `-map 0`: 2008-era archive.org mp4s carry RTP hint
-    tracks (data) and an mjpeg cover track, which an mp4 output refuses to write, and
-    the file then went into the library untagged."""
+# ffmpeg's wording when an output container cannot hold one of the mapped streams
+CONTAINER_REFUSED = re.compile(
+    r"Could not find tag for codec|codec not currently supported in container", re.IGNORECASE
+)
+
+
+def _remux(cmd: list[str], tmp: Path) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=REMUX_TIMEOUT_SECONDS)
+    except OSError as exc:  # ffmpeg missing
+        raise SourceError(f"ffmpeg could not be run: {exc}") from exc
+    except subprocess.TimeoutExpired as exc:  # a stream copy never takes this long
+        tmp.unlink(missing_ok=True)
+        raise SourceError(
+            f"ffmpeg gave up after {int(REMUX_TIMEOUT_SECONDS // 60)} min of remuxing"
+        ) from exc
+
+
+def ffmpeg_language_command(
+    src: Path, dst: Path, language: str, *, subtitles: bool = True
+) -> list[str]:
+    """Remux `src` to `dst` copying the video, every audio stream and (unless the
+    container refused them) any subtitles, tagging all audio streams. Not `-map 0`:
+    2008-era archive.org mp4s carry RTP hint tracks (data) and an mjpeg cover track,
+    which an mp4 output refuses to write, and the file then went into the library
+    untagged."""
     return [
         "ffmpeg",
         "-nostdin",
@@ -870,8 +891,7 @@ def ffmpeg_language_command(src: Path, dst: Path, language: str) -> list[str]:
         "0:v:0",
         "-map",
         "0:a",
-        "-map",
-        "0:s?",
+        *(["-map", "0:s?"] if subtitles else ["-sn"]),
         "-dn",
         "-c",
         "copy",

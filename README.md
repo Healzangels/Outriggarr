@@ -36,7 +36,7 @@ services:
       OUTRIGGARR_STAGING_DIR: /data/outriggarr
     stop_grace_period: 60s            # lets an in-flight download abort cleanly (Docker's default 10 s kills it)
     volumes:
-      - ./config:/config             # SQLite DB, cookies file, deno cache
+      - ./config:/config             # SQLite DB, cookies file, deno cache, rotating log
       - /path/to/data:/data          # the same data share Sonarr/Radarr mount
     ports:
       - "8080:8080"

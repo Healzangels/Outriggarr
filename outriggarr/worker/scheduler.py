@@ -616,7 +616,7 @@ def _create_jobs(
     result: MatchResult,
     report: ScanReport,
     *,
-    allowed: Callable[[Episode], bool] = lambda ep: True,
+    allowed: Callable[[Episode], bool] = lambda _ep: True,
 ) -> None:
     for entry, m in zip(report.matches, result.matches, strict=True):
         ep = m.episode

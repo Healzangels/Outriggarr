@@ -12,6 +12,8 @@ import logging
 from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 import httpx
 from fastapi import FastAPI
@@ -39,6 +41,33 @@ from outriggarr.worker.runner import RunnerDeps, acquire_instance_lock, run_work
 from outriggarr.worker.scheduler import run_scheduler
 
 log = logging.getLogger(__name__)
+LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+LOG_FILE_BYTES = 2_000_000  # five files of this: a month of a busy install, ten megabytes at most
+LOG_FILE_KEEP = 4
+
+
+def attach_file_log(config_dir: Path) -> Path | None:
+    """Keep the log under the config dir as well as on stdout. A container's stdout log
+    dies with the container, so every redeploy wiped the week's warnings before anyone
+    read them (an audit found four hours of log where twelve days were asked for).
+    Rotating, so it never grows past LOG_FILE_KEEP + 1 files of LOG_FILE_BYTES; a dir
+    that cannot be written leaves stdout as the only log, with a warning, not a crash."""
+    root = logging.getLogger()
+    for old in list(root.handlers):  # one app per process; tests make several
+        if old.get_name() == "outriggarr-file":
+            root.removeHandler(old)
+            old.close()
+    path = config_dir / "outriggarr.log"
+    try:
+        config_dir.mkdir(parents=True, exist_ok=True)
+        handler = RotatingFileHandler(path, maxBytes=LOG_FILE_BYTES, backupCount=LOG_FILE_KEEP)
+    except OSError as exc:
+        log.warning("not keeping a log file under %s: %s", config_dir, exc)
+        return None
+    handler.set_name("outriggarr-file")
+    handler.setFormatter(logging.Formatter(LOG_FORMAT))
+    root.addHandler(handler)
+    return path
 
 
 def _log_task_death(name: str, task: asyncio.Task) -> None:
@@ -58,12 +87,11 @@ def create_app(
 ) -> FastAPI:
     settings = settings or Settings.from_env()
     source_given = source
-    logging.basicConfig(
-        level=settings.log_level, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
-    )
+    logging.basicConfig(level=settings.log_level, format=LOG_FORMAT)
     # httpx logs every 200 OK at INFO: two thirds of a day's log said Sonarr answered.
     # Failures still reach the job and the scan verbatim; the app logs its own listings.
     logging.getLogger("httpx").setLevel(logging.WARNING)
+    attach_file_log(settings.config_dir)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:

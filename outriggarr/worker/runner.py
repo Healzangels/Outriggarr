@@ -455,7 +455,7 @@ async def process_job(
             else:
                 _enter_importing(session, job)
                 imported = await _import_stage(
-                    deps, session, job, client, target, remote_folder, staged, should_abort
+                    deps, job, client, target, remote_folder, staged, should_abort
                 )
         except _Cancelled:
             shutil.rmtree(dest, ignore_errors=True)
@@ -741,7 +741,6 @@ def _staging_name(target: Target, info: TargetInfo, quality: str, ext: str) -> s
 
 async def _import_stage(
     deps: RunnerDeps,
-    session: Session,
     job: Job,
     client: ArrClient,
     target: Target,

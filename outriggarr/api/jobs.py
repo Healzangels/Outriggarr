@@ -279,7 +279,7 @@ def delete_job(session: Session, job_id: int, staging_dir: Path | None = None) -
         errors: list[str] = []
         shutil.rmtree(
             folder,
-            onexc=lambda fn, path, exc: errors.append(f"{path}: {exc}"),
+            onexc=lambda _fn, path, exc: errors.append(f"{path}: {exc}"),
         )
         if folder.exists():  # the row stays: a folder nothing points at would never be swept
             raise HTTPException(

@@ -1515,3 +1515,45 @@ def test_js_runtime_reports_only_what_yt_dlp_will_use(monkeypatch) -> None:
     assert js_runtime() == "deno"
     monkeypatch.setattr(sh, "which", lambda name: None)
     assert js_runtime() is None
+
+
+def test_tagging_retries_without_subtitles_when_the_container_refuses_a_stream(
+    tmp_path, monkeypatch
+) -> None:
+    """Five archive.org mp4s imported untagged: their "subtitle" track has no codec and
+    an mp4 output refuses it. The exact stderr from the library; the second attempt
+    drops subtitle streams and the tag lands."""
+    import subprocess
+    from pathlib import Path
+
+    from outriggarr.source import SourceError, YtDlpSource
+
+    refused = (
+        "[mp4 @ 0x565326cfdd00] Could not find tag for codec none in stream #2, codec not "
+        "currently supported in container\n[out#0/mp4 @ 0x565326f04600] Could not write header "
+        "(incorrect codec parameters ?): Invalid argument"
+    )
+    src = tmp_path / "Scam School - S2009E48 - The Watch Steal.mp4"
+    src.write_bytes(b"orig")
+    calls: list[list[str]] = []
+
+    def run(cmd, capture_output, text, timeout):
+        calls.append(cmd)
+        if "0:s?" in cmd:
+            return subprocess.CompletedProcess(cmd, 234, "", refused)
+        Path(cmd[-1]).write_bytes(b"tagged")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    YtDlpSource().tag_audio_language(src, "eng")
+    assert src.read_bytes() == b"tagged" and len(calls) == 2
+    assert "-sn" in calls[1] and "0:s?" not in calls[1], "the retry maps no subtitle stream"
+    assert calls[1][calls[1].index("-metadata:s:a") + 1] == "language=eng"
+
+    # any other failure is final, with ffmpeg's words
+    def other(cmd, capture_output, text, timeout):
+        return subprocess.CompletedProcess(cmd, 1, "", "Invalid data found when processing input")
+
+    monkeypatch.setattr(subprocess, "run", other)
+    with pytest.raises(SourceError, match="Invalid data found"):
+        YtDlpSource().tag_audio_language(src, "eng")

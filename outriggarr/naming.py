@@ -128,7 +128,7 @@ def compact_codes(codes: list[str]) -> str:
     out: list[str] = []
     i = 0
     while i < len(parsed):
-        season, number, code = parsed[i]
+        season, _number, code = parsed[i]
         j = i
         while (
             season >= 0

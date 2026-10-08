@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -31,7 +32,7 @@ class Settings:
     pot_server_home: Path | None = Path("/opt/bgutil/server")
 
     @classmethod
-    def from_env(cls, env: dict[str, str] | None = None) -> Settings:
+    def from_env(cls, env: Mapping[str, str] | None = None) -> Settings:
         env = os.environ if env is None else env
         config_dir = Path(env.get("OUTRIGGARR_CONFIG_DIR", "/config"))
         staging_dir = Path(env.get("OUTRIGGARR_STAGING_DIR", "/staging"))
