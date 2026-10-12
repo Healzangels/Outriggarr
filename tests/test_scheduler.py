@@ -1135,9 +1135,10 @@ async def test_a_stuck_episode_is_announced_once_when_it_becomes_stuck(
     assert report.unmatched_scans == {"S30E06": 3}
     assert [t for t, _ in deps.notifier.sent] == ["Outriggarr: still unmatched"]
     assert "Show: S30E06 unmatched after 3 scans" in deps.notifier.sent[0][1]
+    await scan_subscription(deps, sub_id, dry_run=True)  # Refresh preview still sees 3 scans
     await scan_subscription(deps, sub_id)
     await scan_subscription(deps, sub_id)
-    assert len(deps.notifier.sent) == 1, "announced once, not every interval after"
+    assert len(deps.notifier.sent) == 1, "announced once, not by a dry run nor every interval"
     with session_factory() as s:
         set_setting(s, "notify_on_stuck", "0")
         s.commit()
