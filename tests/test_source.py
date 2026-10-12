@@ -217,7 +217,10 @@ def test_download_result_collects_sidecars(tmp_path) -> None:
     }
     r = _result_from_info(info, tmp_path)
     assert r.subtitles == (tmp_path / "v1.en.srt",)
-    assert _result_from_info(info).subtitles == ()
+    assert r.thumbnail is None, "no jpg was written: none to stage"
+    (tmp_path / "v1.jpg").write_bytes(b"\xff\xd8")
+    assert _result_from_info(info, tmp_path).thumbnail == tmp_path / "v1.jpg"
+    assert _result_from_info(info).subtitles == () and _result_from_info(info).thumbnail is None
 
 
 def test_list_recent_caps_channels_but_lists_playlists_whole(monkeypatch) -> None:
@@ -1600,3 +1603,49 @@ def test_search_is_one_flat_ytsearch_with_the_episodes_left_out(monkeypatch) -> 
     ], "a premiere and a Short are not episodes; the channel comes from channel or uploader"
     YtDlpSource().search("x", 99)
     assert seen[1][0].startswith("ytsearch20:"), "one search page at most"
+
+
+def test_a_thumbnail_is_asked_for_only_when_wanted_and_converted_before_the_download(
+    monkeypatch, tmp_path
+) -> None:
+    import yt_dlp
+
+    from outriggarr.source import YtDlpSource, thumbnail_opts
+
+    seen: list[dict] = []
+
+    class StubYDL:
+        def __init__(self, opts):
+            seen.append(opts)
+            self.opts = opts
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def extract_info(self, url, download=False):
+            dest = Path(self.opts["outtmpl"]).parent
+            dest.mkdir(parents=True, exist_ok=True)
+            path = dest / "v1.mkv"
+            path.write_bytes(b"v")
+            if self.opts.get("writethumbnail"):
+                (dest / "v1.jpg").write_bytes(b"\xff\xd8")  # what the convertor leaves
+            return {"id": "v1", "title": "t", "requested_downloads": [{"filepath": str(path)}]}
+
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", StubYDL)
+    kw = dict(
+        fmt="best", merge_container="mkv", progress=lambda p: None, should_abort=lambda: False
+    )
+    plain = YtDlpSource().download("https://youtu.be/v1", tmp_path / "a", **kw)
+    assert "writethumbnail" not in seen[0] and plain.thumbnail is None, "off unless asked"
+    with_thumb = YtDlpSource().download("https://youtu.be/v1", tmp_path / "b", thumbnail=True, **kw)
+    assert seen[1]["writethumbnail"] is True and with_thumb.thumbnail == tmp_path / "b" / "v1.jpg"
+    assert seen[1]["postprocessors"] == thumbnail_opts()["postprocessors"]
+    (convertor,) = thumbnail_opts()["postprocessors"]
+    assert convertor == {
+        "key": "FFmpegThumbnailsConvertor",
+        "format": "jpg",
+        "when": "before_dl",
+    }, "YouTube serves webp; the convertor must run before the download, as the CLI's does"

@@ -3911,3 +3911,10 @@ def test_an_unmatched_episode_can_be_searched_for_and_pinned_from_a_hit(client: 
     r = client.get(f"/subscriptions/{sub_id}/search?episode_id=12").text
     assert 'class="notice bad">ERROR: [youtube:search] x: Unable to download API page' in r
     assert client.get(f"/subscriptions/{sub_id}/search?episode_id=999").status_code == 404
+
+
+def test_the_downloads_settings_offer_the_thumbnail_toggle(client: TestClient) -> None:
+    page = client.get("/settings").text
+    assert 'name="thumbnails"' in page and "episode still" in page
+    r = client.post("/settings/downloads", data={"thumbnails": "1"})
+    assert r.status_code == 200 and client.get("/api/settings").json()["thumbnails"] == "1"

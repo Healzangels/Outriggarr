@@ -320,6 +320,7 @@ class FakeVideoSource:
         should_abort,
         subtitle_langs=(),
         auto_subtitles=False,
+        thumbnail=False,
     ):
         self.calls.append(
             {
@@ -329,6 +330,7 @@ class FakeVideoSource:
                 "container": merge_container,
                 "subtitle_langs": tuple(subtitle_langs),
                 "auto_subtitles": auto_subtitles,
+                "thumbnail": thumbnail,
             }
         )
         if should_abort():
@@ -347,6 +349,10 @@ class FakeVideoSource:
                 sub = dest_dir / f"vid123.{lang}.srt"
                 sub.write_text("1\n00:00:00,000 --> 00:00:01,000\nhi\n")
                 subs.append(sub)
+        thumb = None
+        if thumbnail:
+            thumb = dest_dir / "vid123.jpg"
+            thumb.write_bytes(b"\xff\xd8jpg")
         progress(100.0)
         return DownloadResult(
             path=path,
@@ -355,6 +361,7 @@ class FakeVideoSource:
             title=self.title,
             video_id="vid123",
             subtitles=tuple(subs),
+            thumbnail=thumb,
             audio_language=self.audio_language,
         )
 

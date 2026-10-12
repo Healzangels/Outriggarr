@@ -122,6 +122,9 @@ def test_subtitles_langs_invalid(value: str) -> None:
     with pytest.raises(ValueError):
         validate_setting("subtitles_auto", "yes")
     assert validate_setting("subtitles_auto", "1") == "1"
+    with pytest.raises(ValueError):
+        validate_setting("thumbnails", "yes")
+    assert validate_setting("thumbnails", "1") == "1" and DEFAULTS["thumbnails"] == "0"
 
 
 def test_apprise_url_validation() -> None:

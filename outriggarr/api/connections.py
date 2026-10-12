@@ -174,13 +174,20 @@ async def test_connection(
             ok=False, app_name=st.app_name, version=st.version, error=str(exc)
         )
     warning = None
-    if visible and get_setting(session, "subtitles_langs"):
+    wanted = []
+    if get_setting(session, "subtitles_langs"):
+        wanted.append(("srt", "subtitle sidecars"))
+    if get_setting(session, "thumbnails") == "1":
+        wanted.append(("jpg", "thumbnail sidecars"))
+    if visible and wanted:
         try:
             extras = await client.extra_files_config()
-            if not extras.imports("srt"):
+            missing = [(ext, what) for ext, what in wanted if not extras.imports(ext)]
+            if missing:
                 warning = (
-                    f"{st.app_name} will not import subtitle sidecars: enable "
-                    "Settings → Media Management → Import Extra Files with 'srt'"
+                    f"{st.app_name} will not import {' or '.join(w for _, w in missing)}: enable "
+                    "Settings → Media Management → Import Extra Files with "
+                    + ", ".join(repr(ext) for ext, _ in missing)
                 )
         except ArrError as exc:
             warning = f"could not read {st.app_name}'s media management settings: {exc}"

@@ -1624,3 +1624,34 @@ async def test_a_failed_second_import_of_a_file_the_first_moved_is_done(
     job = get_job(deps, job_id)
     assert job.status is JobStatus.done and job.error is None, "the target has its file"
     assert not (deps.staging_dir / str(job_id)).exists()
+
+
+async def test_thumbnail_sidecar_is_named_like_the_video(
+    deps, session_factory, monkeypatch
+) -> None:
+    """With the toggle on, the thumbnail is staged as <video name>.jpg so the *arr takes it
+    along as an extra file and Plex shows it as the episode still."""
+    import outriggarr.worker.runner as runner
+
+    conn_id = add_connection(session_factory)
+    job_id = add_job(session_factory, conn_id)
+    fake_for(deps, conn_id)
+    with session_factory() as s:
+        set_setting(s, "thumbnails", "1")
+        s.commit()
+    seen: list[str] = []
+    real = runner._import_stage
+
+    async def spy(deps_, job, client, target, remote_folder, staged, *rest):
+        seen.extend(sorted(p.name for p in staged.parent.iterdir()))
+        return await real(deps_, job, client, target, remote_folder, staged, *rest)
+
+    monkeypatch.setattr(runner, "_import_stage", spy)
+    await process_job(deps, job_id)
+    assert deps.source.calls[0]["thumbnail"] is True
+    assert seen == [
+        "Show- Name - S02E03 - The-Title [WEBDL-1080p].en.srt",  # subtitles default to en
+        "Show- Name - S02E03 - The-Title [WEBDL-1080p].jpg",
+        "Show- Name - S02E03 - The-Title [WEBDL-1080p].mkv",
+    ]
+    assert get_job(deps, job_id).status is JobStatus.done

@@ -150,6 +150,14 @@ def test_test_warns_when_arr_will_not_import_srt(client: TestClient, arr: FakeAr
     assert body["ok"] is True and "Import Extra Files" in body["warning"]
     fake.extra_files = ExtraFilesConfig(False, ("srt",))
     assert "Import Extra Files" in client.post(f"/api/connections/{conn_id}/test").json()["warning"]
+    # thumbnails on: the jpg has to be importable too, and the warning names what is missing
+    client.put("/api/settings", json={"thumbnails": "1"})
+    fake.extra_files = ExtraFilesConfig(True, ("srt",))
+    warning = client.post(f"/api/connections/{conn_id}/test").json()["warning"]
+    assert "thumbnail sidecars" in warning and "'jpg'" in warning and "subtitle" not in warning
+    fake.extra_files = ExtraFilesConfig(True, ("srt", "jpg"))
+    assert client.post(f"/api/connections/{conn_id}/test").json()["warning"] is None
+    client.put("/api/settings", json={"thumbnails": "0"})
     # subtitles off → no check at all
     client.put("/api/settings", json={"subtitles_langs": ""})
     body = client.post(f"/api/connections/{conn_id}/test").json()

@@ -76,6 +76,10 @@ DEFAULTS: dict[str, str] = {
     # long-running install's Activity and database stay small. "0" keeps every job.
     "job_retention_days": "0",
     "subtitles_auto": "0",  # "1" also accepts auto-generated captions (machine transcripts)
+    # "1" stages the video's thumbnail as <name>.jpg beside it: the *arr imports it as an
+    # extra file (jpg in Import Extra Files) and Plex shows it as the episode still —
+    # web series have no TVDB stills, so a frame grab stood in for every episode
+    "thumbnails": "0",
     # Apprise URLs (one per line) and which of Outriggarr's own events to announce.
     "apprise_urls": "",
     "notify_on_failed": "1",  # a job failed for good (no more retries) or was rejected
@@ -266,7 +270,13 @@ def validate_setting(key: str, value: str) -> str:
         from outriggarr.notify import validate_apprise_urls
 
         return "\n".join(validate_apprise_urls(value))
-    if key in ("notify_on_failed", "notify_on_scan_error", "notify_on_done", "subtitles_auto"):
+    if key in (
+        "notify_on_failed",
+        "notify_on_scan_error",
+        "notify_on_done",
+        "subtitles_auto",
+        "thumbnails",
+    ):
         if value not in ("0", "1"):
             raise ValueError(f"{key} must be 0 or 1")
         return value

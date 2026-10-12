@@ -634,6 +634,7 @@ async def _download_stage(
     container = get_setting(session, "merge_container")
     sub_langs = tuple(x for x in get_setting(session, "subtitles_langs").split(",") if x)
     auto_subs = get_setting(session, "subtitles_auto") == "1"
+    thumbs = get_setting(session, "thumbnails") == "1"
     guard = _StallGuard(deps.stall_idle_seconds, deps.stall_cap_seconds, deps.clock)
     last_write = 0.0
 
@@ -668,6 +669,7 @@ async def _download_stage(
             should_abort=abort_or_stalled,
             subtitle_langs=sub_langs,
             auto_subtitles=auto_subs,
+            thumbnail=thumbs,
         )
         deps.cooloff.clear(since=started)  # the source is serving us again
         job.rate_limit_hits = 0
@@ -679,6 +681,8 @@ async def _download_stage(
         for sub in result.subtitles:
             suffix = sub.name[len(result.video_id) :]  # ".en.srt"
             sub.rename(dest / f"{staged.stem}{suffix}")
+        if result.thumbnail is not None:  # <id>.jpg → <staged stem>.jpg: Plex's episode still
+            result.thumbnail.rename(dest / f"{staged.stem}.jpg")
         # the file is complete and named: say so NOW, before the (long, uninterruptible)
         # audio-tag remux, so a hard stop in that window resumes instead of re-downloading
         job.staged_path = str(staged)

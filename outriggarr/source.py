@@ -57,6 +57,7 @@ class DownloadResult:
     title: str
     video_id: str
     subtitles: tuple[Path, ...] = ()  # .srt sidecars written next to `path`
+    thumbnail: Path | None = None  # <id>.jpg next to `path`, when asked for and the source had one
     audio_language: str | None = None  # ISO 639-2, as the source declared it; None = unknown
     age_limit: int = 0  # YouTube's age gate: 18 means the embedded client served this
 
@@ -100,10 +101,11 @@ class VideoSource(Protocol):
         should_abort: AbortCheck,
         subtitle_langs: tuple[str, ...] = (),
         auto_subtitles: bool = False,
+        thumbnail: bool = False,
     ) -> DownloadResult:
         """Blocking. Downloads `url` into `dest_dir` (created if needed) and returns the
-        final merged file plus any requested subtitles as .srt sidecars.
-        Raises SourceError / DownloadAborted."""
+        final merged file plus any requested subtitles as .srt sidecars and, when asked,
+        the thumbnail as a .jpg beside it. Raises SourceError / DownloadAborted."""
         ...
 
 
@@ -668,6 +670,7 @@ class YtDlpSource:
         should_abort: AbortCheck,
         subtitle_langs: tuple[str, ...] = (),
         auto_subtitles: bool = False,
+        thumbnail: bool = False,
     ) -> DownloadResult:
         import yt_dlp
         from yt_dlp.utils import DownloadCancelled, DownloadError
@@ -733,6 +736,8 @@ class YtDlpSource:
             "noprogress": True,
             "progress_hooks": [hook],
         }
+        if thumbnail:
+            opts.update(thumbnail_opts())
         used = {"cookies": False}
 
         def attempt(with_cookies: bool) -> DownloadResult:
@@ -847,6 +852,24 @@ def check_ytdlp_options(opts: dict[str, Any]) -> None:
         yt_dlp.YoutubeDL({**opts, "quiet": True, "no_warnings": True})
     except Exception as exc:
         raise ValueError(f"yt-dlp rejected it: {exc}") from None
+
+
+def thumbnail_opts() -> dict[str, Any]:
+    """yt-dlp options that write the video's thumbnail beside it as <id>.jpg: YouTube
+    serves webp, so the convertor runs before the download like the CLI's own
+    --convert-thumbnails does."""
+    return {
+        "writethumbnail": True,
+        "postprocessors": [
+            {"key": "FFmpegThumbnailsConvertor", "format": "jpg", "when": "before_dl"}
+        ],
+    }
+
+
+def thumbnail_sidecar(dest_dir: Path, video_id: str) -> Path | None:
+    """The <id>.jpg yt-dlp wrote for this video, if any."""
+    candidate = dest_dir / f"{video_id}.jpg"
+    return candidate if candidate.is_file() else None
 
 
 def subtitle_opts(langs: tuple[str, ...], auto: bool) -> dict[str, Any]:
@@ -1078,6 +1101,7 @@ def _result_from_info(info: dict[str, Any], dest_dir: Path | None = None) -> Dow
         title=str(info.get("title") or ""),
         video_id=video_id,
         subtitles=subtitle_sidecars(dest_dir, video_id) if dest_dir and video_id else (),
+        thumbnail=thumbnail_sidecar(dest_dir, video_id) if dest_dir and video_id else None,
         audio_language=detected_audio_language(info),
         age_limit=int(info.get("age_limit") or 0),
     )
