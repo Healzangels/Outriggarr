@@ -70,6 +70,7 @@ class VideoOut(BaseModel):
     duration: int | None
     playlist_index: int | None
     upload_date: str | None
+    channel: str | None = None
 
 
 class SeriesOut(BaseModel):

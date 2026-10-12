@@ -414,3 +414,41 @@ def test_a_failed_scan_is_a_502_not_a_200(client, monkeypatch) -> None:
     monkeypatch.setattr(api, "run_scan", broken)
     r = client.get("/api/subscriptions/1/preview")
     assert r.status_code == 502 and r.json()["detail"]["error"] == "listing failed"
+
+
+def test_search_is_on_demand_and_under_the_rate_limit_pause(client, arr, source) -> None:
+    from outriggarr.source import SourceError
+
+    conn_id = seed(client, arr, source)
+    sub_id = client.post("/api/subscriptions", json=body(conn_id)).json()["id"]
+    source.search_hits = [
+        VideoRef("s1", "Hit One", "https://y/s1", 1500, None, None, channel="Vice")
+    ]
+    r = client.get(f"/api/subscriptions/{sub_id}/search", params={"q": "  Show   Two  "})
+    assert r.status_code == 200, r.text
+    assert r.json() == [
+        {
+            "id": "s1",
+            "title": "Hit One",
+            "url": "https://y/s1",
+            "duration": 1500,
+            "playlist_index": None,
+            "upload_date": None,
+            "channel": "Vice",
+        }
+    ]
+    assert source.searched == [("Show Two", 8)], "whitespace tidied; one search page"
+    assert client.get(f"/api/subscriptions/{sub_id}/search", params={"q": "  "}).status_code == 422
+    assert client.get("/api/subscriptions/999/search", params={"q": "x"}).status_code == 404
+    source.search_error = SourceError("ERROR: [youtube:search] x: Unable to download API page")
+    r = client.get(f"/api/subscriptions/{sub_id}/search", params={"q": "x"})
+    assert r.status_code == 502 and r.json()["detail"].endswith("Unable to download API page")
+    source.search_error = SourceError("ERROR: HTTP Error 429: Too Many Requests")
+    r = client.get(f"/api/subscriptions/{sub_id}/search", params={"q": "x"})
+    assert r.status_code == 502, "the search that hit the wall reports it"
+    source.search_error = None
+    r = client.get(f"/api/subscriptions/{sub_id}/search", params={"q": "x"})
+    assert r.status_code == 503 and "rate-limited" in r.json()["detail"], (
+        "…and every search after it waits with the rest of the fetches"
+    )
+    assert len(source.searched) == 3, "the paused search never reached the source"

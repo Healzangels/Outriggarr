@@ -3858,3 +3858,56 @@ def test_a_job_link_lands_on_its_row_however_old_the_job(client: TestClient, mon
     assert client.get("/activity/rows?view=all").text.count('<tr id="job-') == 2
     for url in ("/matches?view=all", f"/subscriptions/{sub_id}/recent"):
         assert f'href="/activity?job={oldest}#job-{oldest}"' in client.get(url).text, url
+
+
+def test_an_unmatched_episode_can_be_searched_for_and_pinned_from_a_hit(client: TestClient) -> None:
+    from outriggarr.source import SourceError, VideoRef
+
+    _seed_series(client)
+    source = client.app.state.source
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={"connection_id": 1, "series_id": 5, "sources": ["https://www.youtube.com/@hotones"]},
+    ).json()["id"]
+    prev = client.get(f"/subscriptions/{sub_id}/preview").text
+    assert f'hx-get="/subscriptions/{sub_id}/search?episode_id=12"' in prev, "S30E07 is unmatched"
+    assert f'hx-get="/subscriptions/{sub_id}/search?episode_id=11"' not in prev, "S30E06 matched"
+    source.search_hits = [
+        VideoRef(
+            "s1",
+            "Seven Spicy Wings | Hot Ones",
+            "https://y/s1",
+            1500,
+            None,
+            None,
+            channel="First We Feast",
+        ),
+    ]
+    r = client.get(f"/subscriptions/{sub_id}/search?episode_id=12")
+    assert r.status_code == 200, r.text
+    assert "Searched YouTube for “Hot Ones Seven Spicy Wings”" in r.text
+    assert source.searched == [("Hot Ones Seven Spicy Wings", 8)]
+    assert "First We Feast · 25:00" in r.text and 'href="https://y/s1"' in r.text
+    assert (
+        '<input type="hidden" name="season" value="30">'
+        '<input type="hidden" name="episode" value="7">'
+        '<input type="hidden" name="video_url" value="https://y/s1">'
+    ) in r.text, "each hit pins by URL, like a pasted one"
+    source.infos["https://y/s1"] = source.search_hits[0]
+    pinned = client.post(
+        f"/subscriptions/{sub_id}/overrides",
+        data={"season": "30", "episode": "7", "video_url": "https://y/s1"},
+    ).text
+    assert "Pinned Seven Spicy Wings | Hot Ones to S30E07 (from URL)." in pinned
+    assert client.get(f"/subscriptions/{sub_id}/search?episode_id=12").status_code == 404, (
+        "pinned, so no longer unmatched: nothing to search for"
+    )
+    client.delete(f"/api/subscriptions/{sub_id}/overrides/s1")
+    client.post(f"/api/subscriptions/{sub_id}/scan")
+    source.search_hits = []
+    r = client.get(f"/subscriptions/{sub_id}/search?episode_id=12").text
+    assert "nothing found" in r and "search_query=Hot%20Ones%20Seven%20Spicy%20Wings" in r
+    source.search_error = SourceError("ERROR: [youtube:search] x: Unable to download API page")
+    r = client.get(f"/subscriptions/{sub_id}/search?episode_id=12").text
+    assert 'class="notice bad">ERROR: [youtube:search] x: Unable to download API page' in r
+    assert client.get(f"/subscriptions/{sub_id}/search?episode_id=999").status_code == 404

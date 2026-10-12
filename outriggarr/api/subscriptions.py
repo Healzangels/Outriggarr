@@ -12,13 +12,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from outriggarr.api.deps import ArrFactoryDep, DbSession, RunnerDepsDep, SourceDep
-from outriggarr.api.library import library_cache
+from outriggarr.api.library import VideoOut, library_cache
 from outriggarr.arr import ArrFactory
 from outriggarr.arr.base import ArrError
 from outriggarr.db.models import Connection, ConnectionKind, Override, Subscription
 from outriggarr.matcher import OPTIONAL_STRATEGIES, compile_title_regex
 from outriggarr.settings import MAX_VIDEO_LIMIT, get_setting
-from outriggarr.source import SourceError, VideoSource
+from outriggarr.source import SourceError, VideoSource, is_rate_limited
 from outriggarr.worker.scheduler import (
     AUTO_DOWNLOAD,
     ScanReport,
@@ -442,6 +442,38 @@ def _report_or_502(report) -> dict:
     if report.error:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail=report.as_dict())
     return report.as_dict()
+
+
+SEARCH_LIMIT = 8  # one search page; enough to find an upload, few enough to read
+
+
+async def search_videos(deps, query: str, limit: int = SEARCH_LIMIT) -> list[VideoOut]:
+    """One YouTube search, on demand, under the same rate-limit pause as every other
+    fetch: the way forward for an episode that is not on the channel at all."""
+    query = " ".join(query.split())
+    if not query:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "q must not be blank")
+    if deps.cooloff.active():
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            f"the source rate-limited us; fetches resume in {int(deps.cooloff.remaining())} s",
+        )
+    try:
+        videos = await asyncio.to_thread(deps.source.search, query, limit)
+    except SourceError as exc:
+        if is_rate_limited(str(exc)):
+            deps.cooloff.hit(str(exc))  # the wall is everyone's, not this search's
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+    return [VideoOut(**v.__dict__) for v in videos]
+
+
+@router.get("/{subscription_id}/search", response_model=list[VideoOut])
+async def search(
+    subscription_id: int, q: str, session: DbSession, deps: RunnerDepsDep
+) -> list[VideoOut]:
+    """A flat YouTube search for `q` (the subscription only has to exist)."""
+    subscription_or_404(session, subscription_id)
+    return await search_videos(deps, q)
 
 
 @router.post("/{subscription_id}/scan")

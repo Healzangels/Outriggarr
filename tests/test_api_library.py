@@ -32,6 +32,7 @@ def test_resolve_returns_videos(client: TestClient, source: FakeVideoSource) -> 
             "duration": 10,
             "playlist_index": 1,
             "upload_date": "20240101",
+            "channel": None,
         }
     ]
     assert source.resolved == ["https://x/playlist"]

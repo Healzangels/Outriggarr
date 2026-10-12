@@ -1557,3 +1557,46 @@ def test_tagging_retries_without_subtitles_when_the_container_refuses_a_stream(
     monkeypatch.setattr(subprocess, "run", other)
     with pytest.raises(SourceError, match="Invalid data found"):
         YtDlpSource().tag_audio_language(src, "eng")
+
+
+def test_search_is_one_flat_ytsearch_with_the_episodes_left_out(monkeypatch) -> None:
+    import yt_dlp
+
+    from outriggarr.source import YtDlpSource
+
+    seen: list[tuple[str, dict]] = []
+
+    class StubYDL:
+        def __init__(self, opts):
+            self.opts = opts
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def extract_info(self, url, download=False):
+            seen.append((url, self.opts))
+            return {
+                "_type": "playlist",
+                "id": url,
+                "entries": [
+                    {"id": "a", "title": "All American Food", "channel": "Vice", "duration": 1500},
+                    {"id": "b", "title": "Premiere", "uploader": "S", "live_status": "is_upcoming"},
+                    {"id": "c", "title": "A Short", "url": "https://www.youtube.com/shorts/c"},
+                    {"id": "d", "title": "Plain", "uploader": "Up"},
+                ],
+            }
+
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", StubYDL)
+    hits = YtDlpSource().search("F*ck, That's Delicious All American Food", 8)
+    url, opts = seen[0]
+    assert url == "ytsearch8:F*ck, That's Delicious All American Food"
+    assert opts["extract_flat"] == "in_playlist" and opts["skip_download"] is True
+    assert [(v.id, v.channel, v.duration) for v in hits] == [
+        ("a", "Vice", 1500),
+        ("d", "Up", None),
+    ], "a premiere and a Short are not episodes; the channel comes from channel or uploader"
+    YtDlpSource().search("x", 99)
+    assert seen[1][0].startswith("ytsearch20:"), "one search page at most"

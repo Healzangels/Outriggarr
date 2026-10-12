@@ -270,6 +270,9 @@ class FakeVideoSource:
     infos: dict[str, VideoRef] = field(default_factory=dict)  # url → full ref
     fetched: list[str] = field(default_factory=list)
     tagged: list[tuple[Path, str]] = field(default_factory=list)
+    search_hits: list[VideoRef] = field(default_factory=list)  # what any search finds
+    search_error: Exception | None = None
+    searched: list[tuple[str, int]] = field(default_factory=list)
     audio_language: str | None = None  # what the fake "source" declares for its audio
     tag_error: Exception | None = None
 
@@ -289,6 +292,12 @@ class FakeVideoSource:
         if self.recent_error is not None:
             raise self.recent_error
         return list(self.recent[:limit])
+
+    def search(self, query: str, limit: int) -> list[VideoRef]:
+        self.searched.append((query, limit))
+        if self.search_error is not None:
+            raise self.search_error
+        return list(self.search_hits[:limit])
 
     def fetch_info(self, url: str) -> VideoRef:
         self.fetched.append(url)

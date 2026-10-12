@@ -1,0 +1,13 @@
+{# one YouTube search for an unmatched episode: each hit pins by URL, like a pasted one #}
+{% set look = "https://www.youtube.com/results?search_query=" ~ (query | urlencode) %}
+<p class="muted">Searched YouTube for “{{ query }}”{% if not error and not videos %}: nothing found. <a href="{{ look }}" target="_blank" rel="noopener">Look on YouTube</a> and paste the URL above.{% endif %}</p>
+{% if error %}<p class="notice bad">{{ error }}</p>{% endif %}
+{% if videos %}
+<ul class="pins">
+{% for v in videos %}
+  <li><a href="{{ v.url }}" target="_blank" rel="noopener" class="truncate" title="{{ v.title }}">{{ v.title }}</a><span class="muted">{% if v.channel %}{{ v.channel }}{% endif %}{% if v.duration %} · {{ mmss(v.duration) }}{% endif %}</span>
+    <form class="inline" hx-post="/subscriptions/{{ sub.id }}/overrides" hx-target="#preview"><input type="hidden" name="season" value="{{ episode.season }}"><input type="hidden" name="episode" value="{{ episode.number }}"><input type="hidden" name="video_url" value="{{ v.url }}"><button type="submit" class="secondary" title="Pins this video to {{ episode.code }}; pins always win on the next scan">Pin</button></form></li>
+{% endfor %}
+</ul>
+<p class="muted">Not it? <a href="{{ look }}" target="_blank" rel="noopener">Look on YouTube</a> and paste the URL above.</p>
+{% endif %}

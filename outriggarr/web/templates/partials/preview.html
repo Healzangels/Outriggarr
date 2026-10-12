@@ -140,6 +140,7 @@
             <button type="submit" class="secondary">Pin</button>
           </fieldset>
         </form>
+        <div id="search-{{ u.episode_id }}" class="search-slot"><button type="button" class="secondary outline" hx-get="/subscriptions/{{ sub.id }}/search?episode_id={{ u.episode_id }}" hx-target="#search-{{ u.episode_id }}" hx-swap="innerHTML" title="One YouTube search for this episode, with a Pin beside each hit: the way forward when it is not on the channel">Search YouTube</button></div>
       </td>
     </tr>
   {% endfor %}

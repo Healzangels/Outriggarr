@@ -46,6 +46,7 @@ class VideoRef:
     # yt-dlp's is_live / is_upcoming / was_live / not_live, when the source says: a
     # stream or premiere has no length yet, which is not the same as having none
     live_status: str | None = None
+    channel: str | None = None  # the uploader's name, when the listing says
 
 
 @dataclass(frozen=True)
@@ -76,6 +77,11 @@ class VideoSource(Protocol):
 
     def fetch_info(self, url: str) -> VideoRef:
         """Blocking. One video with its upload date (a per-video fetch)."""
+        ...
+
+    def search(self, query: str, limit: int) -> list[VideoRef]:
+        """Blocking. A flat YouTube search: up to `limit` videos for `query`, newest
+        data the search page carries (title, channel, length; no upload date)."""
         ...
 
     def tag_audio_language(self, path: Path, language: str) -> None:
@@ -618,6 +624,15 @@ class YtDlpSource:
             raise SourceError(f"{url} is not a single video ({len(videos)} entries listed)")
         return videos[0]
 
+    def search(self, query: str, limit: int) -> list[VideoRef]:
+        # flat, like a listing: titles, channels and lengths come with the search page;
+        # the entries that are not downloadable episodes (a premiere, a Short) are left out
+        info = self._extract(
+            f"ytsearch{max(1, min(int(limit), 20))}:{query}",
+            {"skip_download": True, "quiet": True, "extract_flat": "in_playlist"},
+        )
+        return videos_from_info(info)
+
     def tag_audio_language(self, path: Path, language: str) -> None:
         tmp = path.with_name(f"{path.stem}.lang{path.suffix}")
         proc = _remux(ffmpeg_language_command(path, tmp, language), tmp)
@@ -999,6 +1014,7 @@ def _ref(e: dict[str, Any], index: int | None) -> VideoRef:
         approx_age=None if upload_date else relative_age(e.get("timestamp")),
         upload_date=str(e["upload_date"]) if e.get("upload_date") else None,
         live_status=str(e["live_status"]) if e.get("live_status") else None,
+        channel=str(e.get("channel") or e.get("uploader") or "") or None,
     )
 
 

@@ -53,6 +53,7 @@ from outriggarr.api.subscriptions import (
     delete_override,
     delete_subscription,
     run_scan,
+    search_videos,
     set_override,
     set_override_by_url,
     subscription_or_404,
@@ -70,6 +71,7 @@ from outriggarr.db.models import (
 )
 from outriggarr.matcher import (
     OPTIONAL_STRATEGIES,
+    PLACEHOLDER_FRAGMENTS,
     Episode,
     MatchConfig,
     Override,
@@ -318,6 +320,7 @@ def fingerprint(text: object) -> str:
 
 
 templates.env.globals["fingerprint"] = fingerprint
+templates.env.globals["mmss"] = mmss
 # pages re-rendered on a form error do not recompute the scan timing; the header simply omits it
 templates.env.globals.update(next_scan=None, next_scans={}, warning=None)
 
@@ -1195,6 +1198,35 @@ async def subscription_listed_videos(
     if report is None:
         report = await run_scan(deps, subscription_id, dry_run=True)
     return templates.TemplateResponse(request, "partials/listed_videos.html", {"report": report})
+
+
+@router.get("/subscriptions/{subscription_id}/search")
+async def subscription_search(
+    request: Request,
+    subscription_id: int,
+    session: DbSession,
+    deps: RunnerDepsDep,
+    episode_id: Annotated[int, Query()] = 0,
+) -> HTMLResponse:
+    """One YouTube search for one unmatched episode, on demand, with a Pin beside each
+    hit: the way forward when the episode is not on the channel at all."""
+    sub = subscription_or_404(session, subscription_id)
+    report = cached_report(sub)
+    if report is None:
+        report = await run_scan(deps, subscription_id, dry_run=True)
+    episode = next((u for u in report.unmatched if u.get("episode_id") == episode_id), None)
+    if episode is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "that episode is not unmatched")
+    title = episode.get("title") or ""
+    if not title or normalise_title(title) in PLACEHOLDER_FRAGMENTS:
+        title = episode["code"]  # "TBA" finds nothing; the code is at least the episode
+    query = f"{sub.title} {title}"
+    context: dict = {"sub": sub, "episode": episode, "query": query, "videos": [], "error": None}
+    try:
+        context["videos"] = await search_videos(deps, query)
+    except HTTPException as exc:
+        context["error"] = str(exc.detail)
+    return templates.TemplateResponse(request, "partials/search_results.html", context)
 
 
 @router.get("/subscriptions/{subscription_id}/explain")
