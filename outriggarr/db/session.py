@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import re
 import sqlite3
+from datetime import date
 from pathlib import Path
 
 from alembic import command
@@ -107,6 +108,36 @@ def backup_before_upgrade(database_url: str) -> Path | None:
         src.backup(dst)  # the online backup API: consistent even mid-WAL
     log.warning("schema %s -> %s: backed up the database to %s", current, head, target)
     _prune_backups(path)
+    return target
+
+
+DAILY_BACKUPS_KEPT = 7
+
+
+def daily_backup(database_url: str, today: date, keep: int = DAILY_BACKUPS_KEPT) -> Path | None:
+    """A copy of the SQLite file next to it as app.db.daily-YYYYMMDD, once a calendar
+    day: the pins, settings and jobs are the only state there is, and until now a copy
+    was made only before a migration. The newest `keep` days are kept; a copy made by
+    hand (any other name) is never touched. None when today's exists or there is no file."""
+    if not database_url.startswith("sqlite:///"):
+        return None
+    path = Path(database_url.removeprefix("sqlite:///"))
+    if not path.is_file():
+        return None
+    target = path.with_name(f"{path.name}.daily-{today:%Y%m%d}")
+    if target.exists():
+        return None
+    with sqlite3.connect(path) as src, sqlite3.connect(target) as dst:
+        src.backup(dst)  # the online backup API: consistent even mid-WAL
+    log.info("daily database backup: %s", target)
+    pattern = re.compile(rf"^{re.escape(path.name)}\.daily-\d{{8}}$")
+    made = sorted(
+        (p for p in path.parent.glob(f"{path.name}.daily-*") if pattern.match(p.name)),
+        key=lambda p: p.name,  # the date is the name: newest last
+        reverse=True,
+    )
+    for old in made[keep:]:
+        old.unlink(missing_ok=True)
     return target
 
 

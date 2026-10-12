@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from outriggarr.arr.base import ArrError, EpisodeRef
 from outriggarr.db.models import Connection, Job, JobStatus, Subscription, TargetKind, VideoMeta
+from outriggarr.db.session import daily_backup
 from outriggarr.matcher import (
     Episode,
     MatchConfig,
@@ -730,6 +731,11 @@ async def run_scheduler(deps: RunnerDeps, stop: asyncio.Event) -> None:
                                 )
                 except Exception:
                     log.exception("recording the crash for subscription %d failed", sub_id)
+        if deps.database_url and not stop.is_set():
+            try:  # once a day; every other tick finds today's copy and returns at once
+                await asyncio.to_thread(daily_backup, deps.database_url, deps.now().date())
+            except Exception:
+                log.exception("daily database backup failed")
         with contextlib.suppress(TimeoutError):
             await asyncio.wait_for(
                 stop.wait(),

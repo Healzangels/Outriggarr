@@ -358,3 +358,29 @@ def test_retention_deletes_only_old_finished_jobs(session_factory) -> None:
             (JobStatus.failed, "v3"),
             (JobStatus.queued, "v4"),
         }
+
+
+def test_daily_backup_once_a_day_keeps_seven_and_leaves_hand_made_copies(tmp_path) -> None:
+    import sqlite3
+    from datetime import date
+
+    from outriggarr.db.session import daily_backup
+
+    db = tmp_path / "app.db"
+    with sqlite3.connect(db) as c:
+        c.execute("create table t (x)")
+        c.execute("insert into t values (42)")
+    url = f"sqlite:///{db}"
+    by_hand = tmp_path / "app.db.bak-before-0012"
+    by_hand.write_bytes(b"mine")
+    for day in range(1, 10):  # nine days of ticks
+        made = daily_backup(url, date(2026, 10, day))
+        assert made == tmp_path / f"app.db.daily-202610{day:02d}"
+        assert daily_backup(url, date(2026, 10, day)) is None, "the second tick of a day"
+    kept = sorted(p.name for p in tmp_path.glob("app.db.daily-*"))
+    assert kept == [f"app.db.daily-202610{d:02d}" for d in range(3, 10)], "the newest seven"
+    assert by_hand.exists() and db.exists()
+    with sqlite3.connect(tmp_path / "app.db.daily-20261009") as c:
+        assert c.execute("select x from t").fetchone() == (42,), "a real copy, not a touch"
+    assert daily_backup(f"sqlite:///{tmp_path / 'absent.db'}", date(2026, 10, 1)) is None
+    assert daily_backup("postgresql://x", date(2026, 10, 1)) is None

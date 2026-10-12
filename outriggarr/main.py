@@ -150,6 +150,7 @@ def create_app(
             staging_dir=settings.staging_dir,
             notifier=notifier or AppriseNotifier(_urls),
             lock_dir=settings.config_dir,
+            database_url=settings.database_url,
         )
 
         stop = asyncio.Event()

@@ -79,6 +79,7 @@ class RunnerDeps:
     scheduler_tick_seconds: float = 60.0
     notifier: Notifier = field(default_factory=NullNotifier)
     lock_dir: Path | None = None  # where the single-instance lock file lives (config dir)
+    database_url: str | None = None  # for the daily backup; None (tests) makes none
     # another instance holds the database: this one serves the pages, and no scan,
     # fetch or download starts from here (the lock covers all three, not only the worker)
     page_only: bool = False

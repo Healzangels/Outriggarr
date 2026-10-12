@@ -1095,3 +1095,24 @@ def test_next_tick_delay_lands_on_the_boundary() -> None:
     assert next_tick_delay(59.999, 60) == pytest.approx(60.001), (
         "a hair before the boundary waits for the next one instead of spinning"
     )
+
+
+async def test_the_scheduler_makes_the_daily_backup(deps, session_factory, tmp_path) -> None:
+    import asyncio
+    import sqlite3
+
+    from outriggarr.worker.scheduler import run_scheduler
+
+    db = tmp_path / "live.db"
+    with sqlite3.connect(db) as c:
+        c.execute("create table t (x)")
+    deps.database_url = f"sqlite:///{db}"
+    stop = asyncio.Event()
+    task = asyncio.create_task(run_scheduler(deps, stop))
+    for _ in range(200):
+        await asyncio.sleep(0.01)
+        if list(tmp_path.glob("live.db.daily-*")):
+            break
+    stop.set()
+    await asyncio.wait_for(task, 2)
+    assert len(list(tmp_path.glob("live.db.daily-*"))) == 1
