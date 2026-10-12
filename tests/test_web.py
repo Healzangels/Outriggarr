@@ -3960,3 +3960,28 @@ def test_logs_page_tails_the_log_file_newest_first(client: TestClient, settings)
     assert "300 of 300 entries" in client.get("/logs?lines=500").text
     path.unlink()
     assert "No log file yet" in client.get("/logs").text
+
+
+def test_opening_seasons_shares_one_episode_fetch(client: TestClient) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from outriggarr.arr.base import EpisodeRef
+
+    _seed_series(client)
+    arr = client.app.state.arr_factory.by_url["http://sonarr-host:1234"]
+    aired = datetime.now(UTC) - timedelta(days=1)
+    arr.episodes_by_series[5] = [
+        EpisodeRef(11, 30, 6, "Six", False, True, aired),
+        EpisodeRef(21, 29, 1, "One", True, True, aired),
+    ]
+    sub_id = client.post(
+        "/api/subscriptions",
+        json={"connection_id": 1, "series_id": 5, "sources": ["https://www.youtube.com/@x"]},
+    ).json()["id"]
+    before = arr.calls.count(("episodes", 5))
+    assert client.get(f"/subscriptions/{sub_id}/episodes").status_code == 200
+    assert client.get(f"/subscriptions/{sub_id}/episodes/30").status_code == 200
+    assert client.get(f"/subscriptions/{sub_id}/episodes/29").status_code == 200
+    assert arr.calls.count(("episodes", 5)) - before == 1, (
+        "the card and the two seasons opened after it share one fetch"
+    )

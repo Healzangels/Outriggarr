@@ -379,24 +379,31 @@ async def scan_subscription(
 
 
 async def list_source_videos(deps: RunnerDeps, sub: Subscription, limit: int) -> list[VideoRef]:
-    """Every source listed with the same depth, pooled once by video id (a video on both
-    a channel and a playlist counts once). One source failing fails the whole listing:
-    matching against a partial pool could turn an ambiguous pair into a confident
-    wrong match."""
-    refs: list[VideoRef] = []
-    seen_ids: set[str] = set()
-    for src in sub.sources:
+    """Every source listed with the same depth, at the same time (each is seconds of
+    network, and a scan with three sources took the sum), pooled once by video id in the
+    sources' order (a video on both a channel and a playlist counts once). One source
+    failing fails the whole listing: matching against a partial pool could turn an
+    ambiguous pair into a confident wrong match."""
+
+    async def one(src: str) -> list[VideoRef]:
         started = time.monotonic()
-        try:
-            listed = await asyncio.to_thread(deps.source.list_recent, src, limit)
-        except SourceError as exc:
-            if len(sub.sources) == 1:
-                raise  # verbatim, as always
-            raise SourceError(f"{src}: {exc}") from exc  # say which source
+        listed = await asyncio.to_thread(deps.source.list_recent, src, limit)
         log.info(
             "%s: %d videos in %.1f s", _short_source(src), len(listed), time.monotonic() - started
         )
-        for ref in listed:
+        return listed
+
+    results = await asyncio.gather(*(one(src) for src in sub.sources), return_exceptions=True)
+    refs: list[VideoRef] = []
+    seen_ids: set[str] = set()
+    for src, result in zip(sub.sources, results, strict=True):
+        if isinstance(result, SourceError):
+            if len(sub.sources) == 1:
+                raise result  # verbatim, as always
+            raise SourceError(f"{src}: {result}") from result  # say which source
+        if isinstance(result, BaseException):
+            raise result
+        for ref in result:
             if ref.id not in seen_ids:
                 seen_ids.add(ref.id)
                 refs.append(ref)

@@ -647,10 +647,10 @@ async def test_every_source_is_listed_and_videos_are_pooled_once(deps, session_f
     # the fake lists the same videos for any URL: a video on both sources counts once
     report = await scan_subscription(deps, sub_id)
     assert report.error is None
-    assert deps.source.listed == [
-        ("https://www.youtube.com/@show", 50),
+    assert sorted(deps.source.listed) == [
         ("https://www.youtube.com/@extra", 50),
-    ]
+        ("https://www.youtube.com/@show", 50),
+    ], "listed at the same time: the order of the calls is the threads' to decide"
     assert report.sources == 2 and len(report.videos) == len(RECENT)
     assert len(report.matches) == 2 and report.summary()["created"] == 2
 
@@ -1146,3 +1146,36 @@ async def test_a_stuck_episode_is_announced_once_when_it_becomes_stuck(
     for _ in range(3):
         await scan_subscription(deps, sub_id)
     assert len(deps.notifier.sent) == 1, "the toggle silences it"
+
+
+async def test_sources_are_listed_at_the_same_time_in_the_sources_order(
+    deps, session_factory
+) -> None:
+    """Two sources wait on one barrier: listed one after the other, the first would hold
+    the barrier open forever; listed together, both pass."""
+    import threading
+
+    from outriggarr.source import VideoRef
+    from outriggarr.worker.scheduler import list_source_videos
+
+    sub_id, conn_id = make_sub(
+        session_factory, sources=["https://www.youtube.com/@a", "https://www.youtube.com/@b"]
+    )
+    barrier = threading.Barrier(2, timeout=5)
+    by_source = {
+        "https://www.youtube.com/@a": [VideoRef("x", "X", "https://y/x", 1, 1, None)],
+        "https://www.youtube.com/@b": [
+            VideoRef("x", "X again", "https://y/x", 1, 1, None),  # pooled once, @a's copy
+            VideoRef("y", "Y", "https://y/y", 1, 2, None),
+        ],
+    }
+
+    def list_recent(url, limit):
+        barrier.wait()
+        return by_source[url]
+
+    deps.source.list_recent = list_recent
+    with session_factory() as s:
+        sub = s.get(Subscription, sub_id)
+        refs = await list_source_videos(deps, sub, 50)
+    assert [(r.id, r.title) for r in refs] == [("x", "X"), ("y", "Y")], "the sources' order"

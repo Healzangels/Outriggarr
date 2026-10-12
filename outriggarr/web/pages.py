@@ -1349,7 +1349,12 @@ async def _seasons(
     something is missing, and any that is still airing."""
     error = None
     try:
-        episodes = await arr_factory(sub.connection).episodes(sub.series_id)
+        # a minute's cache: the card and every season opened after it share one fetch
+        # instead of each pulling the whole series again (a failure is never cached)
+        episodes = await library_cache.get(
+            (sub.connection_id, "episodes", sub.series_id),
+            lambda: arr_factory(sub.connection).episodes(sub.series_id),
+        )
     except ArrError as exc:
         episodes, error = [], str(exc)
     jobs_by_episode: dict[int, Job] = {}
