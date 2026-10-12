@@ -8,6 +8,7 @@ import html
 import logging
 import re
 import zlib
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta, tzinfo
 from pathlib import Path
 from types import SimpleNamespace
@@ -1820,23 +1821,66 @@ async def settings_connection_test(
 
 
 LOG_LINES_SHOWN = (200, 500, 1000)
-_LOG_ENTRY = re.compile(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d,\d{3} (\w+) ")
+_LOG_ENTRY = re.compile(
+    r"^(?P<date>\d{4}-\d\d-\d\d) (?P<time>\d\d:\d\d:\d\d),\d{3} "
+    r"(?P<level>\w+) (?P<who>\S+?): (?P<msg>.*)$"
+)
 
 
-def log_entries(text: str) -> list[tuple[str, str]]:
-    """The log as (level, entry) pairs, oldest first. A line that does not start with a
-    stamp (a traceback, a wrapped message) belongs to the entry before it, so a
-    filter on level keeps a traceback with the ERROR that owns it."""
-    entries: list[tuple[str, str]] = []
+@dataclass
+class LogEntry:
+    """One log entry as the page shows it: the stamp split so the date can head a day
+    group and the time stand alone, the logger without the package prefix, the message,
+    and the lines that followed without a stamp of their own (a traceback)."""
+
+    level: str
+    date: str
+    time: str
+    who: str
+    message: str
+    rest: str = ""
+
+    @property
+    def stamp(self) -> str:
+        return f"{self.date} {self.time}"
+
+
+def log_entries(text: str) -> list[LogEntry]:
+    """The log as entries, oldest first. A line that does not start with a stamp (a
+    traceback, a wrapped message) belongs to the entry before it, so a filter on level
+    keeps a traceback with the ERROR that owns it."""
+    entries: list[LogEntry] = []
     for line in text.splitlines():
         m = _LOG_ENTRY.match(line)
         if m:
-            entries.append((m.group(1), line))
+            entries.append(
+                LogEntry(
+                    m["level"],
+                    m["date"],
+                    m["time"],
+                    m["who"].removeprefix("outriggarr."),
+                    m["msg"],
+                )
+            )
         elif entries:
-            entries[-1] = (entries[-1][0], entries[-1][1] + "\n" + line)
+            entries[-1].rest = f"{entries[-1].rest}\n{line}" if entries[-1].rest else line
         elif line.strip():
-            entries.append(("INFO", line))
+            entries.append(LogEntry("INFO", "", "", "", line))
     return entries
+
+
+def log_day(iso: str, today: date) -> str:
+    """The day header over a run of entries: the log's own wall-clock dates, so no
+    zone conversion — Today, Yesterday, else the date."""
+    try:
+        d = date.fromisoformat(iso)
+    except ValueError:
+        return "Undated"
+    if d == today:
+        return "Today"
+    if (today - d).days == 1:
+        return "Yesterday"
+    return d.strftime("%a %-d %b" if d.year == today.year else "%a %-d %b %Y")
 
 
 @router.get("/logs")
@@ -1851,18 +1895,21 @@ def logs_page(
     lines = lines if lines in LOG_LINES_SHOWN else LOG_LINES_SHOWN[0]
     level = level if level in ("INFO", "WARNING") else "INFO"
     path = request.app.state.settings.config_dir / "outriggarr.log"
-    entries: list[tuple[str, str]] = []
+    entries: list[LogEntry] = []
     if path.is_file():
         entries = log_entries(path.read_text(errors="replace"))
     if level == "WARNING":
-        entries = [e for e in entries if e[0] in ("WARNING", "ERROR", "CRITICAL")]
+        entries = [e for e in entries if e.level in ("WARNING", "ERROR", "CRITICAL")]
     shown = entries[-lines:]
     shown.reverse()
+    today = datetime.now().date()  # the log's stamps are the container's wall clock
+    days = {e.date: log_day(e.date, today) for e in shown}
     return templates.TemplateResponse(
         request,
         "logs.html",
         {
             "entries": shown,
+            "days": days,
             "total": len(entries),
             "level": level,
             "lines": lines,

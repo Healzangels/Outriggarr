@@ -204,6 +204,8 @@ label .hint { display: block; color: var(--o-muted); font-size: .88em; max-width
 .scan-summary .ok, .scan-summary .warn { font-weight: 600; }  /* the counts that matter stand out of a muted line without a chip around them */
 ul.pins { list-style: none; padding-left: 0; }
 .search-slot { margin-top: .4rem; }
+button.link { display: inline; width: auto; margin: 0; padding: 0; border: 0; background: none; font: inherit; color: var(--pico-primary); text-decoration: underline; cursor: pointer; }
+.search-slot ul.pins li { align-items: center; }
 ul.pins li { display: flex; flex-wrap: wrap; gap: .5em; align-items: baseline; margin-bottom: .25rem; }
 details.season > summary { color: inherit; }
 /* one season per row, a single column: a grid of seasons read oddly and was hard to scan */
@@ -222,7 +224,13 @@ table.grab fieldset[role=group] input { max-width: 5em; }
 details.error { margin: .25rem 0 0; }
 details.error[open] > summary { margin-bottom: .25rem; }
 details.error pre { white-space: pre-wrap; max-width: 60ch; margin: .25rem 0 0; }
-pre.log { white-space: pre-wrap; font-size: .82em; line-height: 1.45; max-height: 75vh; overflow: auto; }
+.log { font-size: .88em; max-height: 75vh; overflow: auto; border-top: 1px solid var(--o-border); }
+.log .day { font-size: .78rem; letter-spacing: .04em; text-transform: uppercase; color: var(--o-muted); padding: .6rem 0 .2rem; }
+.log .entry { display: grid; grid-template-columns: auto auto auto 1fr; gap: .6em; align-items: baseline; padding: .2rem 0; border-bottom: 1px solid var(--o-border); }
+.log time, .log .who { color: var(--o-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.log .lvl { font-size: .78rem; font-weight: 600; }
+.log .msg { white-space: pre-wrap; overflow-wrap: anywhere; }
+.log .rest { white-space: pre-wrap; overflow-wrap: anywhere; grid-column: 1 / -1; margin: 0; font-size: .92em; color: var(--o-muted); }
 form.log-controls { display: flex; flex-wrap: wrap; gap: 1rem; align-items: end; }
 form.log-controls label { margin-bottom: 0; }
 form.log-controls button { margin-bottom: var(--pico-spacing); }
@@ -268,11 +276,13 @@ table.jobs { min-width: 860px; }  /* the episode label needs room, or a phone sh
   table.matches td.actions { white-space: normal; }
   a.brand strong { display: none; }
   nav.container ul:last-child { gap: 0; }
-  nav.container ul:last-child li { padding: .25rem .45rem; }
+  nav.container ul:last-child li { padding: .25rem .3rem; font-size: .94em; }  /* six items on one line at 375 px */
   .form-actions .danger, .form-actions .push-right { margin-left: 0; }
   .fill-row { grid-template-columns: 1fr; }
   td.actions :is(button, a[role=button]), form.inline button { padding: .45em .8em; }
   table [type=checkbox] { width: 1.4em; height: 1.4em; }
+  .log .entry { grid-template-columns: auto auto 1fr; }  /* the message on its own line */
+  .log .msg { grid-column: 1 / -1; }
   /* a phone shows the columns that say something: the state chips, the status and
      the time, the pin field — not the source URL or a second copy of the title, which
      sat in view while those scrolled off the right edge */

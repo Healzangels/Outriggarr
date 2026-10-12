@@ -3888,6 +3888,8 @@ def test_an_unmatched_episode_can_be_searched_for_and_pinned_from_a_hit(client: 
     assert "Searched YouTube for “Hot Ones Seven Spicy Wings”" in r.text
     assert source.searched == [("Hot Ones Seven Spicy Wings", 8)]
     assert "First We Feast · 25:00" in r.text and 'href="https://y/s1"' in r.text
+    again = 'search?episode_id=12" hx-target="closest .search-slot"'  # the sub's own route
+    assert again in r.text, "the search can be run again from its results"
     assert (
         '<input type="hidden" name="season" value="30">'
         '<input type="hidden" name="episode" value="7">'
@@ -3921,16 +3923,19 @@ def test_the_downloads_settings_offer_the_thumbnail_toggle(client: TestClient) -
 
 
 def test_logs_page_tails_the_log_file_newest_first(client: TestClient, settings) -> None:
+    from datetime import datetime
+
     path = settings.config_dir / "outriggarr.log"
     assert "No log file yet" in client.get("/logs").text or path.exists()
+    today = datetime.now().strftime("%Y-%m-%d")  # the log's own wall-clock date
     path.write_text(
-        "2026-10-12 02:49:34,334 INFO outriggarr.worker.scheduler: @theshop: 50 videos\n"
-        "2026-10-12 02:49:35,000 WARNING outriggarr.source: [youtube:tab] EOF occurred. Retrying\n"
-        "2026-10-12 02:50:00,000 ERROR outriggarr.worker.runner: job 7 crashed\n"
+        f"{today} 02:49:34,334 INFO outriggarr.worker.scheduler: @theshop: 50 videos\n"
+        f"{today} 02:49:35,000 WARNING outriggarr.source: [youtube:tab] EOF occurred. Retrying\n"
+        f"{today} 02:50:00,000 ERROR outriggarr.worker.runner: job 7 crashed\n"
         "Traceback (most recent call last):\n"
         '  File "x.py", line 1, in <module>\n'
         "RuntimeError: boom\n"
-        "2026-10-12 02:51:00,000 INFO outriggarr.main: outriggarr 0.1.0 ready\n"
+        f"{today} 02:51:00,000 INFO outriggarr.main: outriggarr 0.1.0 ready\n"
     )
     page = client.get("/logs").text
     assert 'href="/logs" class="active">Logs</a>' in page, "in the nav, and marked current"
@@ -3941,8 +3946,11 @@ def test_logs_page_tails_the_log_file_newest_first(client: TestClient, settings)
     )
     assert ready < crashed < listed, "newest first"
     assert "4 of 4 entries" in page
-    assert 'class="bad">2026-10-12 02:50:00,000 ERROR outriggarr.worker.runner: job 7' in page
-    assert "RuntimeError: boom" in page and 'class="warn">' in page
+    assert page.count('class="day">Today</div>') == 1, "one day header over the run"
+    assert f'<time title="{today} 02:50:00">02:50:00</time>' in page, "the date heads the day"
+    assert 'class="who">worker.runner</span><span class="msg bad">job 7 crashed</span>' in page
+    assert '<pre class="rest">Traceback (most recent call last):' in page
+    assert 'class="msg warn">[youtube:tab] EOF occurred. Retrying</span>' in page
     warnings = client.get("/logs?level=WARNING").text
     assert "50 videos" not in warnings and "0.1.0 ready" not in warnings
     assert "job 7 crashed" in warnings and "RuntimeError: boom" in warnings, (

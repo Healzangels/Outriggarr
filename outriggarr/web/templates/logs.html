@@ -15,7 +15,12 @@
 <p class="empty">Nothing at this level{% if level == "WARNING" %}: no warnings or errors in the file{% endif %}.</p>
 {% else %}
 <p class="muted">{{ entries | length }} of {{ total }} {% if level == "WARNING" %}warnings and errors{% else %}entries{% endif %} · <span title="{{ path }}">outriggarr.log</span></p>
-<pre class="log">{% for lvl, text in entries %}<span class="{{ 'bad' if lvl in ('ERROR', 'CRITICAL') else ('warn' if lvl == 'WARNING' else '') }}">{{ text }}</span>
-{% endfor %}</pre>
+<div class="log">
+{% set ns = namespace(day=None) %}
+{% for e in entries %}
+  {% if days[e.date] != ns.day %}{% set ns.day = days[e.date] %}<div class="day">{{ ns.day }}</div>{% endif %}
+  <div class="entry"><time title="{{ e.stamp }}">{{ e.time }}</time><span class="lvl {{ 'bad' if e.level in ('ERROR', 'CRITICAL') else ('warn' if e.level == 'WARNING' else 'muted') }}">{{ e.level }}</span><span class="who">{{ e.who }}</span><span class="msg {{ 'bad' if e.level in ('ERROR', 'CRITICAL') else ('warn' if e.level == 'WARNING' else '') }}">{{ e.message }}</span>{% if e.rest %}<pre class="rest">{{ e.rest }}</pre>{% endif %}</div>
+{% endfor %}
+</div>
 {% endif %}
 {% endblock %}

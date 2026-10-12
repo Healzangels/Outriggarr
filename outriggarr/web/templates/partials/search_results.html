@@ -5,9 +5,9 @@
 {% if videos %}
 <ul class="pins">
 {% for v in videos %}
-  <li><a href="{{ v.url }}" target="_blank" rel="noopener" class="truncate" title="{{ v.title }}">{{ v.title }}</a><span class="muted">{% if v.channel %}{{ v.channel }}{% endif %}{% if v.duration %} · {{ mmss(v.duration) }}{% endif %}</span>
+  <li><a href="{{ v.url }}" target="_blank" rel="noopener">{{ v.title }}</a><span class="muted">{% if v.channel %}{{ v.channel }}{% endif %}{% if v.duration %} · {{ mmss(v.duration) }}{% endif %}</span>
     <form class="inline" hx-post="/subscriptions/{{ sub.id }}/overrides" hx-target="#preview"><input type="hidden" name="season" value="{{ episode.season }}"><input type="hidden" name="episode" value="{{ episode.number }}"><input type="hidden" name="video_url" value="{{ v.url }}"><button type="submit" class="secondary" title="Pins this video to {{ episode.code }}; pins always win on the next scan">Pin</button></form></li>
 {% endfor %}
 </ul>
-<p class="muted">Not it? <a href="{{ look }}" target="_blank" rel="noopener">Look on YouTube</a> and paste the URL above.</p>
+<p class="muted">Not it? <a href="{{ look }}" target="_blank" rel="noopener">Look on YouTube</a> and paste the URL above, or <button type="button" class="link" hx-get="/subscriptions/{{ sub.id }}/search?episode_id={{ episode.episode_id }}" hx-target="closest .search-slot" hx-swap="innerHTML">search again</button>.</p>
 {% endif %}
