@@ -3918,3 +3918,45 @@ def test_the_downloads_settings_offer_the_thumbnail_toggle(client: TestClient) -
     assert 'name="thumbnails"' in page and "episode still" in page
     r = client.post("/settings/downloads", data={"thumbnails": "1"})
     assert r.status_code == 200 and client.get("/api/settings").json()["thumbnails"] == "1"
+
+
+def test_logs_page_tails_the_log_file_newest_first(client: TestClient, settings) -> None:
+    path = settings.config_dir / "outriggarr.log"
+    assert "No log file yet" in client.get("/logs").text or path.exists()
+    path.write_text(
+        "2026-10-12 02:49:34,334 INFO outriggarr.worker.scheduler: @theshop: 50 videos\n"
+        "2026-10-12 02:49:35,000 WARNING outriggarr.source: [youtube:tab] EOF occurred. Retrying\n"
+        "2026-10-12 02:50:00,000 ERROR outriggarr.worker.runner: job 7 crashed\n"
+        "Traceback (most recent call last):\n"
+        '  File "x.py", line 1, in <module>\n'
+        "RuntimeError: boom\n"
+        "2026-10-12 02:51:00,000 INFO outriggarr.main: outriggarr 0.1.0 ready\n"
+    )
+    page = client.get("/logs").text
+    assert 'href="/logs" class="active">Logs</a>' in page, "in the nav, and marked current"
+    ready, crashed, listed = (
+        page.index("outriggarr 0.1.0 ready"),
+        page.index("job 7 crashed"),
+        page.index("50 videos"),
+    )
+    assert ready < crashed < listed, "newest first"
+    assert "4 of 4 entries" in page
+    assert 'class="bad">2026-10-12 02:50:00,000 ERROR outriggarr.worker.runner: job 7' in page
+    assert "RuntimeError: boom" in page and 'class="warn">' in page
+    warnings = client.get("/logs?level=WARNING").text
+    assert "50 videos" not in warnings and "0.1.0 ready" not in warnings
+    assert "job 7 crashed" in warnings and "RuntimeError: boom" in warnings, (
+        "a traceback stays with the error that owns it"
+    )
+    assert "2 of 2 warnings and errors" in warnings
+    assert client.get("/logs?level=DEBUG&lines=7").status_code == 200, "unknown values fall back"
+    path.write_text(
+        "\n".join(f"2026-10-12 03:00:{i % 60:02d},000 INFO a: line {i}" for i in range(300))
+    )
+    tail = client.get("/logs").text
+    assert "200 of 300 entries" in tail and "line 299" in tail and "line 0<" not in tail, (
+        "the newest 200, not the oldest"
+    )
+    assert "300 of 300 entries" in client.get("/logs?lines=500").text
+    path.unlink()
+    assert "No log file yet" in client.get("/logs").text

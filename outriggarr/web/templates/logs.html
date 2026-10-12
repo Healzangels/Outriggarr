@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Logs · Outriggarr{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div><h1>Logs</h1><p class="sub">The tail of the app's own log file, newest first: the same lines the container prints, kept across redeploys.</p></div>
+</div>
+<form method="get" action="/logs" class="log-controls">
+  <label>Show<select name="level" onchange="this.form.submit()"><option value="INFO" {% if level == "INFO" %}selected{% endif %}>everything</option><option value="WARNING" {% if level == "WARNING" %}selected{% endif %}>warnings and errors only</option></select></label>
+  <label>Entries<select name="lines" onchange="this.form.submit()">{% for n in choices %}<option value="{{ n }}" {% if n == lines %}selected{% endif %}>newest {{ n }}</option>{% endfor %}</select></label>
+  <button type="submit" class="secondary outline">Refresh</button>
+</form>
+{% if not exists %}
+<p class="empty">No log file yet at {{ path }}. It appears once the app has written a line there.</p>
+{% elif not entries %}
+<p class="empty">Nothing at this level{% if level == "WARNING" %}: no warnings or errors in the file{% endif %}.</p>
+{% else %}
+<p class="muted">{{ entries | length }} of {{ total }} {% if level == "WARNING" %}warnings and errors{% else %}entries{% endif %} · <span title="{{ path }}">outriggarr.log</span></p>
+<pre class="log">{% for lvl, text in entries %}<span class="{{ 'bad' if lvl in ('ERROR', 'CRITICAL') else ('warn' if lvl == 'WARNING' else '') }}">{{ text }}</span>
+{% endfor %}</pre>
+{% endif %}
+{% endblock %}

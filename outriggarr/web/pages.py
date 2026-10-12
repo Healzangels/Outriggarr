@@ -1814,6 +1814,60 @@ async def settings_connection_test(
     )
 
 
+LOG_LINES_SHOWN = (200, 500, 1000)
+_LOG_ENTRY = re.compile(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d,\d{3} (\w+) ")
+
+
+def log_entries(text: str) -> list[tuple[str, str]]:
+    """The log as (level, entry) pairs, oldest first. A line that does not start with a
+    stamp (a traceback, a wrapped message) belongs to the entry before it, so a
+    filter on level keeps a traceback with the ERROR that owns it."""
+    entries: list[tuple[str, str]] = []
+    for line in text.splitlines():
+        m = _LOG_ENTRY.match(line)
+        if m:
+            entries.append((m.group(1), line))
+        elif entries:
+            entries[-1] = (entries[-1][0], entries[-1][1] + "\n" + line)
+        elif line.strip():
+            entries.append(("INFO", line))
+    return entries
+
+
+@router.get("/logs")
+def logs_page(
+    request: Request,
+    level: Annotated[str, Query()] = "INFO",
+    lines: Annotated[int, Query()] = 200,
+) -> HTMLResponse:
+    """The tail of the log file under the config dir, newest first: the same lines the
+    container prints, kept across redeploys and read without a shell on the box.
+    Warnings and errors can be shown alone; a traceback stays with its error."""
+    lines = lines if lines in LOG_LINES_SHOWN else LOG_LINES_SHOWN[0]
+    level = level if level in ("INFO", "WARNING") else "INFO"
+    path = request.app.state.settings.config_dir / "outriggarr.log"
+    entries: list[tuple[str, str]] = []
+    if path.is_file():
+        entries = log_entries(path.read_text(errors="replace"))
+    if level == "WARNING":
+        entries = [e for e in entries if e[0] in ("WARNING", "ERROR", "CRITICAL")]
+    shown = entries[-lines:]
+    shown.reverse()
+    return templates.TemplateResponse(
+        request,
+        "logs.html",
+        {
+            "entries": shown,
+            "total": len(entries),
+            "level": level,
+            "lines": lines,
+            "choices": LOG_LINES_SHOWN,
+            "exists": path.is_file(),
+            "path": str(path),
+        },
+    )
+
+
 @router.get("/grab")
 def grab(request: Request, session: DbSession) -> HTMLResponse:
     connections = list(
