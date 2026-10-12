@@ -114,6 +114,7 @@
     <legend>Notify when</legend>
     <label><input type="checkbox" name="notify_on_failed" value="1" {% if settings.notify_on_failed == "1" %}checked{% endif %}> a job fails for good</label>
     <label><input type="checkbox" name="notify_on_scan_error" value="1" {% if settings.notify_on_scan_error == "1" %}checked{% endif %}> a subscription scan errors</label>
+    <label><input type="checkbox" name="notify_on_stuck" value="1" {% if settings.notify_on_stuck == "1" %}checked{% endif %}> an episode is still unmatched after three scans <span class="muted">(once, when it becomes stuck)</span></label>
     <label><input type="checkbox" name="notify_on_done" value="1" {% if settings.notify_on_done == "1" %}checked{% endif %}> a job is imported <span class="muted">(Sonarr and Radarr usually announce this themselves)</span></label>
   </fieldset>
   <input type="hidden" name="_notify_form" value="1">

@@ -85,6 +85,9 @@ DEFAULTS: dict[str, str] = {
     "notify_on_failed": "1",  # a job failed for good (no more retries) or was rejected
     "notify_on_scan_error": "1",  # a subscription scan hit an error (announced once per new error)
     "notify_on_done": "0",  # a job imported (the *arr usually announces this itself)
+    # an episode still unmatched after STUCK_SCANS real scans (announced once, when it
+    # becomes stuck): the one state nothing else reports and a human has to settle
+    "notify_on_stuck": "1",
 }
 
 
@@ -274,6 +277,7 @@ def validate_setting(key: str, value: str) -> str:
         "notify_on_failed",
         "notify_on_scan_error",
         "notify_on_done",
+        "notify_on_stuck",
         "subtitles_auto",
         "thumbnails",
     ):

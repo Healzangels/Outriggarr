@@ -1641,7 +1641,7 @@ async def settings_downloads_post(request: Request, session: DbSession) -> Respo
     data = await _read_form(request)
     changes = {k: data.get(k, "") for k in DEFAULTS if k in data}
     if data.get("_notify_form"):  # unchecked boxes are simply absent from the POST
-        for k in ("notify_on_failed", "notify_on_scan_error", "notify_on_done"):
+        for k in ("notify_on_failed", "notify_on_scan_error", "notify_on_stuck", "notify_on_done"):
             changes[k] = "1" if data.get(k) == "1" else "0"
     try:
         await asyncio.to_thread(update_settings, session, changes)

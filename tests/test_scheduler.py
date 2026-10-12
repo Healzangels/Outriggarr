@@ -1116,3 +1116,32 @@ async def test_the_scheduler_makes_the_daily_backup(deps, session_factory, tmp_p
     stop.set()
     await asyncio.wait_for(task, 2)
     assert len(list(tmp_path.glob("live.db.daily-*"))) == 1
+
+
+async def test_a_stuck_episode_is_announced_once_when_it_becomes_stuck(
+    deps, session_factory
+) -> None:
+    from tests.fakes import FakeNotifier
+
+    deps.notifier = FakeNotifier()
+    sub_id, conn_id = make_sub(session_factory)
+    client = fake_client(deps, conn_id)
+    client.episodes_by_series[5] = [EpisodeRef(11, 30, 6, "Nothing alike", False, True, NOW)]
+    await scan_subscription(deps, sub_id, dry_run=True)  # a dry run is not a real scan
+    await scan_subscription(deps, sub_id)
+    await scan_subscription(deps, sub_id)
+    assert deps.notifier.sent == [], "two real scans: not stuck yet"
+    report = await scan_subscription(deps, sub_id)
+    assert report.unmatched_scans == {"S30E06": 3}
+    assert [t for t, _ in deps.notifier.sent] == ["Outriggarr: still unmatched"]
+    assert "Show: S30E06 unmatched after 3 scans" in deps.notifier.sent[0][1]
+    await scan_subscription(deps, sub_id)
+    await scan_subscription(deps, sub_id)
+    assert len(deps.notifier.sent) == 1, "announced once, not every interval after"
+    with session_factory() as s:
+        set_setting(s, "notify_on_stuck", "0")
+        s.commit()
+    client.episodes_by_series[5].append(EpisodeRef(12, 30, 7, "Also alike", False, True, NOW))
+    for _ in range(3):
+        await scan_subscription(deps, sub_id)
+    assert len(deps.notifier.sent) == 1, "the toggle silences it"

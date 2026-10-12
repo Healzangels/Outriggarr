@@ -129,6 +129,7 @@ class ScanReport:
 
 
 SHRINK_FLOOR = 10  # a listing this small says nothing about the next one
+STUCK_SCANS = 3  # real scans without a match before an episode is announced as stuck
 _CARRIED = (
     "scanned_at",
     "unmatched",
@@ -358,6 +359,22 @@ async def scan_subscription(
                 "Outriggarr: scan error",
                 f"{sub.title} (subscription {sub.id})\n{report.error}",
             )
+        if not dry_run and not report.error and get_setting(session, "notify_on_stuck") == "1":
+            # once, the scan an episode becomes stuck: exactly STUCK_SCANS, so the ones
+            # stuck long before this existed stay quiet and nothing repeats every interval
+            stuck = [
+                u["code"]
+                for u in report.unmatched
+                if report.unmatched_scans.get(u["code"]) == STUCK_SCANS
+            ]
+            if stuck:
+                await notify(
+                    deps,
+                    "Outriggarr: still unmatched",
+                    f"{sub.title}: {compact_codes(stuck)} unmatched after {STUCK_SCANS} scans. "
+                    "Pin a video or search YouTube from the subscription page, or unmonitor "
+                    "the episode in Sonarr.",
+                )
         return report
 
 
